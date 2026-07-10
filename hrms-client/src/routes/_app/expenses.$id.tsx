@@ -202,7 +202,7 @@ function ExpenseDetail() {
         </Button>
         <div className="flex items-center gap-2">
           {highValue && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/15 px-2.5 py-1 text-xs font-medium text-warning-foreground">
+            <span className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/15 px-2.5 py-1 text-xs font-medium text-warning-foreground dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
               <AlertTriangle className="h-3.5 w-3.5" /> High-value · {fmtCurrency(total)}
             </span>
           )}
@@ -370,7 +370,7 @@ function ExpenseDetail() {
 
         <TabsContent value="details" className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <DataCard title="Expense details">
-            <dl className="grid grid-cols-2 gap-3 text-sm">
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
               <Info k="Type" v={t.expenseType === "project" ? "Project" : "Sales / Pre-Sales"} />
               <Info k="Sub-Type" v={t.subType} />
               <Info k="Submitted" v={t.submittedAt?.slice(0, 10) ?? "—"} />
@@ -384,7 +384,7 @@ function ExpenseDetail() {
           </DataCard>
           <DataCard title={t.expenseType === "project" ? "Project context" : "Sales context"}>
             {t.project && (
-              <dl className="grid grid-cols-2 gap-3 text-sm">
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <Info k="Project Code" v={t.project.projectCode} />
                 <Info k="Project" v={t.project.projectName} />
                 <Info k="Project Manager" v={t.project.projectManager} />
@@ -396,7 +396,7 @@ function ExpenseDetail() {
               </dl>
             )}
             {t.sales && (
-              <dl className="grid grid-cols-2 gap-3 text-sm">
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <Info k="Client" v={t.sales.client} />
                 <Info k="Opportunity" v={t.sales.opportunity} />
                 <Info k="Meeting Type" v={t.sales.meetingType} />
@@ -486,7 +486,7 @@ function ExpenseDetail() {
         <TabsContent value="finance" className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <DataCard title="Finance & Payment">
             {t.payment ? (
-              <dl className="grid grid-cols-2 gap-3 text-sm">
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <Info
                   k="Paid amount"
                   v={<span className="font-semibold">{fmtCurrency(t.payment.paidAmount)}</span>}
@@ -511,7 +511,7 @@ function ExpenseDetail() {
           </DataCard>
           <DataCard title="Settlement">
             {t.settlement ? (
-              <dl className="grid grid-cols-2 gap-3 text-sm">
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <Info k="Advance" v={fmtCurrency(t.settlement.advanceAmount)} />
                 <Info k="Actual spent" v={fmtCurrency(t.settlement.actualSpent)} />
                 <Info
@@ -721,7 +721,7 @@ function PaymentDialog({
         <DialogHeader>
           <DialogTitle>Release payment</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="col-span-1">
             <Label>Paid amount</Label>
             <Input
@@ -814,7 +814,7 @@ function SettlementDialog({
         <DialogHeader>
           <DialogTitle>Review settlement</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <Label>Advance amount</Label>
             <Input

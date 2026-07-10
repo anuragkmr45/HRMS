@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { PhoneInput } from "@/components/ui-kit";
 import {
   Select,
   SelectContent,
@@ -607,12 +608,10 @@ function Step1({
 
       <Section title="Contact">
         <Grid>
-          <Field
-            label="Contact number"
-            id="phone"
-            value={form.phone}
-            onChange={(v) => set("phone", v)}
-          />
+          <div className="space-y-1.5">
+            <Label htmlFor="phone">Contact number</Label>
+            <PhoneInput id="phone" value={form.phone} onChange={(value) => set("phone", value)} />
+          </div>
           <Field
             label="Personal email"
             id="pemail"

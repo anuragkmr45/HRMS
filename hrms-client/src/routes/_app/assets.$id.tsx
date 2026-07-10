@@ -98,24 +98,24 @@ function AssetDetail() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           <Button asChild variant="ghost" size="sm">
             <Link to="/assets/inventory">
               <ArrowLeft className="mr-1 h-4 w-4" />
               Inventory
             </Link>
           </Button>
-          <div>
-            <h2 className="text-xl font-semibold tracking-tight">
+          <div className="min-w-0">
+            <h2 className="break-words text-xl font-semibold tracking-tight">
               {asset.brand} {asset.model}
             </h2>
-            <p className="text-xs text-muted-foreground">
+            <p className="break-words text-xs text-muted-foreground">
               {asset.id} · {asset.serial} · {asset.type}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
           <StatusBadge status={asset.status} />
           {isAdmin && asset.status !== "assigned" && (
             <AssignDialog
@@ -163,8 +163,8 @@ function AssetDetail() {
         </div>
       )}
 
-      <Tabs defaultValue="overview">
-        <TabsList>
+      <Tabs defaultValue="overview" className="min-w-0">
+        <TabsList className="w-full justify-start">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="history">Assignment History</TabsTrigger>
           <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
@@ -175,7 +175,7 @@ function AssetDetail() {
         <TabsContent value="overview" className="mt-4">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <DataCard title="Asset details" className="lg:col-span-2">
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-3">
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2 md:grid-cols-3">
                 <Info k="Type" v={asset.type} />
                 <Info k="Category" v={asset.category} />
                 <Info k="Brand" v={asset.brand} />
@@ -494,7 +494,7 @@ function ReturnDialog({
           <DialogTitle>Return asset</DialogTitle>
           <DialogDescription>Reclaim and set condition at return.</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <Label>Return date</Label>
             <Input type="date" value={d} onChange={(e) => setD(e.target.value)} />
@@ -514,7 +514,7 @@ function ReturnDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="col-span-2 space-y-1">
+          <div className="space-y-1 sm:col-span-2">
             <Label>Recovery remarks</Label>
             <Textarea rows={2} value={r} onChange={(e) => setR(e.target.value)} />
           </div>
@@ -556,7 +556,7 @@ function MaintenanceDialog({ onAdd }: { onAdd: (m: MaintenanceEntry) => void }) 
         <DialogHeader>
           <DialogTitle>Log maintenance</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <Label>Type</Label>
             <Select value={type} onValueChange={(v) => setType(v as MaintenanceEntry["type"])}>
@@ -576,7 +576,7 @@ function MaintenanceDialog({ onAdd }: { onAdd: (m: MaintenanceEntry) => void }) 
             <Label>Vendor</Label>
             <Input value={vendor} onChange={(e) => setVendor(e.target.value)} />
           </div>
-          <div className="col-span-2 space-y-1">
+          <div className="space-y-1 sm:col-span-2">
             <Label>Cost (USD)</Label>
             <Input
               type="number"
@@ -584,7 +584,7 @@ function MaintenanceDialog({ onAdd }: { onAdd: (m: MaintenanceEntry) => void }) 
               onChange={(e) => setCost(Number(e.target.value))}
             />
           </div>
-          <div className="col-span-2 space-y-1">
+          <div className="space-y-1 sm:col-span-2">
             <Label>Notes</Label>
             <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>

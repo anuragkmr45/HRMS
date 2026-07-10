@@ -84,7 +84,7 @@ export class AdminService {
 
   getCompanyProfile(actor: AuthUser): CompanyProfileResponse {
     assertCanManageAdminSettings(actor);
-    return presentCompanyProfile(this.repository.getCurrentCompanyProfile());
+    return presentCompanyProfile(this.repository.getCurrentCompanyProfile(this.companyIdForActor(actor)));
   }
 
   getAdminSecuritySettings(actor: AuthUser): AdminSecuritySettingsResponse {
@@ -94,7 +94,7 @@ export class AdminService {
 
   updateCompanyProfile(actor: AuthUser, input: CompanyProfileUpdateInput): CompanyProfileResponse {
     assertCanManageAdminSettings(actor);
-    const company = this.repository.updateCurrentCompanyProfile(input);
+    const company = this.repository.updateCurrentCompanyProfile(this.companyIdForActor(actor), input);
     appendOutboxEvent(this.store, {
       aggregateType: "company_profile",
       aggregateId: company.id,
@@ -111,7 +111,7 @@ export class AdminService {
 
   async uploadCompanyLogo(actor: AuthUser, input: CompanyLogoUploadInput): Promise<CompanyLogoUploadResponse> {
     assertCanManageAdminSettings(actor);
-    const company = this.repository.getCurrentCompanyProfile();
+    const company = this.repository.getCurrentCompanyProfile(this.companyIdForActor(actor));
     const documentService = new DocumentService(this.store);
     if (company.logo_document_id) {
       try {
@@ -195,8 +195,9 @@ export class AdminService {
   listAdminPolicies(actor: AuthUser, query: AdminPoliciesQuery): AdminPolicyListResponse {
     assertCanManagePolicySettings(actor);
     const moduleFilter = query.module?.trim().toLowerCase();
+    const companyId = this.companyIdForActor(actor);
     const policies = this.repository
-      .listAdminPolicies()
+      .listAdminPolicies(companyId)
       .filter((policy) => !moduleFilter || policy.module.toLowerCase() === moduleFilter || policy.policy_key.toLowerCase() === moduleFilter)
       .filter((policy) => !query.active_only || policy.status === "active")
       .sort((a, b) => adminPolicySortOrder(a.policy_key) - adminPolicySortOrder(b.policy_key))
@@ -269,8 +270,9 @@ export class AdminService {
 
   updateAdminPolicy(actor: AuthUser, policyKey: AdminPolicyKey, input: AdminPolicyUpdateInput): AdminPolicyMutationResponse {
     assertCanManagePolicySettings(actor);
-    const current = this.repository.adminPolicyByKey(policyKey);
-    const policy = this.repository.updateAdminPolicy(policyKey, {
+    const companyId = this.companyIdForActor(actor);
+    const current = this.repository.adminPolicyByKey(policyKey, companyId);
+    const policy = this.repository.updateAdminPolicy(policyKey, companyId, {
       label: input.label,
       status: input.status ?? (input.active === undefined ? undefined : input.active ? "active" : "inactive"),
       config: input.config ? normalizeAdminPolicyConfig(policyKey, current.config, input.config) : undefined,
@@ -454,8 +456,9 @@ export class AdminService {
   listDepartments(actor: AuthUser, query: MasterDataQuery): Paginated<DepartmentResponse> {
     assertCanManageMasterData(actor);
     const search = query.search?.trim().toLowerCase();
+    const companyId = this.companyIdForActor(actor);
     const filtered = this.repository
-      .listDepartments()
+      .listDepartments(companyId)
       .filter((department) => !query.active_only || department.status === "active")
       .filter((department) => {
         if (!search) return true;
@@ -467,8 +470,9 @@ export class AdminService {
 
   createDepartment(actor: AuthUser, input: DepartmentCreateInput): MasterDataMutationResponse<DepartmentResponse> {
     assertCanManageMasterData(actor);
-    this.assertValidDepartmentParent(input.parent_department_id ?? input.parent_id ?? null);
-    const department = this.repository.createDepartment(input);
+    const companyId = this.companyIdForActor(actor);
+    this.assertValidDepartmentParent(companyId, input.parent_department_id ?? input.parent_id ?? null);
+    const department = this.repository.createDepartment(companyId, input);
     appendOutboxEvent(this.store, {
       aggregateType: "department",
       aggregateId: department.id,
@@ -481,13 +485,14 @@ export class AdminService {
 
   updateDepartment(actor: AuthUser, id: string, input: DepartmentUpdateInput): MasterDataMutationResponse<DepartmentResponse> {
     assertCanManageMasterData(actor);
+    const companyId = this.companyIdForActor(actor);
     if (input.status === "inactive") {
-      this.assertNoActiveUsersReference("department", id);
+      this.assertNoActiveUsersReference(companyId, "department", id);
     }
     if (input.parent_department_id !== undefined || input.parent_id !== undefined) {
-      this.assertValidDepartmentParent(input.parent_department_id ?? input.parent_id ?? null, id);
+      this.assertValidDepartmentParent(companyId, input.parent_department_id ?? input.parent_id ?? null, id);
     }
-    const department = this.repository.updateDepartment(id, input);
+    const department = this.repository.updateDepartment(companyId, id, input);
     appendOutboxEvent(this.store, {
       aggregateType: "department",
       aggregateId: department.id,
@@ -506,8 +511,9 @@ export class AdminService {
   listDesignations(actor: AuthUser, query: MasterDataQuery): Paginated<DesignationResponse> {
     assertCanManageMasterData(actor);
     const search = query.search?.trim().toLowerCase();
+    const companyId = this.companyIdForActor(actor);
     const filtered = this.repository
-      .listDesignations()
+      .listDesignations(companyId)
       .filter((designation) => !query.active_only || designation.status === "active")
       .filter((designation) => {
         if (!search) return true;
@@ -519,7 +525,7 @@ export class AdminService {
 
   createDesignation(actor: AuthUser, input: DesignationCreateInput): MasterDataMutationResponse<DesignationResponse> {
     assertCanManageMasterData(actor);
-    const designation = this.repository.createDesignation(input);
+    const designation = this.repository.createDesignation(this.companyIdForActor(actor), input);
     appendOutboxEvent(this.store, {
       aggregateType: "designation",
       aggregateId: designation.id,
@@ -532,10 +538,11 @@ export class AdminService {
 
   updateDesignation(actor: AuthUser, id: string, input: DesignationUpdateInput): MasterDataMutationResponse<DesignationResponse> {
     assertCanManageMasterData(actor);
+    const companyId = this.companyIdForActor(actor);
     if (input.status === "inactive") {
-      this.assertNoActiveUsersReference("designation", id);
+      this.assertNoActiveUsersReference(companyId, "designation", id);
     }
-    const designation = this.repository.updateDesignation(id, input);
+    const designation = this.repository.updateDesignation(companyId, id, input);
     appendOutboxEvent(this.store, {
       aggregateType: "designation",
       aggregateId: designation.id,
@@ -610,12 +617,23 @@ export class AdminService {
     return { item: presentExtendedMasterData(item), version: item.version };
   }
 
-  private assertValidDepartmentParent(parentId: string | null, currentId?: string): void {
+  private companyIdForActor(actor: AuthUser): string | null {
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === actor.id)?.company_id ?? null;
+  }
+
+  private userBelongsToCompany(userId: string, companyId: string | null): boolean {
+    if (!companyId) {
+      return true;
+    }
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id === companyId;
+  }
+
+  private assertValidDepartmentParent(companyId: string | null, parentId: string | null, currentId?: string): void {
     if (!parentId) return;
     if (parentId === currentId) {
       throw conflict("Department cannot be its own parent.", { parent_id: parentId });
     }
-    const departments = this.repository.listDepartments();
+    const departments = this.repository.listDepartments(companyId);
     const parent = departments.find((department) => department.id === parentId && department.status === "active");
     if (!parent) {
       throw notFound("Parent department not found", { parent_id: parentId });
@@ -629,11 +647,12 @@ export class AdminService {
     }
   }
 
-  private assertNoActiveUsersReference(kind: "department" | "designation", id: string): void {
+  private assertNoActiveUsersReference(companyId: string | null, kind: "department" | "designation", id: string): void {
     const hasActiveReference = this.store.users.some(
       (user) =>
         !user.deleted_at &&
         user.employment_status === "active" &&
+        this.userBelongsToCompany(user.id, companyId) &&
         (kind === "department" ? user.department_id === id : user.designation_id === id)
     );
     if (hasActiveReference) {
@@ -1279,8 +1298,14 @@ function targetForAdminEvent(event: OutboxEvent): string {
   return typeof value === "string" ? value : `${event.aggregate_type}:${event.aggregate_id}`;
 }
 
-const attendanceTimePolicyFields = new Set(["punchInStart", "punchInEnd", "punchOutStart", "punchOutEnd"]);
-const attendanceBooleanPolicyFields = new Set(["allowRegularization", "fullDayPunchWindow", "allowOffDayPunches"]);
+const attendanceTimePolicyFields = new Set([
+  "punchInStart",
+  "punchInEnd",
+  "punchOutStart",
+  "punchOutEnd",
+  "autoPunchOutTime"
+]);
+const attendanceBooleanPolicyFields = new Set(["allowRegularization", "fullDayPunchWindow", "autoPunchOutEnabled", "allowOffDayPunches"]);
 const attendanceTimePolicyPattern = /^([01]\d|2[0-3]):[0-5]\d$/u;
 
 function normalizeAdminPolicyConfig(
@@ -1330,6 +1355,8 @@ function adminPolicyConfigKeys(policyKey: AdminPolicyKey): Set<string> {
       "punchInEnd",
       "punchOutStart",
       "punchOutEnd",
+      "autoPunchOutEnabled",
+      "autoPunchOutTime",
       "allowOffDayPunches"
     ],
     leave: ["casualPerYear", "sickPerYear", "earnedPerYear", "carryForwardCap", "encashmentAllowed"],

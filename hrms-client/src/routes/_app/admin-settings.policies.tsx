@@ -94,7 +94,7 @@ function PoliciesScreen() {
 
   return (
     <Tabs defaultValue="attendance">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="attendance">Attendance</TabsTrigger>
         <TabsTrigger value="leave">Leave</TabsTrigger>
         <TabsTrigger value="timesheet">Timesheet</TabsTrigger>
@@ -148,6 +148,29 @@ function PoliciesScreen() {
               />
             </div>
           )}
+          <div className="md:col-span-2 grid grid-cols-1 gap-3 rounded-xl border bg-card/50 p-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Day-end safety
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Open punch sessions are automatically closed at this time if an employee forgets to
+                punch out.
+              </p>
+            </div>
+            <SwitchField
+              label="Auto punch-out"
+              value={policies.attendance.autoPunchOutEnabled}
+              onChange={(v) => setPolicy("attendance", { autoPunchOutEnabled: v })}
+            />
+            {policies.attendance.autoPunchOutEnabled && (
+              <TimeField
+                label="Auto punch-out time"
+                value={policies.attendance.autoPunchOutTime}
+                onChange={(v) => setPolicy("attendance", { autoPunchOutTime: v })}
+              />
+            )}
+          </div>
           <NumField
             label="Grace minutes (no late mark)"
             value={policies.attendance.graceMinutes}
@@ -518,6 +541,16 @@ function policiesFromApi(items: AdminPolicyRecord[], fallback: Policies) {
             policies.attendance.punchOutStart,
           ),
           punchOutEnd: stringValue(item.config, "punchOutEnd", policies.attendance.punchOutEnd),
+          autoPunchOutEnabled: booleanValue(
+            item.config,
+            "autoPunchOutEnabled",
+            policies.attendance.autoPunchOutEnabled,
+          ),
+          autoPunchOutTime: stringValue(
+            item.config,
+            "autoPunchOutTime",
+            policies.attendance.autoPunchOutTime,
+          ),
           allowOffDayPunches: booleanValue(
             item.config,
             "allowOffDayPunches",

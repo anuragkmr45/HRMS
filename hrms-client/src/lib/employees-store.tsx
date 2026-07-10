@@ -191,8 +191,15 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
     });
   }, [apiEnabled, apiSelectorsQuery.data, designations]);
 
-  const invalidateCore = () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.domain("core") });
+  const invalidateCoreUsers = async () => {
+    const core = queryKeys.domain("core");
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: [...core, "users"] }),
+      queryClient.invalidateQueries({ queryKey: [...core, "user"] }),
+      queryClient.invalidateQueries({ queryKey: [...core, "user-subtree"] }),
+      queryClient.invalidateQueries({ queryKey: [...core, "user-role-history"] }),
+      queryClient.invalidateQueries({ queryKey: [...core, "user-audit"] }),
+    ]);
   };
 
   const apiEmployeesQuery = useQuery({
@@ -283,7 +290,7 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
         expected_version: employee.version ?? 1,
       });
     },
-    onSuccess: invalidateCore,
+    onSuccess: invalidateCoreUsers,
   });
 
   const statusMutation = useMutation({
@@ -304,7 +311,7 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
         employment_status: apiEmploymentStatus(status),
       });
     },
-    onSuccess: invalidateCore,
+    onSuccess: invalidateCoreUsers,
   });
 
   const loginMutation = useMutation({
@@ -315,7 +322,7 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
         ? coreApi.enableLogin(employee.apiId, { expected_version, invite_email: true })
         : coreApi.disableLogin(employee.apiId, { expected_version });
     },
-    onSuccess: invalidateCore,
+    onSuccess: invalidateCoreUsers,
   });
 
   const rolesMutation = useMutation({
@@ -326,7 +333,7 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
         roles: Array.from(new Set(roles.map((role) => backendRoleByUiRole[role] ?? "Employee"))),
       });
     },
-    onSuccess: invalidateCore,
+    onSuccess: invalidateCoreUsers,
   });
 
   const profilePhotoMutation = useMutation({
@@ -335,7 +342,7 @@ export function EmployeesProvider({ children }: { children: React.ReactNode }) {
       formData.set("file", file);
       return coreApi.uploadProfilePhoto(userId, formData);
     },
-    onSuccess: invalidateCore,
+    onSuccess: invalidateCoreUsers,
   });
 
   const upsert: Ctx["upsert"] = async (e, actor = "Rahul Verma") => {

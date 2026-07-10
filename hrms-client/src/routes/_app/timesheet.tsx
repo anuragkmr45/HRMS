@@ -10,15 +10,29 @@ export const Route = createFileRoute("/_app/timesheet")({
 
 const APPROVER_ROLES: Role[] = ["manager", "main_admin", "hr_admin", "project_manager"];
 const PM_ROLES: Role[] = ["project_manager", "main_admin"];
+const SELF_TIMESHEET_ROLES: Role[] = [
+  "employee",
+  "manager",
+  "director",
+  "project_manager",
+  "finance_manager",
+];
 
 const TABS = [
-  { to: "/timesheet", label: "My timesheet", icon: LayoutDashboard, exact: true },
+  {
+    to: "/timesheet",
+    label: "My timesheet",
+    icon: LayoutDashboard,
+    exact: true,
+    roles: SELF_TIMESHEET_ROLES,
+  },
   { to: "/timesheet/approvals", label: "Approvals", icon: FileCheck2, roles: APPROVER_ROLES },
   { to: "/timesheet/projects", label: "Project view", icon: Briefcase, roles: PM_ROLES },
 ];
 
 function TimesheetLayout() {
   const { activeRole } = useAuth();
+  const isAdminRole = activeRole === "main_admin" || activeRole === "hr_admin";
   const visible = TABS.filter((t) => !t.roles || (activeRole && t.roles.includes(activeRole)));
 
   return (
@@ -26,7 +40,11 @@ function TimesheetLayout() {
       <PageHeader
         eyebrow="Time"
         title="Timesheet"
-        description="Log time against projects, submit weekly, and approve at speed."
+        description={
+          isAdminRole
+            ? "Review submitted timesheets, approval queues, and project utilization."
+            : "Log time against projects, submit weekly, and approve at speed."
+        }
       />
       <ModuleTabs tabs={visible} />
       <div className="pt-4 page-fade-in">

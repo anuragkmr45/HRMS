@@ -47,8 +47,7 @@ function ApplyWfhPage() {
         reason,
         project_ref: project || undefined,
       });
-      const requestId = typeof response.request_id === "string" ? response.request_id : "submitted";
-      toast.success(`WFH request ${requestId} submitted`);
+      toast.success("WFH request submitted");
       navigate({ to: "/leave-wfh" });
     } catch (error) {
       toast.error(errorMessage(error));

@@ -112,7 +112,7 @@ function HrReports() {
 
   return (
     <Tabs defaultValue="master">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="master">Employee Master</TabsTrigger>
         <TabsTrigger value="joiners">New Joiners</TabsTrigger>
         <TabsTrigger value="exits">Exit Report</TabsTrigger>

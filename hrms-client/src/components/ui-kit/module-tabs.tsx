@@ -26,37 +26,42 @@ export function ModuleTabs({ tabs, className }: Props) {
 
   return (
     <div
-      role="tablist"
-      className={cn("-mx-1 flex gap-1 overflow-x-auto border-b pt-1", "scrollbar-thin", className)}
+      className={cn(
+        "-mx-1 max-w-full overflow-x-auto overscroll-x-contain border-b px-1",
+        "scrollbar-thin",
+        className,
+      )}
     >
-      {tabs.map((t) => {
-        const active = t.exact ? path === t.to : path === t.to || path.startsWith(t.to + "/");
-        const Icon = t.icon;
-        return (
-          <Link
-            key={t.to}
-            to={t.to}
-            role="tab"
-            aria-selected={active}
-            className={cn(
-              "group inline-flex items-center gap-2 whitespace-nowrap rounded-t-xl border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
-              active
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-            )}
-          >
-            {Icon ? (
-              <Icon
-                className={cn(
-                  "h-4 w-4 transition-colors",
-                  active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
-                )}
-              />
-            ) : null}
-            {t.label}
-          </Link>
-        );
-      })}
+      <div role="tablist" className="flex w-max min-w-full snap-x gap-1 pt-1">
+        {tabs.map((t) => {
+          const active = t.exact ? path === t.to : path === t.to || path.startsWith(t.to + "/");
+          const Icon = t.icon;
+          return (
+            <Link
+              key={t.to}
+              to={t.to}
+              role="tab"
+              aria-selected={active}
+              className={cn(
+                "group inline-flex snap-start items-center gap-2 whitespace-nowrap rounded-t-xl border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
+                active
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              {Icon ? (
+                <Icon
+                  className={cn(
+                    "h-4 w-4 transition-colors",
+                    active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
+                  )}
+                />
+              ) : null}
+              {t.label}
+            </Link>
+          );
+        })}
+      </div>
     </div>
   );
 }

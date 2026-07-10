@@ -116,9 +116,12 @@ function MyLetters() {
   };
   return (
     <div className="space-y-4 pt-4">
-      <p className="text-sm text-muted-foreground">
-        Download issued letters or request new ones from HR.
-      </p>
+      <div className="ems-tab-intro p-4">
+        <p className="text-sm font-medium">Letters and certificates</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Download issued letters or request new ones from HR.
+        </p>
+      </div>
       {apiEnabled && lettersQuery.error ? (
         <EmptyState
           title="Letters could not be loaded"
@@ -130,12 +133,9 @@ function MyLetters() {
       ) : null}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {rows.map((l) => (
-          <Card
-            key={l.id}
-            className="rounded-2xl border-border/60 p-5 transition hover:-translate-y-0.5 hover:shadow-md"
-          >
+          <Card key={l.id} className="ems-record-card rounded-2xl p-5">
             <div className="flex items-start justify-between">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+              <div className="ems-record-icon">
                 <FileSignature className="h-5 w-5" />
               </div>
               {statusBadge(l.status)}

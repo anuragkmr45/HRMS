@@ -26,9 +26,9 @@ export class AdminRepository {
     return this.store.adminWorkflows.filter((workflow) => !workflow.deleted_at);
   }
 
-  listAdminPolicies(): AdminPolicyConfigRecord[] {
-    this.ensureAdminPolicies();
-    return this.store.adminPolicies.filter((policy) => !policy.deleted_at);
+  listAdminPolicies(companyId: string | null): AdminPolicyConfigRecord[] {
+    this.ensureAdminPolicies(companyId);
+    return this.store.adminPolicies.filter((policy) => policy.company_id === companyId && !policy.deleted_at);
   }
 
   listAdminEmailTemplates(): AdminEmailTemplateRecord[] {
@@ -52,9 +52,9 @@ export class AdminRepository {
     return workflow;
   }
 
-  adminPolicyByKey(policyKey: string): AdminPolicyConfigRecord {
-    this.ensureAdminPolicies();
-    const policy = this.store.adminPolicies.find((candidate) => candidate.policy_key === policyKey && !candidate.deleted_at);
+  adminPolicyByKey(policyKey: string, companyId: string | null): AdminPolicyConfigRecord {
+    this.ensureAdminPolicies(companyId);
+    const policy = this.store.adminPolicies.find((candidate) => candidate.company_id === companyId && candidate.policy_key === policyKey && !candidate.deleted_at);
     if (!policy) throw notFound("Admin policy configuration not found", { policy_key: policyKey });
     return policy;
   }
@@ -91,8 +91,8 @@ export class AdminRepository {
     return workflow;
   }
 
-  updateAdminPolicy(policyKey: string, input: AdminPolicyUpdateData): AdminPolicyConfigRecord {
-    const policy = this.adminPolicyByKey(policyKey);
+  updateAdminPolicy(policyKey: string, companyId: string | null, input: AdminPolicyUpdateData): AdminPolicyConfigRecord {
+    const policy = this.adminPolicyByKey(policyKey, companyId);
     if (policy.version !== input.expected_version) {
       throw conflict("Admin policy configuration was modified by another actor.", {
         aggregate: "admin_policy",
@@ -176,8 +176,9 @@ export class AdminRepository {
     return settings;
   }
 
-  getCurrentCompanyProfile(): CompanyProfileRecord {
-    let company =
+  getCurrentCompanyProfile(companyId: string | null): CompanyProfileRecord {
+    let company = companyId ? this.store.companyProfiles.find((candidate) => candidate.id === companyId) ?? null : null;
+    company ??=
       this.store.companyProfiles.find((candidate) => candidate.status === "active") ??
       this.store.companyProfiles.at(-1) ??
       null;
@@ -188,8 +189,8 @@ export class AdminRepository {
     return company;
   }
 
-  updateCurrentCompanyProfile(input: CompanyProfileUpdateInput): CompanyProfileRecord {
-    const company = this.getCurrentCompanyProfile();
+  updateCurrentCompanyProfile(companyId: string | null, input: CompanyProfileUpdateInput): CompanyProfileRecord {
+    const company = this.getCurrentCompanyProfile(companyId);
     if (company.version !== input.expected_version) {
       throw conflict("Company profile was modified by another actor.", {
         aggregate: "company_profile",
@@ -305,15 +306,16 @@ export class AdminRepository {
     return role;
   }
 
-  listDepartments(): Department[] {
-    return this.store.departments.filter((department) => !department.deleted_at);
+  listDepartments(companyId: string | null): Department[] {
+    return this.store.departments.filter((department) => department.company_id === companyId && !department.deleted_at);
   }
 
-  createDepartment(input: DepartmentCreateInput): Department {
+  createDepartment(companyId: string | null, input: DepartmentCreateInput): Department {
     const code = normalizeCode(input.department_code ?? input.code ?? input.name);
-    this.assertUniqueDepartmentCode(code);
+    this.assertUniqueDepartmentCode(code, companyId);
     const department: Department = {
       id: randomUUID(),
+      company_id: companyId,
       department_code: code,
       name: input.name.trim(),
       cost_center: input.cost_center?.trim() || null,
@@ -327,8 +329,8 @@ export class AdminRepository {
     return department;
   }
 
-  updateDepartment(id: string, input: DepartmentUpdateInput): Department {
-    const department = this.store.departments.find((candidate) => candidate.id === id && !candidate.deleted_at);
+  updateDepartment(companyId: string | null, id: string, input: DepartmentUpdateInput): Department {
+    const department = this.store.departments.find((candidate) => candidate.company_id === companyId && candidate.id === id && !candidate.deleted_at);
     if (!department) throw notFound("Department not found", { id });
     if (department.version !== input.expected_version) {
       throw conflict("Department was modified by another actor.", {
@@ -341,7 +343,7 @@ export class AdminRepository {
     const nextCode = input.department_code ?? input.code;
     if (nextCode) {
       const normalized = normalizeCode(nextCode);
-      this.assertUniqueDepartmentCode(normalized, id);
+      this.assertUniqueDepartmentCode(normalized, companyId, id);
       department.department_code = normalized;
     }
     if (input.name) department.name = input.name.trim();
@@ -354,19 +356,20 @@ export class AdminRepository {
     return department;
   }
 
-  listDesignations(): Designation[] {
-    return this.store.designations.filter((designation) => !designation.deleted_at);
+  listDesignations(companyId: string | null): Designation[] {
+    return this.store.designations.filter((designation) => designation.company_id === companyId && !designation.deleted_at);
   }
 
-  createDesignation(input: DesignationCreateInput): Designation {
+  createDesignation(companyId: string | null, input: DesignationCreateInput): Designation {
     const title = input.title ?? input.name;
     if (!title) {
       throw badRequest("Designation title is required", { field: "title" });
     }
     const code = normalizeCode(input.designation_code ?? input.code ?? title);
-    this.assertUniqueDesignationCode(code);
+    this.assertUniqueDesignationCode(code, companyId);
     const designation: Designation = {
       id: randomUUID(),
+      company_id: companyId,
       designation_code: code,
       title: title.trim(),
       level: input.level ?? null,
@@ -378,8 +381,8 @@ export class AdminRepository {
     return designation;
   }
 
-  updateDesignation(id: string, input: DesignationUpdateInput): Designation {
-    const designation = this.store.designations.find((candidate) => candidate.id === id && !candidate.deleted_at);
+  updateDesignation(companyId: string | null, id: string, input: DesignationUpdateInput): Designation {
+    const designation = this.store.designations.find((candidate) => candidate.company_id === companyId && candidate.id === id && !candidate.deleted_at);
     if (!designation) throw notFound("Designation not found", { id });
     if (designation.version !== input.expected_version) {
       throw conflict("Designation was modified by another actor.", {
@@ -392,7 +395,7 @@ export class AdminRepository {
     const nextCode = input.designation_code ?? input.code;
     if (nextCode) {
       const normalized = normalizeCode(nextCode);
-      this.assertUniqueDesignationCode(normalized, id);
+      this.assertUniqueDesignationCode(normalized, companyId, id);
       designation.designation_code = normalized;
     }
     const title = input.title ?? input.name;
@@ -458,18 +461,26 @@ export class AdminRepository {
     return item;
   }
 
-  private assertUniqueDepartmentCode(code: string, currentId?: string): void {
+  private assertUniqueDepartmentCode(code: string, companyId: string | null, currentId?: string): void {
     const duplicate = this.store.departments.find(
-      (candidate) => !candidate.deleted_at && candidate.id !== currentId && candidate.department_code.toUpperCase() === code
+      (candidate) =>
+        !candidate.deleted_at &&
+        candidate.company_id === companyId &&
+        candidate.id !== currentId &&
+        candidate.department_code.toUpperCase() === code
     );
     if (duplicate) {
       throw conflict("Department code already exists", { department_code: code });
     }
   }
 
-  private assertUniqueDesignationCode(code: string, currentId?: string): void {
+  private assertUniqueDesignationCode(code: string, companyId: string | null, currentId?: string): void {
     const duplicate = this.store.designations.find(
-      (candidate) => !candidate.deleted_at && candidate.id !== currentId && candidate.designation_code.toUpperCase() === code
+      (candidate) =>
+        !candidate.deleted_at &&
+        candidate.company_id === companyId &&
+        candidate.id !== currentId &&
+        candidate.designation_code.toUpperCase() === code
     );
     if (duplicate) {
       throw conflict("Designation code already exists", { designation_code: code });
@@ -509,9 +520,13 @@ export class AdminRepository {
     this.store.adminWorkflows.push(...missingDefaults);
   }
 
-  private ensureAdminPolicies(): void {
-    const existingKeys = new Set(this.store.adminPolicies.filter((policy) => !policy.deleted_at).map((policy) => policy.policy_key));
-    const missingDefaults = buildDefaultAdminPolicies(nowIso()).filter((policy) => !existingKeys.has(policy.policy_key));
+  private ensureAdminPolicies(companyId: string | null): void {
+    const existingKeys = new Set(
+      this.store.adminPolicies
+        .filter((policy) => policy.company_id === companyId && !policy.deleted_at)
+        .map((policy) => policy.policy_key)
+    );
+    const missingDefaults = buildDefaultAdminPolicies(nowIso(), companyId).filter((policy) => !existingKeys.has(policy.policy_key));
     this.store.adminPolicies.push(...missingDefaults);
   }
 

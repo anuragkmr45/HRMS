@@ -175,7 +175,7 @@ function AuditReports() {
 
   return (
     <Tabs defaultValue="login">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="login">Login Audit</TabsTrigger>
         <TabsTrigger value="role">Role Change</TabsTrigger>
         <TabsTrigger value="profile">Profile Change</TabsTrigger>

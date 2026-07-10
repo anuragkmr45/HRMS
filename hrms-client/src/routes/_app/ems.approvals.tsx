@@ -182,13 +182,16 @@ function MyApprovals() {
   if (isApiEnabled()) {
     return (
       <div className="space-y-4 pt-4">
-        <p className="text-sm text-muted-foreground">
-          Live approvals are handled inside each workflow module so this page does not show demo
-          queue data for API-backed workspaces.
-        </p>
+        <div className="ems-tab-intro p-4">
+          <p className="text-sm font-medium">Approval workbench</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live approvals are handled inside each workflow module so this page does not show demo
+            queue data for API-backed workspaces.
+          </p>
+        </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {LIVE_APPROVAL_MODULES.map((module) => (
-            <Card key={module.to} className="rounded-2xl border-border/60 p-4">
+            <Card key={module.to} className="ems-record-card rounded-2xl p-4">
               <div className="flex h-full flex-col gap-3">
                 <div>
                   <p className="text-sm font-semibold">{module.label}</p>
@@ -207,9 +210,12 @@ function MyApprovals() {
 
   return (
     <div className="space-y-4 pt-4">
-      <p className="text-sm text-muted-foreground">Pending items waiting on your action.</p>
+      <div className="ems-tab-intro p-4">
+        <p className="text-sm font-medium">Approval workbench</p>
+        <p className="mt-1 text-sm text-muted-foreground">Pending items waiting on your action.</p>
+      </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
         {[
           { l: "Leave", v: LEAVE.length },
           { l: "WFH", v: WFH.length },
@@ -218,7 +224,7 @@ function MyApprovals() {
           { l: "Asset", v: ASSET.length },
           { l: "Helpdesk", v: HD.length },
         ].map((s) => (
-          <Card key={s.l} className="rounded-2xl p-4">
+          <Card key={s.l} className="ems-kpi-card rounded-2xl p-4">
             <p className="text-xs text-muted-foreground">{s.l}</p>
             <p className="mt-1 text-2xl font-semibold">{s.v}</p>
           </Card>
@@ -226,7 +232,7 @@ function MyApprovals() {
       </div>
 
       <Tabs defaultValue="leave" className="w-full">
-        <TabsList className="flex w-full flex-wrap justify-start">
+        <TabsList className="w-full justify-start">
           <TabsTrigger value="leave">Leave</TabsTrigger>
           <TabsTrigger value="wfh">WFH</TabsTrigger>
           <TabsTrigger value="ts">Timesheet</TabsTrigger>

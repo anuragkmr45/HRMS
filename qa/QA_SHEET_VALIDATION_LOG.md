@@ -8,7 +8,7 @@ Result: Pass
 - P0: 28
 - P1: 16
 - P2: 7
-- Sprint totals: Sprint 1: 41 SP, Sprint 2: 20 SP, Sprint 3: 8 SP, Sprint 4: 10 SP, Sprint 5: 9 SP
+- Day totals: Day 1: 18 SP, Day 2: 13 SP, Day 3: 15 SP, Day 4: 11 SP, Day 5: 9 SP, Day 6: 19 SP, Day 7: 3 SP
 
 ## Errors
 - None

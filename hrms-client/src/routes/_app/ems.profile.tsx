@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
-import { DataCard, EmptyState, StatusBadge, UserAvatar } from "@/components/ui-kit";
+import { DataCard, EmptyState, PhoneInput, StatusBadge, UserAvatar } from "@/components/ui-kit";
 import { Modal } from "@/components/ui-kit";
 import { coreApi } from "@/domains/core/api";
 import {
@@ -42,6 +42,11 @@ import {
   Inbox,
   Upload,
   Trash2,
+  Mail,
+  CalendarDays,
+  Building2,
+  ShieldCheck,
+  ClipboardList,
   type LucideIcon,
 } from "lucide-react";
 
@@ -66,24 +71,47 @@ const PROFILE_FIELDS = [
 
 function Section({
   title,
+  description,
   icon: Icon,
   fields,
 }: {
   title: string;
+  description?: string;
   icon: LucideIcon;
   fields: Field[];
 }) {
   return (
-    <DataCard title={title} actions={<Icon className="h-4 w-4 text-primary" />}>
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+    <DataCard
+      title={title}
+      description={description}
+      className="glass-panel ems-profile-card"
+      padded={false}
+      actions={
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+          <Icon className="h-4 w-4" />
+        </span>
+      }
+    >
+      <dl className="grid grid-cols-1 sm:grid-cols-2">
         {fields.map((f) => (
-          <div key={f.label}>
-            <dt className="text-xs font-medium text-muted-foreground">{f.label}</dt>
-            <dd className="mt-0.5 text-sm font-medium">{f.value}</dd>
+          <div key={f.label} className="ems-profile-field">
+            <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {f.label}
+            </dt>
+            <dd className="mt-1 break-words text-sm font-medium text-foreground">{f.value}</dd>
           </div>
         ))}
       </dl>
     </DataCard>
+  );
+}
+
+function ProfileHeroLine({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <Icon className="h-4 w-4 shrink-0 text-primary" />
+      <span className="truncate">{label}</span>
+    </span>
   );
 }
 
@@ -259,73 +287,103 @@ function MyProfile() {
     }
   };
 
-  return (
-    <div className="space-y-4 pt-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Profile changes require HR approval before they go live.
-        </p>
-        <Button onClick={() => setOpen(true)} className="rounded-full" size="sm">
-          <Edit3 className="mr-2 h-4 w-4" /> Request profile update
-        </Button>
-      </div>
+  const photoHelpText = `${photoPolicy.allowed_mime_types
+    .map((type) => type.replace("image/", "").toUpperCase())
+    .join(", ")} up to ${formatBytes(photoPolicy.max_bytes)}. Images are compressed before upload.`;
 
-      <DataCard title="Profile photo" description="Shown on your employee profile and directory">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
-            <UserAvatar
-              name={profile.user.fullName}
-              email={profile.user.email}
-              src={profile.user.profilePhotoUrl}
-              size="lg"
-            />
+  return (
+    <div className="space-y-5 pt-4">
+      <section className="ems-profile-hero glass-panel">
+        <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="relative shrink-0">
+              <div className="rounded-[1.7rem] bg-background/45 p-2 shadow-[0_22px_50px_-36px_var(--color-primary)] ring-1 ring-primary/20 backdrop-blur">
+                <UserAvatar
+                  name={profile.user.fullName}
+                  email={profile.user.email}
+                  src={profile.user.profilePhotoUrl}
+                  size="lg"
+                />
+              </div>
+              <span className="absolute -bottom-1 -right-1 grid h-8 w-8 place-items-center rounded-full bg-success/15 text-success ring-1 ring-success/25 backdrop-blur">
+                <ShieldCheck className="h-4 w-4" />
+              </span>
+            </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{profile.user.fullName}</p>
-              <p className="text-xs text-muted-foreground">
-                {photoPolicy.allowed_mime_types
-                  .map((type) => type.replace("image/", "").toUpperCase())
-                  .join(", ")}
-                , up to {formatBytes(photoPolicy.max_bytes)}. Images are compressed before upload.
-              </p>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <StatusBadge status={profile.employmentStatus} />
+                <span className="rounded-full border border-border/70 bg-background/45 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                  {profile.user.employeeCode}
+                </span>
+              </div>
+              <h2 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                {profile.user.fullName}
+              </h2>
+              <div className="mt-3 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+                <ProfileHeroLine icon={Mail} label={profile.user.email} />
+                <ProfileHeroLine icon={Briefcase} label={profile.designation} />
+                <ProfileHeroLine icon={Building2} label={profile.department} />
+                <ProfileHeroLine
+                  icon={CalendarDays}
+                  label={profile.joinedOn || "Joining date not set"}
+                />
+                <ProfileHeroLine
+                  icon={User}
+                  label={profile.manager?.fullName ?? "Manager not assigned"}
+                />
+              </div>
             </div>
           </div>
-          <input
-            ref={photoInputRef}
-            type="file"
-            className="hidden"
-            accept={photoPolicy.allowed_mime_types.join(",")}
-            onChange={(event) => handlePhotoSelected(event.currentTarget.files?.[0] ?? null)}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              disabled={!apiEnabled || photoBusy}
-              onClick={() => photoInputRef.current?.click()}
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              {profile.user.profilePhotoUrl ? "Replace photo" : "Upload photo"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full text-destructive hover:text-destructive"
-              disabled={!canRemovePhoto || photoBusy}
-              onClick={handleRemovePhoto}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Remove photo
-            </Button>
+
+          <div className="flex w-full flex-col gap-3 rounded-2xl border border-border/70 bg-background/35 p-3 backdrop-blur lg:w-[24rem]">
+            <p className="text-xs leading-relaxed text-muted-foreground">{photoHelpText}</p>
+            <input
+              ref={photoInputRef}
+              type="file"
+              className="hidden"
+              accept={photoPolicy.allowed_mime_types.join(",")}
+              onChange={(event) => handlePhotoSelected(event.currentTarget.files?.[0] ?? null)}
+            />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                disabled={!apiEnabled || photoBusy}
+                onClick={() => photoInputRef.current?.click()}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                {profile.user.profilePhotoUrl ? "Replace" : "Upload"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full text-destructive hover:text-destructive"
+                disabled={!canRemovePhoto || photoBusy}
+                onClick={handleRemovePhoto}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Remove
+              </Button>
+              <Button onClick={() => setOpen(true)} className="rounded-full" size="sm">
+                <Edit3 className="mr-2 h-4 w-4" />
+                Update
+              </Button>
+            </div>
           </div>
         </div>
-      </DataCard>
+      </section>
+
+      <div className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-muted-foreground">
+        Profile changes require HR approval before they go live.
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Section
           title="Basic information"
+          description="Identity details registered with HR"
           icon={User}
           fields={[
             { label: "Full name", value: profile.user.fullName },
@@ -338,6 +396,7 @@ function MyProfile() {
         />
         <Section
           title="Contact information"
+          description="Reachability details for work and personal use"
           icon={Phone}
           fields={[
             { label: "Work email", value: profile.user.email },
@@ -348,6 +407,7 @@ function MyProfile() {
         />
         <Section
           title="Emergency contact"
+          description="Primary contact available to HR in urgent situations"
           icon={AlertTriangle}
           fields={[
             { label: "Name", value: text(emergency.name, "—") },
@@ -361,6 +421,7 @@ function MyProfile() {
         />
         <Section
           title="Address"
+          description="Current and permanent address records"
           icon={MapPin}
           fields={[
             { label: "Current address", value: profile.currentAddress },
@@ -371,6 +432,7 @@ function MyProfile() {
         />
         <Section
           title="Job information"
+          description="Role, team and work preference details"
           icon={Briefcase}
           fields={[
             { label: "Designation", value: profile.designation },
@@ -383,39 +445,57 @@ function MyProfile() {
         />
         <Section
           title="Reporting structure"
+          description="Manager assignment from the employee profile"
           icon={User}
           fields={[
             { label: "Reporting manager", value: profile.manager?.fullName ?? "—" },
             { label: "Manager email", value: profile.manager?.email ?? "—" },
-            { label: "Skip-level", value: "Vikram Reddy" },
-            { label: "HR business partner", value: "Priya Verma" },
           ]}
         />
       </div>
 
       {apiEnabled ? (
-        <DataCard title="My profile update requests" description="Latest HR review activity">
+        <DataCard
+          title="My profile update requests"
+          description="Latest HR review activity"
+          className="glass-panel ems-profile-card"
+          padded={false}
+          actions={
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+              <ClipboardList className="h-4 w-4" />
+            </span>
+          }
+        >
           {changesQuery.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading profile requests...</p>
+            <p className="p-5 text-sm text-muted-foreground">Loading profile requests...</p>
           ) : pendingChanges.length === 0 ? (
-            <EmptyState
-              title="No profile requests"
-              description="Submitted changes will appear here."
-            />
+            <div className="p-5">
+              <EmptyState
+                title="No profile requests"
+                description="Submitted changes will appear here."
+              />
+            </div>
           ) : (
-            <div className="space-y-2">
+            <div className="grid gap-3 p-3 md:grid-cols-2">
               {pendingChanges.map((request) => (
-                <div
-                  key={request.id}
-                  className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{request.field}</p>
-                    <p className="text-xs text-muted-foreground">
+                <div key={request.id} className="ems-profile-request-card rounded-2xl p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{request.field}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{request.requestCode}</p>
+                    </div>
+                    <StatusBadge status={request.status} />
+                  </div>
+                  <div className="mt-3 rounded-xl border border-border/60 bg-background/40 p-3">
+                    <p className="break-words text-xs text-muted-foreground">
                       {request.oldValue} → {request.newValue}
                     </p>
+                    {request.reason ? (
+                      <p className="mt-2 break-words text-xs text-muted-foreground">
+                        {request.reason}
+                      </p>
+                    ) : null}
                   </div>
-                  <StatusBadge status={request.status} />
                 </div>
               ))}
             </div>
@@ -457,13 +537,17 @@ function MyProfile() {
           </div>
           <div>
             <Label htmlFor="val">New value</Label>
-            <Input
-              id="val"
-              value={val}
-              onChange={(e) => setVal(e.target.value)}
-              placeholder="Enter the new value"
-              className="mt-1"
-            />
+            {field === "phone" || field === "alternate_phone" ? (
+              <PhoneInput id="val" value={val} onChange={setVal} className="mt-1" />
+            ) : (
+              <Input
+                id="val"
+                value={val}
+                onChange={(e) => setVal(e.target.value)}
+                placeholder="Enter the new value"
+                className="mt-1"
+              />
+            )}
           </div>
           <div>
             <Label htmlFor="reason">Reason</Label>

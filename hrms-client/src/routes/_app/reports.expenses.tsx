@@ -164,7 +164,7 @@ function ExpenseReports() {
 
   return (
     <Tabs defaultValue="register">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="register">Register</TabsTrigger>
         <TabsTrigger value="pending">Pending Approval</TabsTrigger>
         <TabsTrigger value="finance">Finance Pending</TabsTrigger>

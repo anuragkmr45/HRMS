@@ -59,6 +59,12 @@ function fallbackTitle(error: ApiError, fallback: string): string {
   return fallback;
 }
 
+function isNetworkFailureMessage(message: string): boolean {
+  return /failed before a response|failed to fetch|networkerror|econnrefused|enotfound/i.test(
+    message,
+  );
+}
+
 export function formatUserFacingError(
   error: unknown,
   fallback = "Something went wrong.",
@@ -70,7 +76,6 @@ export function formatUserFacingError(
       error.retryAfterSeconds != null
         ? `Try again in ${error.retryAfterSeconds} seconds.`
         : undefined,
-      error.requestId ? `Request ID: ${error.requestId}` : undefined,
     ]
       .filter(Boolean)
       .join(" ");
@@ -85,14 +90,28 @@ export function formatUserFacingError(
   }
 
   if (error instanceof ApiUnavailableError) {
+    const message = error.message || "We could not reach the HRMS server. Please try again.";
+    if (/not connected to the HRMS server/i.test(message)) {
+      return {
+        title: "This feature is not available in this environment.",
+        description: "Ask an administrator to enable backend API mode before using this feature.",
+      };
+    }
     return {
-      title: "The HRMS server is unavailable.",
-      description: sentence(error.message || "Please check the connection and try again."),
+      title: "We could not reach HRMS.",
+      description: "Please check your internet connection and try again.",
     };
   }
 
   if (error instanceof Error) {
-    return { title: error.message || fallback };
+    const message = error.message || fallback;
+    if (isNetworkFailureMessage(message)) {
+      return {
+        title: "We could not reach HRMS.",
+        description: "Please check your internet connection and try again.",
+      };
+    }
+    return { title: message };
   }
 
   return { title: fallback };

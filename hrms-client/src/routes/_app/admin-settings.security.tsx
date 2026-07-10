@@ -77,7 +77,7 @@ function SecurityScreen() {
           <p className="mb-4 text-xs text-muted-foreground">
             Enforce at signup, password reset and admin-set passwords.
           </p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <NumField
               label="Minimum length"
               value={draft.passwordMinLength}
@@ -112,7 +112,7 @@ function SecurityScreen() {
           <p className="mb-4 text-xs text-muted-foreground">
             Idle timeout, brute-force protection and future MFA readiness.
           </p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <NumField
               label="Session timeout (mins)"
               value={draft.sessionTimeoutMinutes}
@@ -160,8 +160,8 @@ function SecurityScreen() {
               onChange={(v) => update("ipDeviceAuditEnabled", v)}
             />
           </div>
-          <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs text-muted-foreground">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
+          <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs text-muted-foreground dark:border-warning/30 dark:bg-warning/10">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground dark:text-warning" />
             Disabling these audits weakens compliance reporting. Coordinate with your security team
             before turning them off.
           </div>

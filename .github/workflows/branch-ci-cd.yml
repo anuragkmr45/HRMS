@@ -40,15 +40,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.25.0
+          run_install: false
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: hrms_backend/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable && corepack prepare pnpm@10.25.0 --activate
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -69,6 +72,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.25.0
+          run_install: false
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -76,17 +85,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: hrms-client/pnpm-lock.yaml
 
-      - name: Enable pnpm
-        run: corepack enable && corepack prepare pnpm@10.25.0 --activate
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Production API mode guard
         run: pnpm api:production-config-guard
 
-      - name: Build
-        run: pnpm build
+      - name: Build Vercel frontend
+        run: pnpm build:vercel
 
   deploy-backend:
     name: Deploy backend

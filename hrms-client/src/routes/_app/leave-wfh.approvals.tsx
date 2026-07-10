@@ -194,7 +194,7 @@ function ApprovalsPage() {
 
   return (
     <div className="space-y-4 pt-2">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label="Pending leave" value={leaves.length} icon={CalendarDays} tone="warning" />
         <StatCard label="Pending WFH" value={wfhs.length} icon={Home} tone="info" />
         <StatCard label="Approved (this week)" value="0" icon={Check} tone="success" />

@@ -30,6 +30,7 @@ import {
   numberValue,
   pageItems,
   text,
+  userFacingErrorMessage,
 } from "@/shared/api";
 import { Briefcase, Clock, DollarSign, AlertTriangle, Activity } from "lucide-react";
 
@@ -219,8 +220,8 @@ function ProjectViewPage() {
   return (
     <div className="space-y-4">
       <Card className="rounded-2xl border-border/60 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex-1 min-w-[200px]">
+        <div className="grid gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center">
+          <div className="min-w-0 lg:min-w-[200px] lg:flex-1">
             <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Project
             </p>
@@ -237,7 +238,7 @@ function ProjectViewPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="min-w-[180px]">
+          <div className="min-w-0 lg:min-w-[180px]">
             <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Week
             </p>
@@ -264,18 +265,24 @@ function ProjectViewPage() {
 
       {error && (
         <Card className="rounded-2xl border-destructive/30 bg-destructive/5 p-4">
-          <p className="text-sm font-semibold text-destructive">Timesheet API unavailable</p>
-          <p className="mt-1 text-xs text-muted-foreground">{error.message}</p>
+          <p className="text-sm font-semibold text-destructive">Timesheets could not be loaded</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {userFacingErrorMessage(error, "Timesheets could not be loaded.")}
+          </p>
         </Card>
       )}
       {summaryQuery.error instanceof Error && (
         <Card className="rounded-2xl border-destructive/30 bg-destructive/5 p-4">
-          <p className="text-sm font-semibold text-destructive">Project summary API unavailable</p>
-          <p className="mt-1 text-xs text-muted-foreground">{summaryQuery.error.message}</p>
+          <p className="text-sm font-semibold text-destructive">
+            Project summary could not be loaded
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {userFacingErrorMessage(summaryQuery.error, "Project summary could not be loaded.")}
+          </p>
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Total hours"
           value={totals.total.toFixed(1)}

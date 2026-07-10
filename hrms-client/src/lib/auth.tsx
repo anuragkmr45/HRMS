@@ -32,6 +32,9 @@ export interface PendingSignup {
   createdAt: number;
   expiresAt: number;
   bootstrapToken?: string | null;
+  emailDeliveryMode?: "send" | "log" | "disabled";
+  emailDeliveryStatus?: string | null;
+  emailDeliveryNotice?: string | null;
 }
 
 type AuthNextStep = "verify_email" | "set_password" | "login" | "company_bootstrap";
@@ -49,6 +52,8 @@ interface CompanySetupInput {
   locale?: string;
   fullName?: string;
   landingPage?: string;
+  departments?: string[];
+  designations?: string[];
   companyLogoFile?: File | null;
 }
 
@@ -106,6 +111,13 @@ const SETUP_KEY = "hawkaii_company_setup";
 const BOOTSTRAP_TOKEN_KEY = "hawkaii_company_bootstrap_token";
 
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 24h
+
+interface BootstrapTokenRecord {
+  token: string;
+  userId?: string | null;
+  companyId?: string | null;
+  expiresAt: number;
+}
 
 // helpers (browser-safe)
 const ls = {
@@ -182,8 +194,33 @@ function shouldUseLocalAuthState(): boolean {
   return !isApiEnabled() || isMockFallbackEnabled();
 }
 
-function currentBootstrapToken(): string | null {
-  return ss.get(BOOTSTRAP_TOKEN_KEY);
+function clearBootstrapToken() {
+  ss.del(BOOTSTRAP_TOKEN_KEY);
+  ls.del(BOOTSTRAP_TOKEN_KEY);
+}
+
+function storeBootstrapToken(token: string, userId?: string | null, companyId?: string | null) {
+  ss.set(BOOTSTRAP_TOKEN_KEY, token);
+  ls.set(BOOTSTRAP_TOKEN_KEY, {
+    token,
+    userId,
+    companyId,
+    expiresAt: Date.now() + TOKEN_TTL_MS,
+  } satisfies BootstrapTokenRecord);
+}
+
+function currentBootstrapToken(userId?: string | null): string | null {
+  const sessionToken = ss.get(BOOTSTRAP_TOKEN_KEY);
+  if (sessionToken) return sessionToken;
+
+  const record = ls.get<BootstrapTokenRecord | null>(BOOTSTRAP_TOKEN_KEY, null);
+  if (!record?.token) return null;
+  if (Date.now() > record.expiresAt) {
+    clearBootstrapToken();
+    return null;
+  }
+  if (userId && record.userId && record.userId !== userId) return null;
+  return record.token;
 }
 
 function devOnlyToken(
@@ -192,6 +229,33 @@ function devOnlyToken(
 ): string | null {
   const value = response.dev_only?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function captureCompanyBootstrapState(
+  response: {
+    setup_required?: boolean;
+    next_step?: unknown;
+    company_id?: unknown;
+    dev_only?: Record<string, unknown>;
+  },
+  userId?: string | null,
+): boolean {
+  const setupRequired =
+    response.setup_required === true || response.next_step === "company_bootstrap";
+  const bootstrapToken = devOnlyToken(response, "company_bootstrap_token");
+  if (setupRequired && bootstrapToken) {
+    storeBootstrapToken(
+      bootstrapToken,
+      userId,
+      typeof response.company_id === "string" ? response.company_id : null,
+    );
+  }
+  return setupRequired;
+}
+
+function isDevelopmentExperience(): boolean {
+  const appEnv = String(import.meta.env.VITE_APP_ENV ?? import.meta.env.MODE ?? "").toLowerCase();
+  return import.meta.env.DEV || ["local", "development", "dev"].includes(appEnv);
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -339,6 +403,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (!apiSessionQuery.data || sessionBlocked) return;
+    const sessionUserId = String(
+      apiSessionQuery.data.user.id ?? apiSessionQuery.data.user.user_id ?? "",
+    );
+    const setupRequired = captureCompanyBootstrapState(apiSessionQuery.data, sessionUserId);
+    setSetupDone(!setupRequired && !currentBootstrapToken(sessionUserId));
     applyApiSession(apiSessionQuery.data);
   }, [apiSessionQuery.data, applyApiSession, sessionBlocked]);
 
@@ -385,10 +454,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         queryClient.clear();
         const response = await authApi.login({ email, password: password ?? "" });
         setApiAccessToken(response.access_token);
+        const loginSetupRequired = captureCompanyBootstrapState(
+          response,
+          typeof response.user.id === "string" ? response.user.id : null,
+        );
+        if (loginSetupRequired) setSetupDone(false);
         try {
           const session = await authApi.getSession();
+          const sessionUserId = String(session.user.id ?? session.user.user_id ?? "");
+          const sessionSetupRequired = captureCompanyBootstrapState(session, sessionUserId);
+          setSetupDone(
+            !loginSetupRequired && !sessionSetupRequired && !currentBootstrapToken(sessionUserId),
+          );
           applyApiSession(session);
         } catch {
+          const responseUserId = typeof response.user.id === "string" ? response.user.id : null;
+          setSetupDone(!loginSetupRequired && !currentBootstrapToken(responseUserId));
           applyApiUser(response.user);
         }
         return { ok: true };
@@ -404,7 +485,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isMockFallbackEnabled()) return loginFromMock(email, password);
     return {
       ok: false,
-      error: "Backend API is disabled and mock sign-in fallback is not enabled.",
+      error: "Sign in is not available in this environment. Please contact your administrator.",
     };
   };
 
@@ -578,6 +659,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           passwordSet: false,
           createdAt: Date.now(),
           expiresAt: Date.now() + TOKEN_TTL_MS,
+          emailDeliveryMode: response.email_delivery_mode,
+          emailDeliveryStatus: response.email_delivery_status,
+          emailDeliveryNotice: response.email_delivery_notice,
         };
       } catch (error) {
         if (isMockFallbackEnabled() && shouldUseMockFallback(error)) return signupFromLocal(input);
@@ -588,7 +672,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     throw new ApiError({
       status: 503,
       code: "api_disabled",
-      message: "Backend API is disabled and mock signup fallback is not enabled.",
+      message:
+        "Account setup is not available in this environment. Please contact your administrator.",
     });
   };
 
@@ -611,6 +696,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           passwordSet: false,
           createdAt: Date.now(),
           expiresAt: Date.now() + TOKEN_TTL_MS,
+          emailDeliveryMode: response.email_delivery_mode,
+          emailDeliveryStatus: response.email_delivery_status,
+          emailDeliveryNotice: response.email_delivery_notice,
         };
       } catch (error) {
         if (isMockFallbackEnabled() && shouldUseMockFallback(error)) {
@@ -630,7 +718,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const bootstrapToken = devOnlyToken(response, "company_bootstrap_token");
         const passwordSetupToken = devOnlyToken(response, "password_setup_token");
         if (bootstrapToken) {
-          ss.set(BOOTSTRAP_TOKEN_KEY, bootstrapToken);
+          storeBootstrapToken(bootstrapToken, response.user_id, response.company_id ?? null);
           setSetupDone(false);
         }
         return {
@@ -678,7 +766,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     if (isMockFallbackEnabled()) return setPasswordForTokenFromLocal(token, password);
-    return { ok: false, error: "Backend API is disabled and mock fallback is not enabled." };
+    return {
+      ok: false,
+      error: "This action is not available in this environment. Please contact your administrator.",
+    };
   };
 
   // -------- Password reset --------
@@ -714,12 +805,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     if (isMockFallbackEnabled()) return resetPasswordWithTokenFromLocal(token, password);
-    return { ok: false, error: "Backend API is disabled and mock fallback is not enabled." };
+    return {
+      ok: false,
+      error: "This action is not available in this environment. Please contact your administrator.",
+    };
   };
 
   const completeCompanySetup: AuthState["completeCompanySetup"] = async (input) => {
     if (isApiEnabled()) {
-      const bootstrapToken = currentBootstrapToken();
+      const bootstrapToken = currentBootstrapToken(user?.id);
       if (!bootstrapToken) {
         return {
           ok: false,
@@ -740,16 +834,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             timezone: input?.timezone,
             locale: input?.locale ?? "en-IN",
           },
+          departments: input?.departments,
+          designations: input?.designations,
           first_admin_profile: {
             full_name: input?.fullName,
             landing_page: input?.landingPage ?? "/dashboard",
           },
         });
-        ss.del(BOOTSTRAP_TOKEN_KEY);
+        clearBootstrapToken();
         queryClient.clear();
         const session = await authApi.getSession();
-        applyApiSession(session);
-        setSetupDone(true);
+        const applied = applyApiSession(session);
+        const setupRequired = captureCompanyBootstrapState(session, applied.user.id);
+        setSetupDone(!setupRequired);
         return { ok: true };
       } catch (error) {
         if (isMockFallbackEnabled() && shouldUseMockFallback(error)) {

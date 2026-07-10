@@ -287,7 +287,7 @@ function AdminSettingsIndex() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
         {visible.map((c) => (
           <Link key={c.title} to={c.to} className="group">
             <Card className="h-full rounded-2xl border-border/60 p-4 transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">

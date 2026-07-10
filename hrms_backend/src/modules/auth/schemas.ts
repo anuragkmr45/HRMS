@@ -81,6 +81,8 @@ export const companyBootstrapSchema = z.object({
     locale: z.string().min(2).max(16).optional(),
     fiscal_year_start_month: z.number().int().min(1).max(12).optional()
   }).default({}),
+  departments: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+  designations: z.array(z.string().trim().min(1).max(120)).max(150).optional(),
   first_admin_profile: z.object({
     full_name: z.string().min(2).max(160).optional(),
     landing_page: z.string().min(1).max(120).optional()

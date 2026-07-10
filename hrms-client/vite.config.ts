@@ -1,7 +1,7 @@
-import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import { nitro } from "nitro/vite";
 import { defineConfig, loadEnv } from "vite";
 import tsConfigPaths from "vite-tsconfig-paths";
 
@@ -36,7 +36,6 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       tailwindcss(),
       tsConfigPaths({ projects: ["./tsconfig.json"] }),
-      command === "build" && cloudflare({ viteEnvironment: { name: "ssr" } }),
       tanstackStart({
         server: { entry: "server" },
         importProtection: {
@@ -47,6 +46,7 @@ export default defineConfig(({ command, mode }) => {
           },
         },
       }),
+      command === "build" && nitro(),
       viteReact(),
     ],
   };

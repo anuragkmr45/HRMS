@@ -109,6 +109,42 @@ describe("core hierarchy API", () => {
     expect(forbiddenDetail.statusCode).toBe(403);
   });
 
+  it("prevents people managers from deactivating or changing their own login access", async () => {
+    const admin = await loginAs(app, "ADM");
+    const expectedVersion = 1;
+
+    const selfDeactivate = await app.inject({
+      method: "POST",
+      url: `/api/v1/core/users/${admin.user.id}/deactivate`,
+      headers: authHeader(admin.token),
+      payload: { expected_version: expectedVersion, status: "inactive" }
+    });
+    expect(selfDeactivate.statusCode).toBe(403);
+
+    const selfDisableLogin = await app.inject({
+      method: "POST",
+      url: `/api/v1/core/users/${admin.user.id}/login/disable`,
+      headers: authHeader(admin.token),
+      payload: { expected_version: expectedVersion }
+    });
+    expect(selfDisableLogin.statusCode).toBe(403);
+
+    const selfEnableLogin = await app.inject({
+      method: "POST",
+      url: `/api/v1/core/users/${admin.user.id}/login/enable`,
+      headers: authHeader(admin.token),
+      payload: { expected_version: expectedVersion, invite_email: true }
+    });
+    expect(selfEnableLogin.statusCode).toBe(403);
+
+    const session = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: authHeader(admin.token)
+    });
+    expect(session.statusCode).toBe(200);
+  });
+
   it("supports admin employee CRUD, login setup, role replacement, and lifecycle actions", async () => {
     const admin = await loginAs(app, "ADM");
     const manager = await loginAs(app, "D1");

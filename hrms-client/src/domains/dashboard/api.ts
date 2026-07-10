@@ -11,6 +11,8 @@ export interface DashboardMetric {
     | "documents"
     | "assets"
     | "timesheets"
+    | "attendance"
+    | "leave_wfh"
     | "notifications"
     | "outbox"
     | "system";
@@ -43,6 +45,8 @@ export interface DashboardSummary {
     expense_finance_pending: number;
     expense_total_pending: number;
     timesheet_pending: number;
+    leave_pending: number;
+    wfh_pending: number;
     document_verification_pending: number;
   };
   operations: {

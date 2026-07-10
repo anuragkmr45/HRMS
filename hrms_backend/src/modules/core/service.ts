@@ -265,15 +265,16 @@ export class CoreService {
   }
 
   orgSelectors(actor: AuthUser): OrgSelectorsResult {
+    const actorCompanyId = this.companyIdForUser(actor.id);
     const managerCandidates = this.visibleUsersFor(actor)
       .filter((user) => user.employment_status === EmploymentStatuses.Active)
       .map((user) => toUserReference(user));
     return {
       departments: this.repository.departments()
-        .filter((department) => department.status === "active")
+        .filter((department) => department.status === "active" && this.isMasterDataInCompany(department.company_id, actorCompanyId))
         .map(toDepartmentReference),
       designations: this.repository.designations()
-        .filter((designation) => designation.status === "active")
+        .filter((designation) => designation.status === "active" && this.isMasterDataInCompany(designation.company_id, actorCompanyId))
         .map(toDesignationReference),
       managers: managerCandidates,
       roles: allowedRoleKeys.map((role) => ({ key: role, label: role }))
@@ -290,9 +291,10 @@ export class CoreService {
     if (this.store.users.some((user) => normalizeEmail(user.email) === email && !user.deleted_at)) {
       throw conflict("Email already exists.", { email });
     }
-    this.requireDepartment(input.department_id);
-    this.requireDesignation(input.designation_id);
-    const manager = input.manager_user_id ? this.requireActiveManager(input.manager_user_id) : null;
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    this.requireDepartment(actorCompanyId, input.department_id);
+    this.requireDesignation(actorCompanyId, input.designation_id);
+    const manager = input.manager_user_id ? this.requireActiveManager(actor, input.manager_user_id) : null;
     const roles = this.normalizeRoles(input.roles ?? [Roles.Employee]);
     requireCanAssignRoles(actor, roles);
 
@@ -315,6 +317,7 @@ export class CoreService {
       version: 1
     };
     this.store.users.push(user);
+    this.assignUserToActorCompany(actor, user, now);
     appendCoreOutboxEvent(this.store, {
       aggregateType: "core.user",
       aggregateId: user.id,
@@ -328,8 +331,13 @@ export class CoreService {
 
   updateUser(actor: AuthUser, id: UUID, input: UserUpdateInput): CoreUserMutationResult {
     requirePeopleManager(actor);
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
     requireExpectedVersion(user, input.expected_version);
+    if (input.employment_status !== undefined && input.employment_status !== EmploymentStatuses.Active) {
+      this.requireOrgAdminRecoveryPath(user, {
+        employmentStatus: input.employment_status
+      });
+    }
 
     if (input.email !== undefined) {
       const email = normalizeEmail(input.email);
@@ -343,15 +351,15 @@ export class CoreService {
       user.full_name = normalizeText(input.full_name, "Full name");
     }
     if (input.department_id !== undefined) {
-      this.requireDepartment(input.department_id);
+      this.requireDepartment(this.companyIdForUser(actor.id), input.department_id);
       user.department_id = input.department_id;
     }
     if (input.designation_id !== undefined) {
-      this.requireDesignation(input.designation_id);
+      this.requireDesignation(this.companyIdForUser(actor.id), input.designation_id);
       user.designation_id = input.designation_id;
     }
     if (input.manager_user_id !== undefined) {
-      this.updateManager(user, input.manager_user_id);
+      this.updateManager(actor, user, input.manager_user_id);
     }
     if (input.employment_status !== undefined) {
       user.employment_status = input.employment_status;
@@ -490,7 +498,7 @@ export class CoreService {
 
   activateUser(actor: AuthUser, id: UUID, input: UserStatusInput): CoreUserMutationResult {
     requirePeopleManager(actor);
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
     requireExpectedVersion(user, input.expected_version);
     if (user.employment_status === EmploymentStatuses.Active) {
       throw conflict("Employee is already active.", { id });
@@ -510,12 +518,17 @@ export class CoreService {
 
   deactivateUser(actor: AuthUser, id: UUID, input: UserStatusInput): CoreUserMutationResult {
     requirePeopleManager(actor);
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
+    requireNotSelfLifecycleMutation(actor, user);
     requireExpectedVersion(user, input.expected_version);
     const nextStatus = input.status ?? EmploymentStatuses.Inactive;
     if (user.employment_status === nextStatus) {
       throw conflict("Employee already has the requested inactive status.", { id, status: nextStatus });
     }
+    this.requireOrgAdminRecoveryPath(user, {
+      employmentStatus: nextStatus,
+      loginUsable: false
+    });
     user.employment_status = nextStatus;
     user.terminated_on = nextStatus === EmploymentStatuses.Terminated ? input.effective_date ?? nowIso().slice(0, 10) : null;
     const now = nowIso();
@@ -543,12 +556,16 @@ export class CoreService {
 
   async disableLogin(actor: AuthUser, id: UUID, input: UserLoginInput): Promise<CoreUserMutationResult> {
     requirePeopleManager(actor);
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
+    requireNotSelfLifecycleMutation(actor, user);
     requireExpectedVersion(user, input.expected_version);
     const activeCredentials = this.store.userCredentials.filter((credential) => credential.user_id === user.id && credential.status === "active" && !credential.deleted_at);
     if (activeCredentials.length === 0 && this.loginState(user.id) !== "setup_pending") {
       throw conflict("Login is already disabled.", { id });
     }
+    this.requireOrgAdminRecoveryPath(user, {
+      loginUsable: false
+    });
     const now = nowIso();
     for (const credential of activeCredentials) {
       credential.status = "revoked";
@@ -569,7 +586,8 @@ export class CoreService {
 
   enableLogin(actor: AuthUser, id: UUID, input: UserLoginInput): CoreUserMutationResult {
     requirePeopleManager(actor);
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
+    requireNotSelfLifecycleMutation(actor, user);
     requireExpectedVersion(user, input.expected_version);
     if (this.loginState(user.id) === "enabled") {
       throw conflict("Login is already enabled.", { id });
@@ -587,13 +605,16 @@ export class CoreService {
   }
 
   replaceRoles(actor: AuthUser, id: UUID, input: UserRolesInput): CoreUserMutationResult {
-    const user = this.requireUserForWrite(id);
+    const user = this.requireUserForWrite(actor, id);
     requireExpectedVersion(user, input.expected_version);
     const roles = this.normalizeRoles(input.roles);
     requireCanAssignRoles(actor, roles, user);
     if (actor.id === user.id && user.roles.includes(Roles.Admin) && !roles.includes(Roles.Admin)) {
       throw forbidden("Admin users cannot remove their own admin role.");
     }
+    this.requireOrgAdminRecoveryPath(user, {
+      roles
+    });
     const previousRoles = [...user.roles];
     user.roles = roles;
     user.version += 1;
@@ -827,7 +848,7 @@ export class CoreService {
   }
 
   private visibleUsersFor(actor: AuthUser): CoreUser[] {
-    const users = this.repository.listUsers();
+    const users = this.repository.listUsers().filter((user) => this.isInActorCompany(actor, user));
     if (hasPrivilegedProfileRead(actor)) {
       return users;
     }
@@ -836,6 +857,52 @@ export class CoreService {
         user.id === actor.id ||
         (user.employment_status === "active" && user.hierarchy_path.startsWith(`${actor.hierarchy_path}.`))
     );
+  }
+
+  private companyIdForUser(userId: UUID): UUID | null {
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id ?? null;
+  }
+
+  private isInActorCompany(actor: AuthUser, user: CoreUser): boolean {
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    if (!actorCompanyId) {
+      return true;
+    }
+    return user.id === actor.id || this.companyIdForUser(user.id) === actorCompanyId;
+  }
+
+  private isMasterDataInCompany(recordCompanyId: UUID | null, actorCompanyId: UUID | null): boolean {
+    return actorCompanyId ? recordCompanyId === actorCompanyId : recordCompanyId === null;
+  }
+
+  private assignUserToActorCompany(actor: AuthUser, user: CoreUser, now: string): void {
+    const actorPreference = this.store.userSessionPreferences.find((preference) => preference.user_id === actor.id);
+    if (!actorPreference?.company_id) {
+      return;
+    }
+    const existing = this.store.userSessionPreferences.find((preference) => preference.user_id === user.id);
+    const activeRole = user.roles[0] ?? Roles.Employee;
+    if (existing) {
+      existing.company_id = actorPreference.company_id;
+      existing.active_role = activeRole;
+      existing.locale = actorPreference.locale;
+      existing.timezone = user.timezone ?? actorPreference.timezone;
+      existing.updated_at = now;
+      existing.version += 1;
+      return;
+    }
+    this.store.userSessionPreferences.push({
+      id: randomUUID(),
+      user_id: user.id,
+      active_role: activeRole,
+      company_id: actorPreference.company_id,
+      landing_page: "/dashboard",
+      locale: actorPreference.locale,
+      timezone: user.timezone ?? actorPreference.timezone,
+      created_at: now,
+      updated_at: now,
+      version: 1
+    });
   }
 
   private matchesDirectoryFilters(user: CoreUser, params: UserDirectoryQuery): boolean {
@@ -987,7 +1054,61 @@ export class CoreService {
     return "disabled";
   }
 
+  private requireOrgAdminRecoveryPath(
+    targetUser: CoreUser,
+    next: {
+      roles?: readonly RoleKey[];
+      employmentStatus?: CoreUser["employment_status"];
+      loginUsable?: boolean;
+    }
+  ): void {
+    if (!targetUser.roles.includes(Roles.Admin)) {
+      return;
+    }
+    if (this.orgRecoveryAdminCountAfter(targetUser, next) > 0) {
+      return;
+    }
+    throw conflict("At least one active Admin with login access must remain in this organization.");
+  }
+
+  private orgRecoveryAdminCountAfter(
+    targetUser: CoreUser,
+    next: {
+      roles?: readonly RoleKey[];
+      employmentStatus?: CoreUser["employment_status"];
+      loginUsable?: boolean;
+    }
+  ): number {
+    const targetCompanyId = this.companyIdForUser(targetUser.id);
+    return this.store.users.filter((candidate) => {
+      if (candidate.deleted_at) {
+        return false;
+      }
+      if (this.companyIdForUser(candidate.id) !== targetCompanyId) {
+        return false;
+      }
+      const roles = candidate.id === targetUser.id ? next.roles ?? candidate.roles : candidate.roles;
+      if (!roles.includes(Roles.Admin)) {
+        return false;
+      }
+      const employmentStatus = candidate.id === targetUser.id ? next.employmentStatus ?? candidate.employment_status : candidate.employment_status;
+      if (employmentStatus !== EmploymentStatuses.Active) {
+        return false;
+      }
+      const loginUsable = candidate.id === targetUser.id ? next.loginUsable ?? this.hasLoginRecoveryAccess(candidate.id) : this.hasLoginRecoveryAccess(candidate.id);
+      return loginUsable;
+    }).length;
+  }
+
+  private hasLoginRecoveryAccess(userId: UUID): boolean {
+    const state = this.loginState(userId);
+    return state === "enabled" || state === "setup_pending";
+  }
+
   private canReadSubtree(actor: AuthUser, root: CoreUser): boolean {
+    if (!this.isInActorCompany(actor, root)) {
+      return false;
+    }
     if (hasPrivilegedProfileRead(actor)) {
       return true;
     }
@@ -995,6 +1116,9 @@ export class CoreService {
   }
 
   private canReadUser(actor: AuthUser, user: CoreUser): boolean {
+    if (!this.isInActorCompany(actor, user)) {
+      return false;
+    }
     if (hasPrivilegedProfileRead(actor)) {
       return true;
     }
@@ -1012,41 +1136,57 @@ export class CoreService {
     return user;
   }
 
-  private requireUserForWrite(id: UUID): CoreUser {
+  private requireUserForWrite(actor: AuthUser, id: UUID): CoreUser {
     const user = this.repository.findUser(id);
     if (!user) {
       throw notFound("User not found", { id });
     }
+    if (!this.isInActorCompany(actor, user)) {
+      throw forbidden("You do not have access to this employee profile");
+    }
     return user;
   }
 
-  private requireDepartment(id: UUID): Department {
-    const department = this.repository.departments().find((candidate) => candidate.id === id && candidate.status === "active");
+  private requireDepartment(companyId: UUID | null, id: UUID): Department {
+    const department = this.repository.departments().find(
+      (candidate) =>
+        candidate.id === id &&
+        candidate.status === "active" &&
+        this.isMasterDataInCompany(candidate.company_id, companyId)
+    );
     if (!department) {
       throw notFound("Active department not found", { id });
     }
     return department;
   }
 
-  private requireDesignation(id: UUID): Designation {
-    const designation = this.repository.designations().find((candidate) => candidate.id === id && candidate.status === "active");
+  private requireDesignation(companyId: UUID | null, id: UUID): Designation {
+    const designation = this.repository.designations().find(
+      (candidate) =>
+        candidate.id === id &&
+        candidate.status === "active" &&
+        this.isMasterDataInCompany(candidate.company_id, companyId)
+    );
     if (!designation) {
       throw notFound("Active designation not found", { id });
     }
     return designation;
   }
 
-  private requireActiveManager(id: UUID): CoreUser {
+  private requireActiveManager(actor: AuthUser, id: UUID): CoreUser {
     const manager = this.repository.findActiveUser(id);
     if (!manager) {
       throw notFound("Active manager not found", { id });
     }
+    if (!this.isInActorCompany(actor, manager)) {
+      throw forbidden("Manager must belong to the active company.");
+    }
     return manager;
   }
 
-  private updateManager(user: CoreUser, managerUserId: UUID | null): void {
+  private updateManager(actor: AuthUser, user: CoreUser, managerUserId: UUID | null): void {
     const oldPrefix = `${user.hierarchy_path}.`;
-    const manager = managerUserId ? this.requireActiveManager(managerUserId) : null;
+    const manager = managerUserId ? this.requireActiveManager(actor, managerUserId) : null;
     if (manager?.id === user.id || (manager && manager.hierarchy_path.startsWith(oldPrefix))) {
       throw badRequest("Manager cannot be the employee or one of their descendants.");
     }
@@ -1301,6 +1441,12 @@ function hasPrivilegedProfileRead(actor: AuthUser): boolean {
 function requirePeopleManager(actor: AuthUser): void {
   if (!actor.roles.some((role) => role === Roles.Admin || role === Roles.HRManager)) {
     throw forbidden("Only Admin and HR Manager users can manage employee profiles.");
+  }
+}
+
+function requireNotSelfLifecycleMutation(actor: AuthUser, user: CoreUser): void {
+  if (actor.id === user.id) {
+    throw forbidden("Use another Admin or HR Manager account to change your own employment or login access.");
   }
 }
 

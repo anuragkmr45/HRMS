@@ -1,10 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createJwt, hashPasswordSync, verifyPasswordSync } from "#auth";
-import { EmploymentStatuses, Permissions, Roles, type AdminSecuritySettingsRecord, type AuthUser, type CoreUser, type RoleKey, type UUID } from "#shared";
+import { EmploymentStatuses, Permissions, Roles, type AdminPolicyConfigRecord, type AdminSecuritySettingsRecord, type AuthUser, type CoreUser, type Department, type Designation, type RoleKey, type UUID } from "#shared";
 import { badRequest, conflict, forbidden, notFound, unauthorized } from "../../platform/errors.js";
 import type { AuthTokenRecord, CompanyProfileRecord, MemoryDataStore, UserCredentialRecord, UserSessionPreferenceRecord } from "../../platform/data-store.js";
-import { nowIso, seedIds } from "../../platform/data-store.js";
+import { buildDefaultAdminPolicies, nowIso, seedIds } from "../../platform/data-store.js";
 import type { EmailDeliveryService } from "../../platform/email/email-delivery-service.js";
+import type { EmailDeliveryMode, EmailDeliveryStatus } from "../../platform/email/types.js";
 import { DocumentService } from "../documents/service.js";
 import { AuthRepository } from "./repository.js";
 import type {
@@ -60,6 +61,10 @@ export interface SessionContext {
       use_include_for_nested_data: boolean;
     };
   };
+  setup_required?: boolean;
+  next_step?: "company_bootstrap";
+  company_id?: UUID | null;
+  dev_only?: Record<string, unknown>;
 }
 
 export interface CompanyLogoUploadInput {
@@ -92,6 +97,8 @@ interface VerificationEmailSendInput {
 interface VerificationEmailSendResult {
   generated: GeneratedToken | null;
   retryAfterSeconds: number;
+  deliveryMode: EmailDeliveryMode;
+  deliveryStatus: EmailDeliveryStatus | "not_configured" | null;
 }
 
 export class AuthService {
@@ -105,18 +112,39 @@ export class AuthService {
     this.repository = new AuthRepository(store);
   }
 
-  async login(input: LoginInput): Promise<{ user: AuthUser; token: string; expires_at: string; jti: string }> {
+  async login(input: LoginInput): Promise<{
+    user: AuthUser;
+    token: string;
+    expires_at: string;
+    jti: string;
+    next_step?: "company_bootstrap";
+    company_id?: UUID | null;
+    dev_only?: Record<string, unknown>;
+  }> {
     const user = input.email && input.password
       ? this.authenticatePassword(input.email, input.password)
       : this.authenticateEmployeeCode(input.employee_code ?? "");
     const jwt = createJwt(user, this.jwtSecret, this.sessionTtlSeconds());
+    const bootstrap = this.createResumeBootstrapToken(user);
     await this.store.sessionStore.create({
       jti: jwt.jti,
       user_id: user.id,
       expires_at: jwt.expiresAt,
       revoked_at: null
     });
-    return { user, token: jwt.token, expires_at: jwt.expiresAt, jti: jwt.jti };
+    return {
+      user,
+      token: jwt.token,
+      expires_at: jwt.expiresAt,
+      jti: jwt.jti,
+      ...(bootstrap
+        ? {
+            next_step: "company_bootstrap" as const,
+            company_id: bootstrap.record.company_id,
+            ...devOnly({ company_bootstrap_token: bootstrap.raw })
+          }
+        : {})
+    };
   }
 
   async signup(input: SignupInput, context: AuthRequestContext = {}) {
@@ -161,7 +189,9 @@ export class AuthService {
       }
       return this.signupVerificationResponse(existingUser, email, {
         generated: null,
-        retryAfterSeconds: this.resendCooldownSeconds()
+        retryAfterSeconds: this.resendCooldownSeconds(),
+        deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
+        deliveryStatus: null
       });
     }
 
@@ -253,6 +283,8 @@ export class AuthService {
     const user = this.repository.findUserByEmail(email);
     let generated: GeneratedToken | null = null;
     let retryAfterSeconds = this.resendCooldownSeconds();
+    let deliveryMode: EmailDeliveryMode = this.emailDelivery?.deliveryMode() ?? "disabled";
+    let deliveryStatus: VerificationEmailSendResult["deliveryStatus"] = null;
     if (user && isPendingEmailVerification(user)) {
       const company = input.company_slug ? this.repository.findCompanyBySlug(input.company_slug) ?? null : this.companyForVerification(user, email);
       const result = await this.sendVerificationEmail({
@@ -265,11 +297,16 @@ export class AuthService {
       });
       generated = result.generated;
       retryAfterSeconds = result.retryAfterSeconds;
+      deliveryMode = result.deliveryMode;
+      deliveryStatus = result.deliveryStatus;
     }
     return {
       accepted: true,
       masked_email: maskEmail(email),
       retry_after_seconds: retryAfterSeconds,
+      email_delivery_mode: deliveryMode,
+      email_delivery_status: deliveryStatus,
+      email_delivery_notice: emailDeliveryNotice(deliveryMode, deliveryStatus),
       ...devOnly({ email_verification_token: generated?.raw ?? null })
     };
   }
@@ -364,6 +401,8 @@ export class AuthService {
     company.bootstrap_completed_at = now;
     company.updated_at = now;
     company.version += 1;
+    this.applyOnboardingMasterData(input, company.id, now);
+    this.assignFirstAdminMasterData(user, company.id);
 
     if (!user.roles.includes(Roles.Admin)) {
       user.roles = uniqueRoles([...user.roles, Roles.Admin]);
@@ -449,11 +488,17 @@ export class AuthService {
     if (!user) {
       throw unauthorized("User no longer exists");
     }
+    const currentPreference = this.repository.sessionPreferenceFor(user.id);
+    const nextCompanyId = input.company_id === undefined ? currentPreference?.company_id ?? null : input.company_id;
+    if (nextCompanyId !== (currentPreference?.company_id ?? null)) {
+      this.requireOrgAdminRecoveryPathAfterCompanyChange(user, currentPreference?.company_id ?? null, nextCompanyId);
+    }
     this.savePreference(user, input);
     return this.sessionContext(user);
   }
 
   sessionContext(user: AuthUser): SessionContext {
+    const bootstrap = this.createResumeBootstrapToken(user);
     const availableRoles = user.roles.map((role) => ({
       key: role,
       label: role,
@@ -501,7 +546,15 @@ export class AuthService {
           max_page_size: 100,
           use_include_for_nested_data: true
         }
-      }
+      },
+      ...(bootstrap
+        ? {
+            setup_required: true,
+            next_step: "company_bootstrap" as const,
+            company_id: bootstrap.record.company_id,
+            ...devOnly({ company_bootstrap_token: bootstrap.raw })
+          }
+        : {})
     };
   }
 
@@ -591,6 +644,27 @@ export class AuthService {
     return company;
   }
 
+  private applyOnboardingMasterData(input: CompanyBootstrapInput, companyId: UUID, now: string): void {
+    upsertDepartments(this.store.departments, companyId, input.departments ?? []);
+    upsertDesignations(this.store.designations, companyId, input.designations ?? []);
+    upsertAdminPolicies(this.store.adminPolicies, companyId, now);
+  }
+
+  private assignFirstAdminMasterData(user: CoreUser, companyId: UUID): void {
+    const department = this.store.departments.find(
+      (candidate) => candidate.company_id === companyId && candidate.status === "active" && !candidate.deleted_at
+    );
+    const designation = this.store.designations.find(
+      (candidate) => candidate.company_id === companyId && candidate.status === "active" && !candidate.deleted_at
+    );
+    if (department) {
+      user.department_id = department.id;
+    }
+    if (designation) {
+      user.designation_id = designation.id;
+    }
+  }
+
   private createToken(input: {
     type: AuthTokenRecord["token_type"];
     userId: UUID | null;
@@ -622,6 +696,34 @@ export class AuthService {
     };
     this.store.authTokens.push(record);
     return { raw, record };
+  }
+
+  private createResumeBootstrapToken(user: AuthUser): GeneratedToken | null {
+    const company = this.pendingBootstrapCompanyForUser(user);
+    if (!company) {
+      return null;
+    }
+    return this.createToken({
+      type: "company_bootstrap",
+      userId: user.id,
+      email: user.email,
+      companyId: company.id,
+      ttlSeconds: 24 * 60 * 60,
+      metadata: { reason: "resume_company_bootstrap" }
+    });
+  }
+
+  private pendingBootstrapCompanyForUser(user: AuthUser): CompanyProfileRecord | null {
+    const companyIds = this.store.authTokens
+      .filter((token) => token.user_id === user.id && token.company_id)
+      .map((token) => token.company_id as UUID);
+    for (const companyId of [...new Set(companyIds)].reverse()) {
+      const company = this.repository.findCompanyById(companyId);
+      if (company && !company.bootstrap_completed_at && company.status !== "active") {
+        return company;
+      }
+    }
+    return null;
   }
 
   private requireActiveToken(rawToken: string, type: AuthTokenRecord["token_type"]): AuthTokenRecord {
@@ -692,7 +794,12 @@ export class AuthService {
     if (input.enforceResendLimits) {
       const rateLimit = this.checkVerificationResendLimit(input.email);
       if (!rateLimit.allowed) {
-        return { generated: null, retryAfterSeconds: rateLimit.retryAfterSeconds };
+        return {
+          generated: null,
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+          deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
+          deliveryStatus: null
+        };
       }
     }
     const metadata = input.metadata();
@@ -706,13 +813,18 @@ export class AuthService {
       metadata,
       context: input.context
     });
-    await this.emailDelivery?.queueVerificationEmail({
+    const delivery = await this.emailDelivery?.queueVerificationEmail({
       user: input.user,
       token: generated.record,
       rawToken: generated.raw,
       companyName: input.company?.company_name ?? defaultCompany(input.user).company_name
     });
-    return { generated, retryAfterSeconds: this.resendCooldownSeconds() };
+    return {
+      generated,
+      retryAfterSeconds: this.resendCooldownSeconds(),
+      deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
+      deliveryStatus: delivery?.status ?? "not_configured"
+    };
   }
 
   private signupVerificationResponse(user: CoreUser, email: string, verification: VerificationEmailSendResult) {
@@ -722,6 +834,9 @@ export class AuthService {
       masked_email: maskEmail(email),
       next_step: "verify_email",
       retry_after_seconds: verification.retryAfterSeconds,
+      email_delivery_mode: verification.deliveryMode,
+      email_delivery_status: verification.deliveryStatus,
+      email_delivery_notice: emailDeliveryNotice(verification.deliveryMode, verification.deliveryStatus),
       ...devOnly({ email_verification_token: verification.generated?.raw ?? null })
     };
   }
@@ -784,6 +899,36 @@ export class AuthService {
       version: (current?.version ?? 0) + 1
     };
     return this.repository.upsertSessionPreference(preference);
+  }
+
+  private requireOrgAdminRecoveryPathAfterCompanyChange(user: CoreUser, currentCompanyId: UUID | null, nextCompanyId: UUID | null): void {
+    if (!user.roles.includes(Roles.Admin)) {
+      return;
+    }
+    if (this.companyRecoveryAdminCountAfterPreferenceChange(user.id, currentCompanyId, nextCompanyId) > 0) {
+      return;
+    }
+    throw conflict("At least one active Admin with login access must remain in this organization.");
+  }
+
+  private companyRecoveryAdminCountAfterPreferenceChange(userId: UUID, currentCompanyId: UUID | null, nextCompanyId: UUID | null): number {
+    return this.store.users.filter((candidate) => {
+      if (candidate.deleted_at || !candidate.roles.includes(Roles.Admin) || candidate.employment_status !== EmploymentStatuses.Active) {
+        return false;
+      }
+      const candidateCompanyId = candidate.id === userId ? nextCompanyId : this.repository.sessionPreferenceFor(candidate.id)?.company_id ?? null;
+      if (candidateCompanyId !== currentCompanyId) {
+        return false;
+      }
+      return this.hasLoginRecoveryAccess(candidate.id);
+    }).length;
+  }
+
+  private hasLoginRecoveryAccess(userId: UUID): boolean {
+    if (this.repository.findActiveCredential(userId)) {
+      return true;
+    }
+    return this.store.authTokens.some((token) => token.user_id === userId && token.token_type === "password_setup" && token.status === "active" && Date.parse(token.expires_at) > Date.now());
   }
 }
 
@@ -901,7 +1046,132 @@ function nextSignupEmployeeCode(store: MemoryDataStore): string {
 }
 
 function devOnly(value: Record<string, unknown>): Record<string, unknown> {
-  return process.env.NODE_ENV === "production" ? {} : { dev_only: value };
+  const appEnv = process.env.APP_ENV ?? (process.env.NODE_ENV === "production" ? "production" : "local");
+  return ["local", "development"].includes(appEnv) ? { dev_only: value } : {};
+}
+
+function emailDeliveryNotice(mode: EmailDeliveryMode, status: VerificationEmailSendResult["deliveryStatus"]): string | null {
+  if (mode === "disabled" || status === "disabled" || status === "not_configured") {
+    return "Email delivery is disabled for this environment. Ask an administrator to complete verification, or use the development setup shortcut in dev.";
+  }
+  if (mode === "log") {
+    return "Email delivery is in log mode for this environment. Use the development setup shortcut, or ask an administrator to inspect the generated verification link.";
+  }
+  if (status === "failed") {
+    return "The verification email could not be sent. Ask an administrator to check the email delivery configuration.";
+  }
+  return null;
+}
+
+function upsertDepartments(departments: Department[], companyId: UUID, names: readonly string[]): void {
+  for (const name of uniqueMasterNames(names)) {
+    const existing = departments.find((department) => department.company_id === companyId && sameMasterName(department.name, name));
+    if (existing) {
+      if (existing.name !== name || existing.status !== "active" || existing.deleted_at !== null) {
+        existing.name = name;
+        existing.status = "active";
+        existing.deleted_at = null;
+        existing.version += 1;
+      }
+      continue;
+    }
+    departments.push({
+      id: randomUUID(),
+      company_id: companyId,
+      department_code: uniqueMasterCode(
+        name,
+        departments
+          .filter((department) => department.company_id === companyId)
+          .map((department) => department.department_code),
+        "DEPT"
+      ),
+      name,
+      cost_center: null,
+      parent_department_id: null,
+      director_user_id: null,
+      status: "active",
+      deleted_at: null,
+      version: 1
+    });
+  }
+}
+
+function upsertDesignations(designations: Designation[], companyId: UUID, names: readonly string[]): void {
+  for (const [index, name] of uniqueMasterNames(names).entries()) {
+    const existing = designations.find((designation) => designation.company_id === companyId && sameMasterName(designation.title, name));
+    if (existing) {
+      if (existing.title !== name || existing.status !== "active" || existing.deleted_at !== null) {
+        existing.title = name;
+        existing.status = "active";
+        existing.deleted_at = null;
+        existing.version += 1;
+      }
+      continue;
+    }
+    designations.push({
+      id: randomUUID(),
+      company_id: companyId,
+      designation_code: uniqueMasterCode(
+        name,
+        designations
+          .filter((designation) => designation.company_id === companyId)
+          .map((designation) => designation.designation_code),
+        "DESG"
+      ),
+      title: name,
+      level: index + 1,
+      status: "active",
+      deleted_at: null,
+      version: 1
+    });
+  }
+}
+
+function upsertAdminPolicies(policies: AdminPolicyConfigRecord[], companyId: UUID, now: string): void {
+  const existingKeys = new Set(
+    policies
+      .filter((policy) => policy.company_id === companyId && !policy.deleted_at)
+      .map((policy) => policy.policy_key)
+  );
+  for (const policy of buildDefaultAdminPolicies(now, companyId)) {
+    if (!existingKeys.has(policy.policy_key)) {
+      policies.push(policy);
+    }
+  }
+}
+
+function uniqueMasterNames(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const value of values) {
+    const name = value.trim().replace(/\s+/gu, " ");
+    const key = normalizedMasterName(name);
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function sameMasterName(left: string, right: string): boolean {
+  return normalizedMasterName(left) === normalizedMasterName(right);
+}
+
+function normalizedMasterName(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function uniqueMasterCode(name: string, existingCodes: readonly string[], fallback: string): string {
+  const existing = new Set(existingCodes.map((code) => code.toUpperCase()));
+  const base = (name.trim().toUpperCase().replace(/[^A-Z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || fallback).slice(0, 36);
+  let candidate = base;
+  let index = 2;
+  while (existing.has(candidate)) {
+    const suffix = `_${index}`;
+    candidate = `${base.slice(0, Math.max(1, 40 - suffix.length))}${suffix}`;
+    index += 1;
+  }
+  return candidate;
 }
 
 function presentCompany(company: CompanyProfileRecord) {

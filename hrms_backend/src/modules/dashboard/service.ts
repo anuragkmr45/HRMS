@@ -101,7 +101,7 @@ export class DashboardService {
         (ticket) => visibleUserIds.has(ticket.employee_user_id) && ticket.status !== "closed"
       ).length,
       notifications_pending: this.store.notifications.filter((notification) => this.isNotificationVisible(actor, visibleUserIds, notification.target_user_id) && notification.status === "pending").length,
-      outbox_pending: this.canSeeSystemWide(actor) ? this.store.outbox.filter((event) => event.status === "pending" || event.status === "retry").length : 0
+      outbox_pending: this.visibleOutboxEvents(actor, visibleUserIds).filter((event) => event.status === "pending" || event.status === "retry").length
     };
     const workload = {
       work_segments_total: visibleSegments.length,
@@ -136,7 +136,7 @@ export class DashboardService {
         active_employees: activeEmployees,
         inactive_employees: visibleUsers.filter((user) => user.employment_status !== EmploymentStatuses.Active).length,
         new_joiners_30d: visibleUsers.filter((user) => user.joined_on && user.joined_on >= daysAgoDate(30)).length,
-        departments: this.departmentHeadcount(visibleUsers)
+        departments: this.departmentHeadcount(actor, visibleUsers)
       },
       approvals: {
         expense_manager_pending: pendingManagerExpenses,
@@ -185,7 +185,7 @@ export class DashboardService {
   }
 
   private visibleUsers(actor: AuthUser): CoreUser[] {
-    const users = this.store.users.filter((user) => !user.deleted_at);
+    const users = this.store.users.filter((user) => !user.deleted_at && this.isInActorCompany(actor, user));
     if (this.canSeeSystemWide(actor)) {
       return users;
     }
@@ -193,7 +193,17 @@ export class DashboardService {
   }
 
   private visibleTickets(actor: AuthUser, visibleUserIds: Set<UUID>): ExpenseTicket[] {
-    const tickets = this.store.tickets.filter((ticket) => !ticket.deleted_at);
+    const tickets = this.store.tickets
+      .filter((ticket) => !ticket.deleted_at)
+      .filter((ticket) =>
+        !this.hasActorCompanyScope(actor) ||
+        [
+          ticket.requester_user_id,
+          ticket.manager_verifier_id,
+          ticket.manager_backup_user_id,
+          ticket.finance_approver_id
+        ].some((userId) => userId != null && visibleUserIds.has(userId))
+      );
     if (this.canSeeSystemWide(actor) || this.canSeeFinance(actor)) {
       return tickets;
     }
@@ -207,7 +217,14 @@ export class DashboardService {
   }
 
   private visibleTimesheetSubmissions(actor: AuthUser, visibleUserIds: Set<UUID>): TimesheetSubmission[] {
-    const submissions = this.store.timesheetSubmissions.filter((submission) => !submission.deleted_at);
+    const submissions = this.store.timesheetSubmissions
+      .filter((submission) => !submission.deleted_at)
+      .filter((submission) =>
+        !this.hasActorCompanyScope(actor) ||
+        visibleUserIds.has(submission.employee_user_id) ||
+        submission.current_approver_user_id === actor.id ||
+        (submission.current_approver_user_id != null && visibleUserIds.has(submission.current_approver_user_id))
+      );
     if (this.canSeeSystemWide(actor)) {
       return submissions;
     }
@@ -215,7 +232,9 @@ export class DashboardService {
   }
 
   private visibleWorkSegments(actor: AuthUser, visibleUserIds: Set<UUID>): WorkSegment[] {
-    const segments = this.store.workSegments.filter((segment) => !segment.deleted_at);
+    const segments = this.store.workSegments
+      .filter((segment) => !segment.deleted_at)
+      .filter((segment) => !this.hasActorCompanyScope(actor) || visibleUserIds.has(segment.employee_user_id));
     if (this.canSeeSystemWide(actor)) {
       return segments;
     }
@@ -223,7 +242,9 @@ export class DashboardService {
   }
 
   private visibleAttendanceDays(actor: AuthUser, visibleUserIds: Set<UUID>) {
-    const days = this.store.attendanceDayRecords.filter((record) => !record.deleted_at);
+    const days = this.store.attendanceDayRecords
+      .filter((record) => !record.deleted_at)
+      .filter((record) => !this.hasActorCompanyScope(actor) || visibleUserIds.has(record.employee_user_id));
     if (this.canSeeSystemWide(actor)) {
       return days;
     }
@@ -231,7 +252,14 @@ export class DashboardService {
   }
 
   private visibleLeaveRequests(actor: AuthUser, visibleUserIds: Set<UUID>): LeaveRequest[] {
-    const requests = this.store.leaveRequests.filter((request) => !request.deleted_at);
+    const requests = this.store.leaveRequests
+      .filter((request) => !request.deleted_at)
+      .filter((request) =>
+        !this.hasActorCompanyScope(actor) ||
+        visibleUserIds.has(request.employee_user_id) ||
+        request.current_approver_user_id === actor.id ||
+        (request.current_approver_user_id != null && visibleUserIds.has(request.current_approver_user_id))
+      );
     if (this.canSeeSystemWide(actor)) {
       return requests;
     }
@@ -239,7 +267,14 @@ export class DashboardService {
   }
 
   private visibleWfhRequests(actor: AuthUser, visibleUserIds: Set<UUID>): WfhRequest[] {
-    const requests = this.store.wfhRequests.filter((request) => !request.deleted_at);
+    const requests = this.store.wfhRequests
+      .filter((request) => !request.deleted_at)
+      .filter((request) =>
+        !this.hasActorCompanyScope(actor) ||
+        visibleUserIds.has(request.employee_user_id) ||
+        request.current_approver_user_id === actor.id ||
+        (request.current_approver_user_id != null && visibleUserIds.has(request.current_approver_user_id))
+      );
     if (this.canSeeSystemWide(actor)) {
       return requests;
     }
@@ -256,7 +291,12 @@ export class DashboardService {
   }
 
   private visibleAssets(actor: AuthUser, visibleUserIds: Set<UUID>) {
-    const assets = this.store.assets.filter((asset) => !asset.deleted_at);
+    const assets = this.store.assets
+      .filter((asset) => !asset.deleted_at)
+      .filter((asset) =>
+        !this.hasActorCompanyScope(actor) ||
+        (asset.current_assigned_user_id != null && visibleUserIds.has(asset.current_assigned_user_id))
+      );
     if (this.canSeeSystemWide(actor)) {
       return assets;
     }
@@ -297,25 +337,59 @@ export class DashboardService {
       if (visibleTicketIds.has(document.ticket_id)) {
         return true;
       }
+      if (this.hasActorCompanyScope(actor)) {
+        return visibleUserIds.has(document.uploaded_by);
+      }
       return visibleUserIds.has(document.uploaded_by) || this.canSeeFinance(actor) || this.canSeeSystemWide(actor);
     }).length;
   }
 
   private isNotificationVisible(actor: AuthUser, visibleUserIds: Set<UUID>, targetUserId: UUID | null): boolean {
+    if (this.hasActorCompanyScope(actor)) {
+      return targetUserId === actor.id || (targetUserId ? visibleUserIds.has(targetUserId) : false);
+    }
     return this.canSeeSystemWide(actor) || targetUserId === actor.id || (targetUserId ? visibleUserIds.has(targetUserId) : false);
   }
 
-  private departmentHeadcount(users: CoreUser[]): DashboardSummary["workforce"]["departments"] {
+  private visibleOutboxEvents(actor: AuthUser, visibleUserIds: Set<UUID>) {
+    if (!this.canSeeSystemWide(actor)) {
+      return [];
+    }
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    if (!actorCompanyId) {
+      return this.store.outbox;
+    }
+    return this.store.outbox.filter((event) => event.aggregate_id === actorCompanyId || visibleUserIds.has(event.aggregate_id));
+  }
+
+  private companyIdForUser(userId: UUID): UUID | null {
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id ?? null;
+  }
+
+  private hasActorCompanyScope(actor: AuthUser): boolean {
+    return this.companyIdForUser(actor.id) != null;
+  }
+
+  private isInActorCompany(actor: AuthUser, user: CoreUser): boolean {
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    if (!actorCompanyId) {
+      return true;
+    }
+    return user.id === actor.id || this.companyIdForUser(user.id) === actorCompanyId;
+  }
+
+  private departmentHeadcount(actor: AuthUser, users: CoreUser[]): DashboardSummary["workforce"]["departments"] {
+    const actorCompanyId = this.companyIdForUser(actor.id);
     const activeUsers = users.filter((user) => user.employment_status === EmploymentStatuses.Active);
     return this.store.departments
-      .filter((department) => !department.deleted_at)
+      .filter((department) => !department.deleted_at && department.status === "active")
+      .filter((department) => actorCompanyId ? department.company_id === actorCompanyId : department.company_id === null)
       .map((department) => ({
         department_id: department.id,
         department_code: department.department_code,
         name: department.name,
         active_employees: activeUsers.filter((user) => user.department_id === department.id).length
       }))
-      .filter((department) => department.active_employees > 0)
       .sort((left, right) => left.department_code.localeCompare(right.department_code));
   }
 }

@@ -70,7 +70,7 @@
 - Handler: `authRoutes` validates `loginSchema`, calls `AuthService.login`, sets cookie, and returns `access_token` (`hrms_backend/src/modules/auth/routes.ts:48`, `hrms_backend/src/modules/auth/schemas.ts:3`, `hrms_backend/src/modules/auth/routes.ts:52`).
 - Password auth: `AuthService.authenticatePassword` requires a user, active employment status, active credential, and valid scrypt password (`hrms_backend/src/modules/auth/service.ts:397`).
 - Session/JWT: `AuthService.login` creates JWT and session store record (`hrms_backend/src/modules/auth/service.ts:76`; `createJwt` in `hrms_backend/src/auth/index.ts:181`).
-- Cookies: auth route sets `SESSION_COOKIE_NAME` cookie with `httpOnly`, `sameSite: "lax"`, `secure: COOKIE_SECURE`, path `/`, and expiry (`hrms_backend/src/modules/auth/routes.ts:52`).
+- Cookies: auth route sets `SESSION_COOKIE_NAME` cookie with `httpOnly`, `secure: COOKIE_SECURE`, path `/`, and expiry. Local insecure runtimes use `SameSite=Lax`; hosted secure runtimes use `SameSite=None` with `Secure` (`hrms_backend/src/modules/auth/routes.ts:52`).
 - Frontend: `AuthProvider.login` calls `authApi.login`, stores access token, and calls `/me` (`hrms-client/src/lib/auth.tsx:355`, `hrms-client/src/domains/auth/api.ts:158`).
 
 ### Logout
@@ -309,7 +309,7 @@ Recommendation: Resend should be wrapped behind a generic email provider adapter
 | Webhook signature verification | Missing | No webhook route found. Resend docs require raw payload and signed headers. | Add raw-body webhook route using `resend.webhooks.verify` or Svix. |
 | Raw request body handling for webhooks | Missing | No Fastify parser/plugin found for webhook raw body. | Use a route-scoped custom parser or raw-body plugin; Fastify docs support `addContentTypeParser` with `parseAs: "string"`. |
 | Webhook deduplication | Partially present | Generic `processed_events` table exists (`hrms_backend/src/db/schema.ts:356`), but no Resend webhook use. | Add unique provider event id table and idempotent processing. |
-| CSRF protection for cookie auth | Partially present/unknown | Cookie has SameSite Lax (`hrms_backend/src/modules/auth/routes.ts:54`); no explicit CSRF token middleware found. | For state-changing cookie-auth endpoints, consider CSRF token or require bearer header for browser API writes. |
+| CSRF protection for cookie auth | Partially present/unknown | Local cookies use SameSite Lax; hosted secure cookies use SameSite None for cross-origin frontend/API session bootstrap (`hrms_backend/src/modules/auth/routes.ts:54`); no explicit CSRF token middleware found. | For state-changing cookie-auth endpoints, consider CSRF token or require bearer header for browser API writes. |
 | CORS config | Present | CORS registered in `buildApp` (`hrms_backend/src/app.ts:83`); production origin guard in app config logic. | Keep strict `CORS_ALLOWED_ORIGINS` in production. |
 | Helmet/security headers | Partially present | Custom security headers plugin exists and is registered (`hrms_backend/src/app.ts:82`) | Consider CSP for frontend separately. |
 | Input validation | Present | Zod schemas in `hrms_backend/src/modules/auth/schemas.ts:1` | Keep and extend for webhook payload type checks after signature verification. |
@@ -647,7 +647,7 @@ Recommended middleware change:
 - `hrms_backend/src/modules/auth/routes.ts`: pass request IP/user-agent context to service if cooldown/audit needs it.
 - `hrms_backend/src/platform/data-store.ts`: add email delivery/event records.
 - `hrms_backend/src/platform/postgres-data-store.ts`: load/flush email delivery/event records.
-- `.env.example`, `.env.local.example`, `.env.qa.example`, `.env.prod.example`, `.env.prod`: add names only; never commit real values.
+- `.env.dev.example`, `.env.qa.example`, `.env.prod.example`, `.env.prod`: add names only; never commit real values.
 - `hrms-client/src/routes/verify-email.tsx`: copy adjustments only if backend response/error shape changes.
 
 ### Env vars
@@ -844,7 +844,7 @@ Frontend tests:
 | Token leakage in logs | Never log raw tokens; ensure logger redaction covers query tokens if route URLs are logged. |
 | Host header injection | Build links from `FRONTEND_URL`; do not use request host. OWASP forgot-password guidance warns against relying on Host header for reset URLs. |
 | Email change | Not found in current codebase. If added later, use separate token purpose and re-verification flow. |
-| CSRF with cookie auth | SameSite Lax helps, but state-changing endpoints should consider CSRF token or bearer-header enforcement. |
+| CSRF with cookie auth | Local SameSite Lax helps; hosted SameSite None is required for cross-origin browser session refresh, so state-changing endpoints should consider CSRF token or bearer-header enforcement. |
 | Production seeds | Production should not run dev seed flows; unrelated to verification but important for auth lifecycle. |
 
 ## 22. Open Questions

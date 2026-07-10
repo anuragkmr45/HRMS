@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useAssets, warrantyDaysLeft, fmtMoney } from "@/lib/assets-store";
-import { DataCard, EmptyState, StatCard } from "@/components/ui-kit";
+import { DataCard, EmptyState, PhoneInput, StatCard } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -185,7 +185,7 @@ function WarrantyScreen() {
                     </p>
                   </Link>
                   <span
-                    className={`text-xs font-medium ${alert.daysLeft < 0 ? "text-destructive" : alert.daysLeft <= 14 ? "text-warning-foreground" : "text-muted-foreground"}`}
+                    className={`text-xs font-medium ${alert.daysLeft < 0 ? "text-destructive" : alert.daysLeft <= 14 ? "text-warning-foreground dark:text-warning" : "text-muted-foreground"}`}
                   >
                     {alert.daysLeft < 0
                       ? `${Math.abs(alert.daysLeft)}d expired`
@@ -337,8 +337,8 @@ function VendorDialog({
               <Input value={email} onChange={(event) => setEmail(event.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Phone</Label>
-              <Input value={phone} onChange={(event) => setPhone(event.target.value)} />
+              <Label htmlFor="vendor-phone">Phone</Label>
+              <PhoneInput id="vendor-phone" value={phone} onChange={setPhone} />
             </div>
           </div>
           <div className="space-y-1">

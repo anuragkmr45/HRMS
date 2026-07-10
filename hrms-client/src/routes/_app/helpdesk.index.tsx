@@ -57,7 +57,7 @@ function HelpdeskDashboard() {
     const open = mine.filter((t) => !["closed", "resolved"].includes(t.status));
     return (
       <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
           <StatCard label="My tickets" value={mine.length} icon={TicketIcon} tone="primary" />
           <StatCard label="Open" value={open.length} icon={Inbox} tone="info" />
           <StatCard
@@ -93,14 +93,17 @@ function HelpdeskDashboard() {
           ) : (
             <ul className="divide-y">
               {mine.slice(0, 8).map((t) => (
-                <li key={t.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
+                <li
+                  key={t.id}
+                  className="flex flex-col gap-3 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+                >
                   <Link to="/helpdesk/$id" params={{ id: t.id }} className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{t.subject}</p>
                     <p className="text-xs text-muted-foreground">
                       {t.id} · {t.category} · {fmtRelative(t.createdAt)}
                     </p>
                   </Link>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <PriorityBadge priority={t.priority} />
                     <StatusBadge status={t.status} />
                   </div>
@@ -128,7 +131,7 @@ function HelpdeskDashboard() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
         <StatCard label="Total tickets" value={stats.total} icon={TicketIcon} tone="primary" />
         <StatCard label="Open" value={stats.open} icon={Inbox} tone="info" />
         <StatCard

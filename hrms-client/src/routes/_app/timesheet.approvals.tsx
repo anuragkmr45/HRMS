@@ -33,7 +33,15 @@ import {
   previousWeekStartIso,
 } from "@/lib/mock/timesheets";
 import { useTimesheetMissingSubmissions } from "@/domains/timesheets";
-import { asRecord, isApiEnabled, numberValue, pageItems, text, toastApiError } from "@/shared/api";
+import {
+  asRecord,
+  isApiEnabled,
+  numberValue,
+  pageItems,
+  text,
+  toastApiError,
+  userFacingErrorMessage,
+} from "@/shared/api";
 import {
   CheckCircle2,
   XCircle,
@@ -387,16 +395,22 @@ function ApprovalsPage() {
     <div className="space-y-4">
       {error && (
         <Card className="rounded-2xl border-destructive/30 bg-destructive/5 p-4">
-          <p className="text-sm font-semibold text-destructive">Timesheet API unavailable</p>
-          <p className="mt-1 text-xs text-muted-foreground">{error.message}</p>
+          <p className="text-sm font-semibold text-destructive">
+            Timesheet approvals could not be loaded
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {userFacingErrorMessage(error, "Timesheet approvals could not be loaded.")}
+          </p>
         </Card>
       )}
       {missingQuery.error instanceof Error && (
         <Card className="rounded-2xl border-destructive/30 bg-destructive/5 p-4">
           <p className="text-sm font-semibold text-destructive">
-            Missing submissions API unavailable
+            Missing submissions could not be loaded
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">{missingQuery.error.message}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {userFacingErrorMessage(missingQuery.error, "Missing submissions could not be loaded.")}
+          </p>
         </Card>
       )}
 

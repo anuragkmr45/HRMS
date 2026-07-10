@@ -1,0 +1,11 @@
+# QA Daily Submission Plan
+
+| Day | Date | Testing Scope | Required Evidence | Completion Owner | Reviewer | Submission Due | Exit Criteria | Escalation Trigger |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Day 1 | 2026-06-10 | P0 gate and shared hosted environment readiness | URL/API screenshots, API response/request ID, auth/session screenshots, onboarding/RBAC evidence | QA Lead | Release Manager | 20:00 IST | Current shared frontend/API availability proven; P0 blockers logged | Any auth, API, onboarding, RBAC, or storage P0 failure |
+| Day 2 | 2026-06-11 | HR core workflows | Screenshots, request IDs, approval status evidence | QA Tester - HR | QA Lead | 20:00 IST | HR core assigned rows executed or blocked with owner | Attendance, leave/WFH, employee, or timesheet P0/P1 failure |
+| Day 3 | 2026-06-12 | Expense, documents, and media | Expense IDs, document URL, upload/open/delete evidence, API responses | QA Tester - Finance / Documents | QA Lead | 20:00 IST | Expense and document P0 rows have evidence | Broken expense settlement, self-approval prevention, or document storage |
+| Day 4 | 2026-06-13 | Projects, assets, helpdesk, notifications | Project/asset/ticket IDs, notification screenshots, role evidence | QA Tester - Workflow | QA Lead | 20:00 IST | Workflow/admin regression rows executed or blocked | Cross-role access issue or workflow lifecycle failure |
+| Day 5 | 2026-06-14 | Reports, admin policies, business rules | Export file, report screenshots, admin setting evidence, traceability notes | QA Tester - Reports | QA Lead | 20:00 IST | Reports/admin/business-rule rows updated | Failed report export or admin policy save |
+| Day 6 | 2026-06-15 | Full regression, cross-browser, deployment checks | Browser/device screenshots, CI/CD run links, setup-required evidence | Release Manager / Compatibility QA | QA Lead | 20:00 IST | Future-domain gaps documented; executable regression rows updated | P0 regression failure or undocumented environment blocker |
+| Day 7 | 2026-06-16 | Defect retest and final QA submission | Retest evidence, defect log, execution summary, signoff package | QA Lead | Product Owner / Release Manager | 18:00 IST | Final recommendation and risks documented | Any open failed P0, missing evidence, or unowned blocker |

@@ -7,10 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { PASSWORD_RULES, passwordScore } from "@/lib/password";
+import {
+  hasCompletedOneTimeToken,
+  rememberCompletedOneTimeToken,
+} from "@/lib/one-time-token-history";
 
 interface SearchParams {
   token?: string;
 }
+
+const COMPLETED_RESET_PASSWORD_TOKENS_KEY = "hawkaii_completed_reset_password_tokens";
 
 export const Route = createFileRoute("/reset-password")({
   validateSearch: (s: Record<string, unknown>): SearchParams => ({
@@ -33,6 +39,7 @@ function ResetPasswordPage() {
 
   const meta = passwordScore(pwd);
   const passedAll = PASSWORD_RULES.every((r) => r.test(pwd));
+  const completedToken = hasCompletedOneTimeToken(COMPLETED_RESET_PASSWORD_TOKENS_KEY, token);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,8 +51,9 @@ function ResetPasswordPage() {
     try {
       const res = await resetPasswordWithToken(token, pwd);
       if (!res.ok) return setError(res.error ?? "Could not reset password.");
+      rememberCompletedOneTimeToken(COMPLETED_RESET_PASSWORD_TOKENS_KEY, token);
       setDone(true);
-      setTimeout(() => navigate({ to: "/login" }), 1500);
+      setTimeout(() => navigate({ to: "/login", replace: true }), 1500);
     } finally {
       setSubmitting(false);
     }
@@ -56,6 +64,21 @@ function ResetPasswordPage() {
       <AuthShell title="Invalid reset link" subtitle="Please request a new password reset.">
         <Button asChild className="h-11 w-full rounded-xl" variant="outline">
           <Link to="/forgot-password">Request a new link</Link>
+        </Button>
+      </AuthShell>
+    );
+  }
+
+  if (completedToken) {
+    return (
+      <AuthShell
+        title="Reset link already used"
+        subtitle="This password reset link has already been completed."
+      >
+        <Button asChild className="h-11 w-full rounded-xl" variant="outline">
+          <Link to="/login" replace>
+            Continue to sign in
+          </Link>
         </Button>
       </AuthShell>
     );

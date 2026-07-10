@@ -105,7 +105,7 @@ for (const file of walkFiles("src", (path) => path.endsWith(".integration.test.t
   }
 }
 
-const envExampleFiles = [".env.example", ".env.local.example", ".env.test.example", ".env.qa.example", ".env.prod.example"].filter((file) => existsSync(file));
+const envExampleFiles = [".env.dev.example", ".env.qa.example", ".env.prod.example"].filter((file) => existsSync(file));
 for (const envFile of envExampleFiles) {
   const content = read(envFile);
   for (const line of content.split(/\r?\n/u)) {

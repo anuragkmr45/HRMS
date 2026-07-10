@@ -35,13 +35,13 @@ export function StepperForm({
   const isLast = active === steps.length - 1;
 
   return (
-    <div className="space-y-6">
-      <ol className="flex items-center gap-2 sm:gap-4">
+    <div className="min-w-0 space-y-6">
+      <ol className="flex min-w-0 items-center gap-2 sm:gap-4">
         {steps.map((s, i) => {
           const done = i < active;
           const current = i === active;
           return (
-            <li key={s.title} className="flex flex-1 items-center gap-2">
+            <li key={s.title} className="flex min-w-0 flex-1 items-center gap-2">
               <div
                 className={cn(
                   "grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-semibold transition",
@@ -73,7 +73,7 @@ export function StepperForm({
         })}
       </ol>
 
-      <div className="rounded-2xl border bg-card p-5">{steps[active].content}</div>
+      <div className="min-w-0 rounded-2xl border bg-card p-4 sm:p-5">{steps[active].content}</div>
 
       <div className="flex items-center justify-between">
         <Button

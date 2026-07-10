@@ -90,7 +90,7 @@ function SlaScreen() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
         <StatCard label="Open tickets" value={open.length} icon={Activity} tone="primary" />
         <StatCard label="On track" value={onTrack} icon={ShieldCheck} tone="success" />
         <StatCard label="Near breach" value={nearBreach} icon={Timer} tone="warning" />
@@ -104,7 +104,7 @@ function SlaScreen() {
             return (
               <div key={p} className="rounded-xl border bg-card p-4">
                 <PriorityBadge priority={p} />
-                <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                <div className="mt-3 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
                   <div>
                     <p className="text-muted-foreground">Response</p>
                     <p className="text-base font-semibold">{policy.responseHours}h</p>

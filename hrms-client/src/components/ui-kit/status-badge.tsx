@@ -1,5 +1,8 @@
 import { cn } from "@/lib/utils";
 
+const WARNING_SOFT =
+  "bg-warning/20 text-warning-foreground border-warning/40 dark:bg-warning/15 dark:text-warning dark:border-warning/30";
+
 const MAP: Record<string, { label: string; cls: string }> = {
   approved: { label: "Approved", cls: "bg-success/15 text-success border-success/20" },
   active: { label: "Active", cls: "bg-success/15 text-success border-success/20" },
@@ -15,7 +18,7 @@ const MAP: Record<string, { label: string; cls: string }> = {
   cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground border-border" },
   planned: { label: "Planned", cls: "bg-info/15 text-info border-info/30" },
   green: { label: "On track", cls: "bg-success/15 text-success border-success/20" },
-  amber: { label: "At risk", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
+  amber: { label: "At risk", cls: WARNING_SOFT },
   red: { label: "Critical", cls: "bg-destructive/15 text-destructive border-destructive/30" },
   fixed: { label: "Fixed", cls: "bg-info/15 text-info border-info/30" },
   hourly: { label: "Hourly", cls: "bg-info/15 text-info border-info/30" },
@@ -24,14 +27,14 @@ const MAP: Record<string, { label: string; cls: string }> = {
   client: { label: "Client", cls: "bg-info/15 text-info border-info/30" },
   billable: { label: "Billable", cls: "bg-success/15 text-success border-success/20" },
   non_billable: { label: "Non-billable", cls: "bg-muted text-muted-foreground border-border" },
-  pending: { label: "Pending", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
-  on_hold: { label: "On Hold", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
-  late: { label: "Late", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
-  repair: { label: "In Repair", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
-  probation: { label: "Probation", cls: "bg-warning/20 text-warning-foreground border-warning/40" },
+  pending: { label: "Pending", cls: WARNING_SOFT },
+  on_hold: { label: "On Hold", cls: WARNING_SOFT },
+  late: { label: "Late", cls: WARNING_SOFT },
+  repair: { label: "In Repair", cls: WARNING_SOFT },
+  probation: { label: "Probation", cls: WARNING_SOFT },
   notice_period: {
     label: "Notice period",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   onboarding: { label: "Onboarding", cls: "bg-info/15 text-info border-info/30" },
   invited: { label: "Invited", cls: "bg-info/15 text-info border-info/30" },
@@ -46,15 +49,15 @@ const MAP: Record<string, { label: string; cls: string }> = {
   submitted: { label: "Submitted", cls: "bg-info/15 text-info border-info/30" },
   pending_manager: {
     label: "Pending Manager",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   returned: {
     label: "Returned",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   manager_returned: {
     label: "Manager Returned",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   manager_rejected: {
     label: "Manager Rejected",
@@ -66,7 +69,7 @@ const MAP: Record<string, { label: string; cls: string }> = {
   },
   finance_hold: {
     label: "Finance Hold",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   finance_verified: {
     label: "Finance Verified",
@@ -79,11 +82,11 @@ const MAP: Record<string, { label: string; cls: string }> = {
   bills_submitted: { label: "Bills Submitted", cls: "bg-info/15 text-info border-info/30" },
   settlement_review: {
     label: "Settlement Review",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   pending_adjustment: {
     label: "Pending Adjustment",
-    cls: "bg-warning/20 text-warning-foreground border-warning/40",
+    cls: WARNING_SOFT,
   },
   withdrawn: { label: "Withdrawn", cls: "bg-muted text-muted-foreground border-border" },
 };

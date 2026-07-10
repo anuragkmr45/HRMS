@@ -11,8 +11,8 @@ Standalone Fastify backend for Hawkaii HRMS. This project is extracted from the 
 ## Local Development
 
 ```bash
-cp .env.local.example .env.local
-cp .env.test.example .env.test
+# Keep real local values in .env.local.
+# The tracked .env.dev.example is for hosted dev; if you copy it, replace hosted URLs, Neon, Valkey, and Cloudinary values with local ones.
 pnpm install
 pnpm dev:infra:up
 pnpm db:migrate
@@ -20,7 +20,7 @@ pnpm release:seed
 pnpm dev
 ```
 
-Local, QA, and production document/media uploads use the Cloudinary storage adapter. Local and QA examples default to `CLOUDINARY_MOCK_UPLOADS=true`, which keeps upload flows working without external credentials but stores file bytes only in the running backend process. For real persistence, provide real Cloudinary credentials and set `CLOUDINARY_MOCK_UPLOADS=false`.
+Local, QA, and production document/media uploads use the Cloudinary storage adapter. Local `.env.local` may use `CLOUDINARY_MOCK_UPLOADS=true` for developer-only flows, but the tracked dev/QA/production examples are hosted templates and set real Cloudinary persistence with `CLOUDINARY_MOCK_UPLOADS=false`.
 
 ```env
 CLOUDINARY_CLOUD_NAME=local-cloudinary-mock
@@ -61,7 +61,7 @@ Local development should usually keep email delivery in log mode:
 ```env
 EMAIL_DELIVERY_PROVIDER=resend
 EMAIL_DELIVERY_MODE=log
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:8080
 ```
 
 For staging or production real delivery, set `EMAIL_DELIVERY_MODE=send`, provide `RESEND_API_KEY`, use a verified `RESEND_FROM_EMAIL`, set the public `FRONTEND_URL`, and configure `RESEND_WEBHOOK_SECRET`. The Resend webhook endpoint is:
@@ -85,7 +85,7 @@ Detailed architecture and deployment guidance:
 ## Docker Runtime
 
 ```bash
-cp .env.local.example .env.local
+# Use .env.local with local Docker database and Valkey values.
 pnpm docker:dev:up
 pnpm docker:dev:verify
 ```
@@ -123,4 +123,4 @@ pnpm verify:scalability
 pnpm verify:regression
 ```
 
-Integration tests require PostgreSQL, Valkey, and object storage. Use `pnpm test:infra:up` before `pnpm test:integration` or point `.env.test` to your own services. Document storage tests use the Cloudinary adapter; `.env.test.example` keeps `CLOUDINARY_MOCK_UPLOADS=true` so tests do not require external Cloudinary credentials.
+Integration tests require PostgreSQL, Valkey, and object storage. Use `pnpm test:infra:up` before `pnpm test:integration` or point `TEST_DATABASE_URL` in your untracked env file to your own services. The dev example keeps mock Cloudinary available so tests do not require external Cloudinary credentials.

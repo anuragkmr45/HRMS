@@ -25,7 +25,7 @@ import type { MemoryDataStore, WorkSegment } from "../../platform/data-store.js"
 import { nowIso } from "../../platform/data-store.js";
 import { badRequest, conflict, forbidden, notFound } from "../../platform/errors.js";
 import { appendProjectOutboxEvent, projectEvents } from "./events.js";
-import { assertCanMutateProject, assertCanSeeProject, canMutateProject, canSeeProjectPortfolio } from "./policy.js";
+import { assertCanMutateProject, canMutateProject, canSeeProjectPortfolio } from "./policy.js";
 import { ProjectsRepository } from "./repository.js";
 
 export interface ProjectQuery {
@@ -110,7 +110,7 @@ export class ProjectsService {
   }
 
   createProject(actor: AuthUser, input: ProjectCreateInput) {
-    const manager = this.requireActiveUser(input.manager_user_id);
+    const manager = this.requireActiveUser(actor, input.manager_user_id);
     if (input.end_date < input.start_date) {
       throw badRequest("Project end date cannot be before start date.");
     }
@@ -174,15 +174,13 @@ export class ProjectsService {
   }
 
   getProject(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    const project = this.requireVisibleProject(actor, id);
     return this.presentProject(project, actor, true, query.include);
   }
 
   updateProject(actor: AuthUser, id: UUID, input: ProjectUpdateInput) {
-    const project = this.repository.findProject(id);
-    assertCanMutateProject(actor, project);
-    if (input.manager_user_id) this.requireActiveUser(input.manager_user_id);
+    const project = this.requireMutableProject(actor, id);
+    if (input.manager_user_id) this.requireActiveUser(actor, input.manager_user_id);
     if (input.department_id) this.requireDepartment(input.department_id);
     const updated = this.repository.updateProjectVersioned(id, input.expected_version, (target) => {
       if (input.project_code !== undefined) target.project_code = input.project_code.trim();
@@ -215,8 +213,7 @@ export class ProjectsService {
   }
 
   archiveProject(actor: AuthUser, id: UUID, input: ProjectArchiveInput) {
-    const project = this.repository.findProject(id);
-    assertCanMutateProject(actor, project);
+    const project = this.requireMutableProject(actor, id);
     const activeMembers = this.repository.listMembers(id, true);
     if (activeMembers.length > 0 && project.status === ProjectStatuses.Active) {
       throw conflict("Archive active projects only after members are removed or project is put on hold/completed.", { active_members: activeMembers.length });
@@ -236,8 +233,7 @@ export class ProjectsService {
   }
 
   listMembers(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    this.requireVisibleProject(actor, id);
     const items = this.repository
       .listMembers(id, query.active_only ?? false)
       .filter((member) => !query.role || member.project_role === query.role)
@@ -246,16 +242,15 @@ export class ProjectsService {
   }
 
   addMember(actor: AuthUser, id: UUID, input: ProjectMemberCreateInput) {
-    const project = this.repository.findProject(id);
-    assertCanMutateProject(actor, project);
+    const project = this.requireMutableProject(actor, id);
     this.assertProjectVersion(project, input.expected_version);
-    this.requireActiveUser(input.user_id);
+    this.requireActiveUser(actor, input.user_id);
     assertOverAllocationAcknowledged({
       allocationPercent: input.allocation_percent,
       acknowledged: input.over_allocation_acknowledged,
       reason: input.over_allocation_reason
     });
-    if (input.reporting_lead_user_id) this.requireActiveUser(input.reporting_lead_user_id);
+    if (input.reporting_lead_user_id) this.requireActiveUser(actor, input.reporting_lead_user_id);
     const member = this.repository.addMember({
       project_id: id,
       employee_user_id: input.user_id,
@@ -297,8 +292,8 @@ export class ProjectsService {
   }
 
   updateMember(actor: AuthUser, projectId: UUID, memberId: UUID, input: ProjectMemberUpdateInput) {
-    const project = this.repository.findProject(projectId);
-    assertCanMutateProject(actor, project);
+    const project = this.requireMutableProject(actor, projectId);
+    if (input.reporting_lead_user_id) this.requireActiveUser(actor, input.reporting_lead_user_id);
     if (input.allocation_percent !== undefined) {
       assertOverAllocationAcknowledged({
         allocationPercent: input.allocation_percent,
@@ -335,8 +330,7 @@ export class ProjectsService {
   }
 
   listAllocations(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    this.requireVisibleProject(actor, id);
     const items = this.repository
       .listAllocations(id, query.user_id)
       .filter((allocation) => rangesOverlap(allocation.date_from, allocation.date_to, query.date_from, query.date_to))
@@ -349,10 +343,9 @@ export class ProjectsService {
   }
 
   addAllocation(actor: AuthUser, id: UUID, input: ProjectAllocationCreateInput) {
-    const project = this.repository.findProject(id);
-    assertCanMutateProject(actor, project);
+    const project = this.requireMutableProject(actor, id);
     this.assertProjectVersion(project, input.expected_version);
-    this.requireActiveUser(input.user_id);
+    this.requireActiveUser(actor, input.user_id);
     assertOverAllocationAcknowledged({
       allocationPercent: input.allocation_percent,
       acknowledged: input.over_allocation_acknowledged,
@@ -400,17 +393,15 @@ export class ProjectsService {
   }
 
   listMilestones(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    this.requireVisibleProject(actor, id);
     const items = this.repository.listMilestones(id, query.status).map((milestone) => this.presentMilestone(milestone));
     return page(items, query.page, query.page_size);
   }
 
   addMilestone(actor: AuthUser, id: UUID, input: ProjectMilestoneCreateInput) {
-    const project = this.repository.findProject(id);
-    assertCanMutateProject(actor, project);
+    const project = this.requireMutableProject(actor, id);
     this.assertProjectVersion(project, input.expected_version);
-    if (input.owner_user_id) this.requireActiveUser(input.owner_user_id);
+    if (input.owner_user_id) this.requireActiveUser(actor, input.owner_user_id);
     if (input.start_date && input.due_date < input.start_date) {
       throw badRequest("Milestone due date cannot be before start date.");
     }
@@ -435,8 +426,7 @@ export class ProjectsService {
   }
 
   listDocuments(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    this.requireVisibleProject(actor, id);
     const documents = this.store.documents
       .filter((document) => {
         if (document.deleted_at || document.business_object_type !== "project" || document.business_object_id !== id) return false;
@@ -458,8 +448,7 @@ export class ProjectsService {
   }
 
   projectSummary(actor: AuthUser, id: UUID, query: ProjectQuery) {
-    const project = this.repository.findProject(id);
-    assertCanSeeProject(actor, project, this.store);
+    const project = this.requireVisibleProject(actor, id);
     const segments = this.projectSegments(project, query.date_from, query.date_to);
     const tickets = this.store.tickets.filter((ticket) => !ticket.deleted_at && ticket.project_code === project.project_code);
     const activeMembers = this.repository.listMembers(id, true);
@@ -703,6 +692,9 @@ export class ProjectsService {
   }
 
   private canActorSee(actor: AuthUser, project: ProjectRecord): boolean {
+    if (!this.isProjectInActorCompany(actor, project)) {
+      return false;
+    }
     const members = this.repository.listMembers(project.id);
     return this.store.users.length > 0 && (
       canSeeProjectPortfolio(actor) ||
@@ -713,6 +705,45 @@ export class ProjectsService {
         .filter((user): user is CoreUser => Boolean(user))
         .some((user) => user.hierarchy_path.startsWith(`${actor.hierarchy_path}.`))
     );
+  }
+
+  private requireVisibleProject(actor: AuthUser, id: UUID): ProjectRecord {
+    const project = this.repository.findProject(id);
+    if (!this.canActorSee(actor, project)) {
+      throw forbidden("Project access is limited to the active company and assigned project participants.");
+    }
+    return project;
+  }
+
+  private requireMutableProject(actor: AuthUser, id: UUID): ProjectRecord {
+    const project = this.requireVisibleProject(actor, id);
+    assertCanMutateProject(actor, project);
+    return project;
+  }
+
+  private companyIdForUser(userId: UUID): UUID | null {
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id ?? null;
+  }
+
+  private isUserInActorCompany(actor: AuthUser, user: CoreUser): boolean {
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    if (!actorCompanyId) {
+      return true;
+    }
+    return user.id === actor.id || this.companyIdForUser(user.id) === actorCompanyId;
+  }
+
+  private isProjectInActorCompany(actor: AuthUser, project: ProjectRecord): boolean {
+    const actorCompanyId = this.companyIdForUser(actor.id);
+    if (!actorCompanyId) {
+      return true;
+    }
+    if (this.companyIdForUser(project.manager_user_id) === actorCompanyId) {
+      return true;
+    }
+    return this.repository
+      .listMembers(project.id)
+      .some((member) => !member.deleted_at && this.companyIdForUser(member.employee_user_id) === actorCompanyId);
   }
 
   private projectSegments(project: ProjectRecord, dateFrom?: string, dateTo?: string): WorkSegment[] {
@@ -765,6 +796,7 @@ export class ProjectsService {
   private scopedUsersForUtilization(actor: AuthUser, query: ProjectQuery): CoreUser[] {
     return this.store.users.filter((user) => {
       if (user.deleted_at || user.employment_status !== EmploymentStatuses.Active) return false;
+      if (!this.isUserInActorCompany(actor, user)) return false;
       if (query.department_id && user.department_id !== query.department_id) return false;
       if (query.manager_user_id && user.manager_user_id !== query.manager_user_id) return false;
       if (canSeeProjectPortfolio(actor)) return true;
@@ -792,13 +824,16 @@ export class ProjectsService {
     }));
   }
 
-  private requireActiveUser(id: UUID): CoreUser {
+  private requireActiveUser(actor: AuthUser, id: UUID): CoreUser {
     const user = this.store.users.find((candidate) => candidate.id === id && !candidate.deleted_at);
     if (!user) {
       throw notFound("User not found", { id });
     }
     if (user.employment_status !== EmploymentStatuses.Active) {
       throw conflict("Project users must be active employees.", { user_id: id, status: user.employment_status });
+    }
+    if (!this.isUserInActorCompany(actor, user)) {
+      throw forbidden("Project users must belong to the active company.");
     }
     return user;
   }

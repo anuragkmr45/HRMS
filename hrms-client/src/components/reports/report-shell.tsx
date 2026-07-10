@@ -57,7 +57,7 @@ interface Props<T extends { id: string }> {
 const TONE: Record<string, string> = {
   default: "border-border/60",
   success: "border-success/30 bg-success/5",
-  warning: "border-warning/40 bg-warning/5",
+  warning: "border-warning/40 bg-warning/5 dark:border-warning/30 dark:bg-warning/10",
   destructive: "border-destructive/30 bg-destructive/5",
   info: "border-info/30 bg-info/5",
 };
@@ -142,8 +142,8 @@ export function ReportShell<T extends { id: string }>({
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
           {description && <p className="text-sm text-muted-foreground">{description}</p>}
         </div>
@@ -152,6 +152,7 @@ export function ReportShell<T extends { id: string }>({
           variant="outline"
           onClick={handleExport}
           disabled={apiMode && exportMutation.isPending}
+          className="w-full sm:w-auto"
         >
           <Download className="mr-1 h-3.5 w-3.5" />
           {apiMode && exportMutation.isPending ? "Exporting" : "Export CSV"}
@@ -162,7 +163,7 @@ export function ReportShell<T extends { id: string }>({
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Filter className="h-3.5 w-3.5" /> Filters
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
           <div className="space-y-1">
             <Label className="text-[11px]">From</Label>
             <Input
@@ -234,7 +235,7 @@ export function ReportShell<T extends { id: string }>({
       </Card>
 
       {summary && summary.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
           {summary.map((s, i) => (
             <Card key={i} className={`rounded-2xl p-4 ${TONE[s.tone ?? "default"]}`}>
               <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">

@@ -33,7 +33,7 @@ Success response includes:
 }
 ```
 
-The API also sets the configured HttpOnly session cookie. Swagger and mobile clients should use the returned bearer token for protected calls.
+The API also sets the configured HttpOnly session cookie. Local insecure runtimes use `SameSite=Lax`; hosted HTTPS runtimes with `COOKIE_SECURE=true` use `SameSite=None; Secure` so browser refresh/session bootstrap works when the frontend and API are on different hosted origins. Swagger and mobile clients should use the returned bearer token for protected calls.
 
 Login is rate-limited at 10 attempts per minute per IP by default. A `429 TOO_MANY_REQUESTS` response means the client should wait for `Retry-After` before trying again.
 

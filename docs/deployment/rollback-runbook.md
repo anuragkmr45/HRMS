@@ -25,7 +25,7 @@ Migrations should be treated as forward-only unless a migration explicitly docum
 
 ## Frontend
 
-Use Cloudflare deployment history to roll back the affected branch/project to the previous successful frontend deployment.
+Use Vercel deployment history to promote or roll back the affected frontend project to the previous successful deployment.
 
 ## Media / Cloudinary
 

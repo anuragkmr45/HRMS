@@ -185,7 +185,7 @@ function HelpdeskReports() {
 
   return (
     <Tabs defaultValue="open">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="open">Open Tickets</TabsTrigger>
         <TabsTrigger value="sla">SLA Breach</TabsTrigger>
         <TabsTrigger value="agent">Agent Performance</TabsTrigger>

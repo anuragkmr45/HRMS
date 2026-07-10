@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_app")({
 });
 
 function AppLayout() {
-  const { user, isInitializing } = useAuth();
+  const { user, isInitializing, isCompanySetupComplete } = useAuth();
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const appEnv = String(import.meta.env.VITE_APP_ENV ?? "").toLowerCase();
@@ -28,9 +28,12 @@ function AppLayout() {
       }, 0);
       return () => clearTimeout(t);
     }
-  }, [user, navigate, isInitializing]);
+    if (!isCompanySetupComplete) {
+      navigate({ to: "/onboarding" });
+    }
+  }, [user, navigate, isInitializing, isCompanySetupComplete]);
 
-  if (!user || isInitializing) {
+  if (!user || isInitializing || !isCompanySetupComplete) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div
@@ -46,14 +49,15 @@ function AppLayout() {
     <SidebarProvider>
       <div className="bg-app flex min-h-screen w-full">
         <AppSidebar />
-        <div className="flex min-h-screen flex-1 flex-col">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <Topbar />
           {showEnvironmentBanner ? (
-            <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900">
-              {environmentLabel} environment{buildLabel ? ` - ${buildLabel}` : ""}. Do not enter production data.
+            <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-xs font-medium text-warning-foreground dark:text-warning">
+              {environmentLabel} environment{buildLabel ? ` - ${buildLabel}` : ""}. Do not enter
+              production data.
             </div>
           ) : null}
-          <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
             <div key={path} className="page-fade-in mx-auto w-full max-w-7xl space-y-6">
               <Outlet />
             </div>

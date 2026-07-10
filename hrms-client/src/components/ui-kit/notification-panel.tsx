@@ -97,7 +97,7 @@ export function NotificationPanel() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[360px] rounded-2xl p-0">
+      <PopoverContent align="end" className="w-[360px] max-w-[calc(100vw-1rem)] rounded-2xl p-0">
         <div className="flex items-center justify-between border-b p-4">
           <div>
             <p className="text-sm font-semibold">Notifications</p>

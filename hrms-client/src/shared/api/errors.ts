@@ -30,11 +30,50 @@ export class ApiError extends Error {
 }
 
 export class ApiUnavailableError extends Error {
-  constructor(message = "Backend API is unavailable.", cause?: unknown) {
+  constructor(
+    message = "We could not reach the HRMS server. Please check your connection and try again.",
+    cause?: unknown,
+  ) {
     super(message);
     this.name = "ApiUnavailableError";
     if (cause) this.cause = cause;
   }
+}
+
+function friendlyApiMessage(status: number, message: string | undefined): string {
+  const value = (message || "").trim();
+  const normalized = value.toLowerCase();
+
+  if (status === 401 && /invalid email or password|unauthorized/.test(normalized)) {
+    return "Email or password is incorrect.";
+  }
+  if (/duplicate key value|unique constraint|23505/.test(normalized)) {
+    return "A record with these details already exists.";
+  }
+  if (/foreign key constraint|violates foreign key|23503/.test(normalized)) {
+    return "This item is linked to another record and cannot be changed right now.";
+  }
+  if (/not-null constraint|null value.*violates|expected .* received null/.test(normalized)) {
+    return "Some required information is missing. Please review the form and try again.";
+  }
+  if (
+    /internal server error|stack trace|econnrefused|enotfound|failed before a response/.test(
+      normalized,
+    )
+  ) {
+    return status >= 500
+      ? "Something went wrong on the server. Please try again."
+      : "We could not complete the request. Please try again.";
+  }
+  if (value) return value;
+  if (status === 401) return "Please sign in again.";
+  if (status === 403) return "You do not have permission to do that.";
+  if (status === 404) return "We could not find that record.";
+  if (status === 409) return "This record changed. Refresh and try again.";
+  if (status === 422) return "Please check the details and try again.";
+  if (status === 429) return "Too many requests. Please wait and try again.";
+  if (status >= 500) return "Something went wrong on the server. Please try again.";
+  return "Request failed.";
 }
 
 export function parseRetryAfter(value: string | null): number | undefined {
@@ -59,7 +98,7 @@ export async function apiErrorFromResponse(response: Response): Promise<ApiError
   return new ApiError({
     status: response.status,
     code: parsed?.code || `HTTP_${response.status}`,
-    message: parsed?.message || response.statusText || "Request failed.",
+    message: friendlyApiMessage(response.status, parsed?.message || response.statusText),
     details: parsed?.details,
     requestId: parsed?.request_id || response.headers.get("x-request-id") || undefined,
     retryAfterSeconds,

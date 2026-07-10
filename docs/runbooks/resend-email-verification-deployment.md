@@ -20,7 +20,7 @@ It does not change the auth architecture. Resend is the transport provider only.
 
 | Variable | Development required | Staging required | Production required | Example placeholder | Purpose and usage |
 | --- | --- | --- | --- | --- | --- |
-| `EMAIL_DELIVERY_MODE` | No | Yes, use `send` for real staging tests | Yes, must be `send` | `log`, `send`, `disabled` | Controls email behavior. `log` records local/log delivery without Resend; `disabled` suppresses sending; `send` uses Resend. Production config validation requires `send`. |
+| `EMAIL_DELIVERY_MODE` | No | Yes, use `send` for real staging tests | Required; use `send` when public self-signup/reset email is enabled, or `disabled` for an approved closed launch | `log`, `send`, `disabled` | Controls email behavior. `log` records local/log delivery without Resend; `disabled` suppresses sending; `send` uses Resend. Resend secrets are required only when mode is `send`. |
 | `EMAIL_DELIVERY_PROVIDER` | No | Yes | Yes | `resend` | Provider selector. Current implementation expects `resend`. |
 | `RESEND_API_KEY` | Only when `EMAIL_DELIVERY_MODE=send` | Yes | Yes | `replace-with-resend-api-key` | Secret used by the Resend adapter when sending real email. Never commit. |
 | `RESEND_FROM_EMAIL` | No, default exists | Yes | Yes | `Product Name <verify@example.com>` | Verified sender address used as the email `from` value. Use a Resend-verified domain. |
@@ -38,12 +38,10 @@ The example files already use placeholders. Do not put real Resend API keys, web
 
 ## Local Development
 
-Use local or QA env examples as the starting point:
+Use `.env.local` for local development. The tracked `.env.dev.example` is a hosted dev template, so do not copy it directly unless you replace hosted URLs, Neon, Valkey, and Cloudinary values with local ones.
 
 ```bash
 cd hrms_backend
-cp .env.local.example .env.local
-cp .env.test.example .env.test
 pnpm install
 pnpm dev:infra:up
 pnpm db:migrate
@@ -55,7 +53,7 @@ For ordinary local development, keep:
 ```env
 EMAIL_DELIVERY_MODE=log
 EMAIL_DELIVERY_PROVIDER=resend
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:8080
 ```
 
 Use `EMAIL_DELIVERY_MODE=send` locally only when intentionally testing real Resend delivery. Do not use production Resend API keys locally. Do not commit `.env`.

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ROLE_MAP, type Role } from "@/lib/auth";
@@ -106,16 +106,17 @@ function hourInTimeZone(date: Date, timeZone: string): number {
 }
 
 // ----- Small chart helpers (consistent palette) -----
-const PRIMARY = "oklch(0.46 0.21 290)";
-const PRIMARY_SOFT = "oklch(0.78 0.16 295)";
-const SUCCESS = "oklch(0.68 0.16 150)";
-const WARNING = "oklch(0.78 0.16 70)";
-const INFO = "oklch(0.65 0.14 240)";
-const DESTRUCTIVE = "oklch(0.6 0.22 25)";
+const PRIMARY = "var(--chart-1)";
+const PRIMARY_SOFT = "var(--chart-7)";
+const SUCCESS = "var(--chart-3)";
+const WARNING = "var(--chart-4)";
+const INFO = "var(--chart-2)";
+const DESTRUCTIVE = "var(--chart-5)";
 
 const tooltipStyle = {
   background: "var(--card)",
   border: "1px solid var(--border)",
+  color: "var(--foreground)",
   borderRadius: 10,
   fontSize: 12,
   padding: "6px 10px",
@@ -132,11 +133,13 @@ export function MiniArea({
   height?: number;
   color?: string;
 }) {
+  const gradientId = `mini-area-${useId().replace(/:/g, "")}`;
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 10, right: 4, left: -20, bottom: 0 }}>
         <defs>
-          <linearGradient id={`g-${color}`} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity={0.35} />
             <stop offset="100%" stopColor={color} stopOpacity={0} />
           </linearGradient>
@@ -160,7 +163,7 @@ export function MiniArea({
           dataKey={dataKey}
           stroke={color}
           strokeWidth={2}
-          fill={`url(#g-${color})`}
+          fill={`url(#${gradientId})`}
         />
       </AreaChart>
     </ResponsiveContainer>

@@ -3,6 +3,23 @@ import { Roles } from "#shared";
 import { forbidden, selfApprovalBlocked } from "../../platform/errors.js";
 
 const SYSTEM_WIDE_ATTENDANCE_ROLES: readonly string[] = [Roles.Admin, Roles.HRManager, Roles.Auditor];
+const SELF_ATTENDANCE_ROLES: readonly string[] = [
+  Roles.Employee,
+  Roles.Reviewer,
+  Roles.Director,
+  Roles.FinanceManager,
+  Roles.AssetManager
+];
+
+export function canUseSelfAttendance(actor: AuthUser): boolean {
+  return actor.roles.some((role) => SELF_ATTENDANCE_ROLES.includes(role));
+}
+
+export function assertCanUseSelfAttendance(actor: AuthUser): void {
+  if (!canUseSelfAttendance(actor)) {
+    throw forbidden("Self attendance is available only to employee self-service roles.");
+  }
+}
 
 export function canSeeAllAttendance(actor: AuthUser): boolean {
   return actor.roles.some((role) => SYSTEM_WIDE_ATTENDANCE_ROLES.includes(role));

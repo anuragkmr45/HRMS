@@ -22,7 +22,7 @@ const TONE = {
   primary: "bg-primary-soft text-primary",
   success: "bg-success/15 text-success",
   info: "bg-info/15 text-info",
-  warning: "bg-warning/20 text-warning-foreground",
+  warning: "bg-warning/20 text-warning-foreground dark:bg-warning/15 dark:text-warning",
 };
 
 export function UserAvatar({

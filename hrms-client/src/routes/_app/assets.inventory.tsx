@@ -80,7 +80,7 @@ function Inventory() {
         const d = warrantyDaysLeft(a.warrantyExpiry);
         return (
           <span
-            className={`text-xs font-medium ${d < 0 ? "text-destructive" : d <= 60 ? "text-warning-foreground" : "text-muted-foreground"}`}
+            className={`text-xs font-medium ${d < 0 ? "text-destructive" : d <= 60 ? "text-warning-foreground dark:text-warning" : "text-muted-foreground"}`}
           >
             {d < 0 ? `Expired ${Math.abs(d)}d ago` : `${d}d left`}
           </span>

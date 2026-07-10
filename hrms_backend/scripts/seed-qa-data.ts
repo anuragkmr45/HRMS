@@ -27,8 +27,14 @@ function sha256(value: string): string {
 
 const ids = {
   departmentHr: uuidFromName("qa-department-hr"),
-  designationHrManager: uuidFromName("qa-designation-hr-manager"),
+  designationHrManager: seedIds.designationHrManager,
   designationManager: uuidFromName("qa-designation-normal-manager"),
+  designationAdmin: seedIds.designationAdmin,
+  designationProjectManager: seedIds.designationProjectManager,
+  designationAssetManager: seedIds.designationAssetManager,
+  designationAuditor: seedIds.designationAuditor,
+  designationHelpdeskAgent: seedIds.designationHelpdeskAgent,
+  designationHelpdeskManager: seedIds.designationHelpdeskManager,
   hrManager: uuidFromName("qa-user-hr-manager"),
   normalManager: uuidFromName("qa-user-normal-manager"),
   unauthorizedEmployee: uuidFromName("qa-user-unauthorized-employee"),
@@ -50,10 +56,25 @@ try {
     `INSERT INTO core.designations (id, designation_code, title, level, status)
      VALUES
        ($1, 'HR_MANAGER', 'HR Manager', 7, 'active'),
-       ($2, 'MANAGER', 'Normal Manager', 5, 'active')
+       ($2, 'MANAGER', 'Normal Manager', 5, 'active'),
+       ($3, 'ADMIN', 'Admin', 9, 'active'),
+       ($4, 'PROJECT_MANAGER', 'Project Manager', 6, 'active'),
+       ($5, 'ASSET_MANAGER', 'Asset Manager', 6, 'active'),
+       ($6, 'AUDITOR', 'Auditor', 5, 'active'),
+       ($7, 'HELPDESK_AGENT', 'Helpdesk Agent', 3, 'active'),
+       ($8, 'HELPDESK_MANAGER', 'Helpdesk Manager', 6, 'active')
      ON CONFLICT (designation_code) DO UPDATE
      SET title = EXCLUDED.title, level = EXCLUDED.level, status = EXCLUDED.status, updated_at = now()`,
-    [ids.designationHrManager, ids.designationManager]
+    [
+      ids.designationHrManager,
+      ids.designationManager,
+      ids.designationAdmin,
+      ids.designationProjectManager,
+      ids.designationAssetManager,
+      ids.designationAuditor,
+      ids.designationHelpdeskAgent,
+      ids.designationHelpdeskManager
+    ]
   );
 
   await client.query(

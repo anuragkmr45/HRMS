@@ -7,26 +7,42 @@ interface ResendSendResponse {
 }
 
 export class ResendEmailProvider implements EmailProvider {
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly requestTimeoutMs = 5000
+  ) {}
 
   async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": input.idempotencyKey
-      },
-      body: JSON.stringify({
-        from: input.from,
-        to: [input.to],
-        subject: input.subject,
-        html: input.html,
-        text: input.text,
-        reply_to: input.replyTo,
-        tags: input.tags
-      })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    let response: Response;
+    try {
+      response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          from: input.from,
+          to: [input.to],
+          subject: input.subject,
+          html: input.html,
+          text: input.text,
+          reply_to: input.replyTo,
+          tags: input.tags
+        })
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw new ResendEmailError(408, "resend_request_timeout", `Resend email request timed out after ${this.requestTimeoutMs}ms.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     const payload = await safeJson(response);
     if (!response.ok) {
       throw new ResendEmailError(
@@ -41,6 +57,11 @@ export class ResendEmailProvider implements EmailProvider {
     }
     return { providerEmailId };
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
+    || error instanceof Error && error.name === "AbortError";
 }
 
 export class ResendEmailError extends Error {

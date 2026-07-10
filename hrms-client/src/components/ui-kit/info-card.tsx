@@ -8,7 +8,7 @@ const TONE: Record<Tone, string> = {
   primary: "bg-primary-soft text-primary",
   info: "bg-info/15 text-info",
   success: "bg-success/15 text-success",
-  warning: "bg-warning/20 text-warning-foreground",
+  warning: "bg-warning/20 text-warning-foreground dark:bg-warning/15 dark:text-warning",
   neutral: "bg-muted text-muted-foreground",
 };
 

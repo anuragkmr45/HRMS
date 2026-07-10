@@ -11,7 +11,7 @@ test.beforeAll(async ({ request }) => {
 test.describe("production browser smoke", () => {
   test("employee self-service modules render against the backend API", async ({ page }) => {
     await login(page, "e1@example.test");
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
 
     await page.getByRole("button", { name: "Notifications" }).click();
     await expect(page.getByText("Notifications").first()).toBeVisible();
@@ -27,7 +27,7 @@ test.describe("production browser smoke", () => {
 
   test("HR/admin routes render reports and configuration in API mode", async ({ page }) => {
     await login(page, "admin@example.test");
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
 
     await expectModule(page, "/employees", "Employees", /People|Add employee|Export/);
     await expectModule(page, "/attendance", "Attendance", "Department-wise attendance");
@@ -40,7 +40,7 @@ test.describe("production browser smoke", () => {
 
   test("project and utilization screens render in API mode", async ({ page }) => {
     await login(page, "admin@example.test");
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
 
     await expectModule(page, "/projects", "Projects", /Delivery|Add project|Export/);
     await expectModule(page, "/team-utilization", "Team Utilization", /Capacity|Bench|Overloaded/);
@@ -48,7 +48,7 @@ test.describe("production browser smoke", () => {
 
   test("helpdesk ticket creation mutates backend state in API mode", async ({ page }) => {
     await login(page, "e1@example.test");
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
 
     await expectModule(page, "/helpdesk", "Helpdesk", /Recent tickets|My queue/);
     await page.getByRole("button", { name: "Raise ticket" }).click();
@@ -78,7 +78,7 @@ test.describe("production browser smoke", () => {
     await login(page, "e1@example.test");
 
     await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
 
     await page.getByRole("button", { name: "Toggle Sidebar" }).click();
     await expect(page.getByRole("dialog", { name: "Sidebar" })).toBeVisible();
@@ -94,7 +94,7 @@ test.describe("production browser smoke", () => {
 
     await login(page, "admin@example.test");
     await captureWindowOpen(page);
-    await expect(page.getByLabel("Platform API ready")).toBeVisible();
+    await expectPlatformReady(page);
     await expectModule(page, "/reports", "Reports", /Every report supports|HR reports|Attendance/);
 
     const reports = [
@@ -131,6 +131,10 @@ async function expectBackendReady(request: APIRequestContext): Promise<void> {
     ready.ok(),
     `Backend API must be running before browser e2e. Expected readiness at ${API_BASE_URL}/api/v1/health/ready, got ${ready.status()}.`,
   ).toBe(true);
+}
+
+async function expectPlatformReady(page: Page): Promise<void> {
+  await expect(page.getByLabel(/^(Connected|Platform API ready)$/)).toBeVisible();
 }
 
 async function ensureHelpdeskCategory(request: APIRequestContext): Promise<void> {

@@ -35,8 +35,8 @@ export function SearchFilterBar({
   }, [debouncedDraft, onValueChange, value]);
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="relative w-full max-w-sm">
+    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="relative w-full min-w-0 sm:max-w-sm">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={draft}
@@ -45,7 +45,7 @@ export function SearchFilterBar({
           className="h-9 rounded-full pl-9"
         />
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         {filtersSlot ?? (
           <Button variant="outline" size="sm" className="rounded-full">
             <SlidersHorizontal className="mr-1.5 h-4 w-4" /> Filters

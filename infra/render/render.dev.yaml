@@ -16,7 +16,7 @@ services:
     dockerfilePath: ./hrms_backend/infra/docker/Dockerfile
     dockerContext: ./hrms_backend
     plan: starter
-    healthCheckPath: /api/v1/health/ready
+    healthCheckPath: /api/v1/health/live
     preDeployCommand: pnpm db:migrate:prod
     maxShutdownDelaySeconds: 60
     envVars:

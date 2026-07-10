@@ -46,6 +46,8 @@ describe("admin policy settings", () => {
             fullDayPunchWindow: true,
             punchInStart: "09:00",
             punchOutEnd: "23:59",
+            autoPunchOutEnabled: true,
+            autoPunchOutTime: "23:59",
             allowOffDayPunches: false
           })
         })
@@ -81,6 +83,8 @@ describe("admin policy settings", () => {
           punchInEnd: "11:00",
           punchOutStart: "17:00",
           punchOutEnd: "22:30",
+          autoPunchOutEnabled: false,
+          autoPunchOutTime: "22:45",
           allowOffDayPunches: true
         }
       }
@@ -98,6 +102,8 @@ describe("admin policy settings", () => {
         fullDayPunchWindow: false,
         punchInStart: "08:30",
         punchOutEnd: "22:30",
+        autoPunchOutEnabled: false,
+        autoPunchOutTime: "22:45",
         allowOffDayPunches: true
       })
     });

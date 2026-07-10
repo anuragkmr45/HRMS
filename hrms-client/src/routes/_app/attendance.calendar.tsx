@@ -1,10 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataCard, StatusBadge, EmptyState } from "@/components/ui-kit";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
+import type { Role } from "@/lib/mock/roles";
 import { useAttendanceMonthlyCalendar } from "@/domains/attendance";
 import {
   asArray,
@@ -19,12 +21,14 @@ export const Route = createFileRoute("/_app/attendance/calendar")({
   component: AttendanceCalendar,
 });
 
+const ATTENDANCE_OVERSIGHT_ROLES: Role[] = ["hr_admin", "main_admin", "manager"];
+
 type DayStatus = "present" | "wfh" | "late" | "absent" | "leave" | "weekend" | "holiday" | "future";
 
 const STATUS_CLS: Record<DayStatus, string> = {
   present: "bg-success/15 text-success border-success/30",
   wfh: "bg-info/15 text-info border-info/30",
-  late: "bg-warning/20 text-warning-foreground border-warning/40",
+  late: "bg-warning/20 text-warning-foreground border-warning/40 dark:bg-warning/15 dark:text-warning dark:border-warning/30",
   absent: "bg-destructive/15 text-destructive border-destructive/30",
   leave: "bg-primary-soft text-primary border-primary/30",
   weekend: "bg-muted text-muted-foreground/60 border-border",
@@ -77,6 +81,15 @@ function selectedDayDetail(record: ApiRecord | undefined, status: DayStatus): st
 }
 
 function AttendanceCalendar() {
+  const { activeRole } = useAuth();
+  if (activeRole && ATTENDANCE_OVERSIGHT_ROLES.includes(activeRole)) {
+    return <Navigate to="/attendance" />;
+  }
+
+  return <EmployeeAttendanceCalendar />;
+}
+
+function EmployeeAttendanceCalendar() {
   const today = new Date();
   const [cursor, setCursor] = useState({ y: today.getFullYear(), m: today.getMonth() });
   const [selected, setSelected] = useState<number>(today.getDate());

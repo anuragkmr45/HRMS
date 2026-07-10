@@ -17,7 +17,7 @@ services:
     dockerfilePath: ./hrms_backend/infra/docker/Dockerfile
     dockerContext: ./hrms_backend
     plan: starter
-    healthCheckPath: /api/v1/health/ready
+    healthCheckPath: /api/v1/health/live
     preDeployCommand: pnpm db:migrate:prod
     maxShutdownDelaySeconds: 60
     envVars:
@@ -77,17 +77,13 @@ services:
       - key: EMAIL_DELIVERY_PROVIDER
         value: "resend"
       - key: EMAIL_DELIVERY_MODE
-        value: "send"
-      - key: RESEND_API_KEY
-        sync: false
+        value: "disabled"
       - key: RESEND_FROM_EMAIL
         value: "Hawkaii HRMS <verify@hawkaii.in>"
       - key: RESEND_FROM_NAME
         value: "Hawkaii HRMS"
       - key: RESEND_REPLY_TO_EMAIL
         value: "support@hawkaii.in"
-      - key: RESEND_WEBHOOK_SECRET
-        sync: false
       - key: RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_WINDOW_SECONDS

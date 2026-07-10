@@ -20,7 +20,14 @@ try {
       ($1, 'DIRECTOR', 'Director/HoD', 10, 'active'),
       ($2, 'REVIEWER', 'Reviewer', 6, 'active'),
       ($3, 'FINANCE_MANAGER', 'Finance Manager', 8, 'active'),
-      ($4, 'EMPLOYEE', 'Employee', 1, 'active')
+      ($4, 'EMPLOYEE', 'Employee', 1, 'active'),
+      ($5, 'ADMIN', 'Admin', 9, 'active'),
+      ($6, 'HR_MANAGER', 'HR Manager', 7, 'active'),
+      ($7, 'PROJECT_MANAGER', 'Project Manager', 6, 'active'),
+      ($8, 'ASSET_MANAGER', 'Asset Manager', 6, 'active'),
+      ($9, 'AUDITOR', 'Auditor', 5, 'active'),
+      ($10, 'HELPDESK_AGENT', 'Helpdesk Agent', 3, 'active'),
+      ($11, 'HELPDESK_MANAGER', 'Helpdesk Manager', 6, 'active')
      ON CONFLICT (id) DO UPDATE
      SET designation_code = EXCLUDED.designation_code,
          title = EXCLUDED.title,
@@ -32,7 +39,14 @@ try {
       seedIds.designationDirector,
       seedIds.designationReviewer,
       seedIds.designationFinance,
-      seedIds.designationEmployee
+      seedIds.designationEmployee,
+      seedIds.designationAdmin,
+      seedIds.designationHrManager,
+      seedIds.designationProjectManager,
+      seedIds.designationAssetManager,
+      seedIds.designationAuditor,
+      seedIds.designationHelpdeskAgent,
+      seedIds.designationHelpdeskManager
     ]
   );
   await client.query(

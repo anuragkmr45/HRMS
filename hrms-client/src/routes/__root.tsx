@@ -16,10 +16,31 @@ import { ExpensesProvider } from "@/lib/expenses-store";
 import { AssetsProvider } from "@/lib/assets-store";
 import { HelpdeskProvider } from "@/lib/helpdesk-store";
 import { AdminSettingsProvider } from "@/lib/admin-settings-store";
+import { ThemeProvider } from "@/lib/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import appCss from "../styles.css?url";
+
+const themeInitScript = `
+(function () {
+  try {
+    var key = "hawkaii-theme";
+    var stored = localStorage.getItem(key);
+    var preference = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+    var systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var resolved = preference === "system" ? (systemDark ? "dark" : "light") : preference;
+    var root = document.documentElement;
+
+    root.classList.toggle("dark", resolved === "dark");
+    root.dataset.theme = preference;
+    root.dataset.resolvedTheme = resolved;
+    root.style.colorScheme = resolved;
+  } catch (error) {
+    document.documentElement.dataset.theme = "system";
+  }
+})();
+`;
 
 function NotFoundComponent() {
   return (
@@ -111,8 +132,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <HeadContent />
       </head>
       <body>
@@ -127,28 +149,30 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <EmployeesProvider>
-          <LeaveProvider>
-            <ProjectsProvider>
-              <TimesheetsProvider>
-                <ExpensesProvider>
-                  <AssetsProvider>
-                    <HelpdeskProvider>
-                      <AdminSettingsProvider>
-                        <TooltipProvider delayDuration={150}>
-                          <Outlet />
-                          <Toaster />
-                        </TooltipProvider>
-                      </AdminSettingsProvider>
-                    </HelpdeskProvider>
-                  </AssetsProvider>
-                </ExpensesProvider>
-              </TimesheetsProvider>
-            </ProjectsProvider>
-          </LeaveProvider>
-        </EmployeesProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <EmployeesProvider>
+            <LeaveProvider>
+              <ProjectsProvider>
+                <TimesheetsProvider>
+                  <ExpensesProvider>
+                    <AssetsProvider>
+                      <HelpdeskProvider>
+                        <AdminSettingsProvider>
+                          <TooltipProvider delayDuration={150}>
+                            <Outlet />
+                            <Toaster />
+                          </TooltipProvider>
+                        </AdminSettingsProvider>
+                      </HelpdeskProvider>
+                    </AssetsProvider>
+                  </ExpensesProvider>
+                </TimesheetsProvider>
+              </ProjectsProvider>
+            </LeaveProvider>
+          </EmployeesProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

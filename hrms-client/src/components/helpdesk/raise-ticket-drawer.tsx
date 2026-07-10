@@ -102,7 +102,7 @@ export function RaiseTicketDrawer({ open, onOpenChange, defaultCategory }: Props
       }
     >
       <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Category</Label>
             <Select
@@ -162,7 +162,7 @@ export function RaiseTicketDrawer({ open, onOpenChange, defaultCategory }: Props
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Priority</Label>
             <Select value={priority} onValueChange={(v) => setPriority(v as TicketPriority)}>
@@ -186,7 +186,7 @@ export function RaiseTicketDrawer({ open, onOpenChange, defaultCategory }: Props
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Related asset (optional)</Label>
             <Select

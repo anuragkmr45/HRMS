@@ -257,7 +257,7 @@ function EmployeeProfilePage() {
         </div>
 
         {/* Quick stats strip */}
-        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
           <QuickStat label="Tenure" value={tenure(employee.joinedAt)} />
           <QuickStat label="Work mode" value={WORK_MODE_LABEL[employee.workMode]} />
           <QuickStat label="Type" value={EMPLOYMENT_TYPE_LABEL[employee.employmentType]} />
@@ -688,7 +688,7 @@ function DocumentsTab({ documents }: { documents: EmployeeDocument[] }) {
                           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
                           d.verified
                             ? "border-success/30 bg-success/10 text-success"
-                            : "border-warning/40 bg-warning/15 text-warning-foreground",
+                            : "border-warning/40 bg-warning/15 text-warning-foreground dark:border-warning/30 dark:bg-warning/15 dark:text-warning",
                         )}
                       >
                         {d.verified ? (

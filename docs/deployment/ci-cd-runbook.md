@@ -28,13 +28,13 @@ Pushes to `dev`, `qa`, or `main` run checks and then trigger the matching Render
 
 ## Frontend Deployment
 
-The frontend is Cloudflare-oriented. Configure Cloudflare branch/project deployment:
+The frontend is Vercel-oriented. Configure three Vercel projects, each with root directory hrms-client and the matching Git branch/env vars:
 
-- `main` -> `https://hawkaii.in`
-- `qa` -> `https://qa.hawkaii.in`
-- `dev` -> `https://dev.hawkaii.in`
+- production project: branch main, domain https://hawkaii.in
+- QA project: branch qa, domain https://qa.hawkaii.in
+- hosted dev project: branch dev, domain https://dev.hawkaii.in
 
-The GitHub workflow validates frontend builds but does not directly deploy Cloudflare. Do not enable duplicate frontend deploy mechanisms unless one is explicitly disabled.
+The GitHub workflow validates frontend builds but does not directly deploy Vercel. Use Vercel Git integration for frontend deploys, and do not add a second GitHub Actions frontend deploy unless Vercel Git deploys are disabled.
 
 ## Post-Deploy Smoke
 

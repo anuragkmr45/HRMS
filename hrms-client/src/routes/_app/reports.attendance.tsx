@@ -154,7 +154,7 @@ function AttendanceReports() {
 
   return (
     <Tabs defaultValue="daily">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="daily">Daily Attendance</TabsTrigger>
         <TabsTrigger value="late">Late Arrivals</TabsTrigger>
         <TabsTrigger value="early">Early Departures</TabsTrigger>

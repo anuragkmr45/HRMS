@@ -93,11 +93,24 @@ describe("auth onboarding and password APIs", () => {
     });
     expect(loginBeforeBootstrap.statusCode).toBe(200);
     expect(loginBeforeBootstrap.json().user.roles).toEqual(["Employee"]);
+    expect(loginBeforeBootstrap.json()).toMatchObject({ next_step: "company_bootstrap" });
+    const pendingSession = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: authHeader(loginBeforeBootstrap.json().access_token)
+    });
+    expect(pendingSession.statusCode).toBe(200);
+    expect(pendingSession.json()).toMatchObject({
+      setup_required: true,
+      next_step: "company_bootstrap"
+    });
+    const resumedBootstrapToken = pendingSession.json().dev_only.company_bootstrap_token;
+    expect(typeof resumedBootstrapToken).toBe("string");
 
     const logoBody = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00]);
     const logoUpload = await multipartUpload(app, {
       url: "/api/v1/onboarding/company-logo",
-      fields: { bootstrap_token: bootstrapToken },
+      fields: { bootstrap_token: resumedBootstrapToken },
       file: {
         fieldName: "file",
         fileName: "acme-logo.jpg",
@@ -117,13 +130,15 @@ describe("auth onboarding and password APIs", () => {
       method: "POST",
       url: "/api/v1/onboarding/company-bootstrap",
       payload: {
-        bootstrap_token: bootstrapToken,
+        bootstrap_token: resumedBootstrapToken,
         company_profile: {
           company_name: "Acme HRMS India",
           timezone: "Asia/Kolkata",
           locale: "en-IN",
           fiscal_year_start_month: 4
         },
+        departments: ["Engineering", "Customer Success", "People Ops"],
+        designations: ["Principal Engineer", "Customer Success Lead", "People Ops Manager"],
         first_admin_profile: {
           full_name: "Asha Admin",
           landing_page: "/admin-settings"
@@ -136,7 +151,22 @@ describe("auth onboarding and password APIs", () => {
       status: "active",
       logo_document_id: logoUpload.json().company.logo_document_id
     });
+    const bootstrappedCompanyId = bootstrap.json().company.id as string;
+    const bootstrappedDepartments = app.store.departments.filter((department) => department.company_id === bootstrappedCompanyId);
+    const bootstrappedDesignations = app.store.designations.filter((designation) => designation.company_id === bootstrappedCompanyId);
+    expect(bootstrappedDepartments.map((department) => department.name)).toEqual(["Engineering", "Customer Success", "People Ops"]);
+    expect(bootstrappedDesignations.map((designation) => designation.title)).toEqual(["Principal Engineer", "Customer Success Lead", "People Ops Manager"]);
+    expect(app.store.adminPolicies.filter((policy) => policy.company_id === bootstrappedCompanyId).map((policy) => policy.policy_key).sort()).toEqual([
+      "asset",
+      "attendance",
+      "expense",
+      "leave",
+      "sla",
+      "timesheet"
+    ]);
     expect(bootstrap.json().admin_user.roles).toContain("Admin");
+    expect(bootstrap.json().admin_user.department_id).toBe(bootstrappedDepartments[0]?.id);
+    expect(bootstrap.json().admin_user.designation_id).toBe(bootstrappedDesignations[0]?.id);
     expect(bootstrap.json().setup_progress).toMatchObject({ company_profile: "completed", first_admin: "completed" });
 
     const duplicateBootstrap = await app.inject({

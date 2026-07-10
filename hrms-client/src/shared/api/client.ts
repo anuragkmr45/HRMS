@@ -36,7 +36,9 @@ export async function apiRequest<T = ApiRecord>(
   options: ApiRequestOptions = {},
 ): Promise<T> {
   if (!isApiEnabled()) {
-    throw new ApiUnavailableError("Backend API is disabled by VITE_API_ENABLED.");
+    throw new ApiUnavailableError(
+      "This feature is not connected to the HRMS server in this environment.",
+    );
   }
 
   await waitForClientRateLimit();
@@ -65,7 +67,7 @@ export async function apiRequest<T = ApiRecord>(
     });
   } catch (error) {
     throw new ApiUnavailableError(
-      "Backend API request failed before a response was received.",
+      "We could not reach the HRMS server. Please check your internet connection and try again.",
       error,
     );
   }
@@ -92,7 +94,9 @@ export async function apiRequest<T = ApiRecord>(
 export async function withApiFallback<T>(apiCall: () => Promise<T>, fallback: () => T): Promise<T> {
   if (!isApiEnabled()) {
     if (isMockFallbackEnabled()) return fallback();
-    throw new ApiUnavailableError("Backend API is disabled and mock fallback is not enabled.");
+    throw new ApiUnavailableError(
+      "This page is not connected to the HRMS server in this environment.",
+    );
   }
 
   try {

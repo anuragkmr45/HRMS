@@ -14,12 +14,13 @@ interface Props {
   tone?: StatTone;
   /** Subtle gradient ribbon at the top of the card. */
   accent?: boolean;
+  className?: string;
 }
 
 const TONE: Record<StatTone, string> = {
   primary: "bg-primary-soft text-primary",
   success: "bg-success/15 text-success",
-  warning: "bg-warning/20 text-warning-foreground",
+  warning: "bg-warning/20 text-warning-foreground dark:bg-warning/15 dark:text-warning",
   info: "bg-info/15 text-info",
   destructive: "bg-destructive/15 text-destructive",
 };
@@ -40,9 +41,10 @@ export function StatCard({
   icon: Icon,
   tone = "primary",
   accent = false,
+  className,
 }: Props) {
   return (
-    <Card className="surface-card-hover relative overflow-hidden p-5">
+    <Card className={cn("surface-card-hover relative overflow-hidden p-5", className)}>
       {accent && (
         <div
           aria-hidden
@@ -78,6 +80,7 @@ export function StatCard({
         </div>
         {Icon && (
           <div
+            data-stat-icon
             className={cn(
               "grid h-11 w-11 shrink-0 place-items-center rounded-xl ring-1 ring-border/60",
               TONE[tone],

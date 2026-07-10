@@ -97,7 +97,7 @@ function AgentQueueScreen() {
 
   return (
     <Tabs defaultValue="mine">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="new">New ({groups.new.length})</TabsTrigger>
         <TabsTrigger value="mine">Assigned to me ({groups.mine.length})</TabsTrigger>
         <TabsTrigger value="unassigned">Unassigned ({groups.unassigned.length})</TabsTrigger>

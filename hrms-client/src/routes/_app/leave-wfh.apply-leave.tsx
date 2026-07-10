@@ -57,8 +57,7 @@ function ApplyLeavePage() {
         reason,
         document_ids: [],
       });
-      const requestId = typeof response.request_id === "string" ? response.request_id : "submitted";
-      toast.success(`Leave request ${requestId} submitted`);
+      toast.success("Leave request submitted");
       navigate({ to: "/leave-wfh" });
     } catch (error) {
       toast.error(errorMessage(error));

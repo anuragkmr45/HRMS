@@ -8,19 +8,24 @@ export const Route = createFileRoute("/_app/attendance")({
   component: AttendanceLayout,
 });
 
-const ADMIN_ROLES: Role[] = ["hr_admin", "main_admin"];
+const ATTENDANCE_ADMIN_ROLES: Role[] = ["hr_admin", "main_admin"];
+const ATTENDANCE_OVERSIGHT_ROLES: Role[] = ["hr_admin", "main_admin", "manager"];
 
 const TABS = [
   { to: "/attendance", label: "Overview", icon: LayoutDashboard, exact: true },
-  { to: "/attendance/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/attendance/calendar", label: "Calendar", icon: CalendarDays, selfOnly: true },
   { to: "/attendance/exceptions", label: "Exceptions", icon: AlertTriangle, adminOnly: true },
 ];
 
 function AttendanceLayout() {
   const { activeRole } = useAuth();
-  const visible = TABS.filter(
-    (t) => !t.adminOnly || (activeRole && ADMIN_ROLES.includes(activeRole)),
-  );
+  const isAdminRole = activeRole && ATTENDANCE_ADMIN_ROLES.includes(activeRole);
+  const isOversightRole = activeRole && ATTENDANCE_OVERSIGHT_ROLES.includes(activeRole);
+  const visible = TABS.filter((tab) => {
+    if (tab.adminOnly) return isAdminRole;
+    if (tab.selfOnly) return !isOversightRole;
+    return true;
+  });
 
   return (
     <>

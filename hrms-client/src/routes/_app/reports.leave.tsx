@@ -127,7 +127,7 @@ function LeaveReports() {
 
   return (
     <Tabs defaultValue="balance">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="balance">Leave Balance</TabsTrigger>
         <TabsTrigger value="applied">Leave Applied</TabsTrigger>
         <TabsTrigger value="decisions">Approved / Rejected</TabsTrigger>

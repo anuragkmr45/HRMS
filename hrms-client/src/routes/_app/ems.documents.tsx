@@ -219,7 +219,7 @@ function MyDocuments() {
         onChange={(event) => void uploadSelectedFile(event)}
       />
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="ems-tab-intro flex flex-wrap items-center justify-between gap-3 p-4">
         <p className="text-sm text-muted-foreground">
           Upload, replace, and track verification status of your personal documents.
         </p>
@@ -243,15 +243,12 @@ function MyDocuments() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {loading
           ? Array.from({ length: 3 }).map((_, index) => (
-              <Card key={index} className="h-48 animate-pulse rounded-2xl border-border/60 p-5" />
+              <Card key={index} className="ems-record-card h-48 animate-pulse rounded-2xl p-5" />
             ))
           : docs.map((d) => (
-              <Card
-                key={d.id}
-                className="rounded-2xl border-border/60 p-5 transition hover:-translate-y-0.5 hover:shadow-md"
-              >
+              <Card key={d.id} className="ems-record-card rounded-2xl p-5">
                 <div className="flex items-start justify-between">
-                  <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+                  <div className="ems-record-icon">
                     <FileText className="h-5 w-5" />
                   </div>
                   {statusToBadge(d.status)}

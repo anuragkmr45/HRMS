@@ -67,7 +67,7 @@ function MyAssets() {
                           d < 0
                             ? "text-destructive font-medium"
                             : d <= 60
-                              ? "text-warning-foreground font-medium"
+                              ? "font-medium text-warning-foreground dark:text-warning"
                               : ""
                         }
                       >

@@ -7,10 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { PASSWORD_RULES, passwordScore } from "@/lib/password";
+import {
+  hasCompletedOneTimeToken,
+  rememberCompletedOneTimeToken,
+} from "@/lib/one-time-token-history";
 
 interface SearchParams {
   token?: string;
 }
+
+const COMPLETED_SET_PASSWORD_TOKENS_KEY = "hawkaii_completed_set_password_tokens";
 
 export const Route = createFileRoute("/set-password")({
   validateSearch: (s: Record<string, unknown>): SearchParams => ({
@@ -33,6 +39,7 @@ function SetPasswordPage() {
 
   const meta = passwordScore(pwd);
   const passedAll = PASSWORD_RULES.every((r) => r.test(pwd));
+  const completedToken = hasCompletedOneTimeToken(COMPLETED_SET_PASSWORD_TOKENS_KEY, token);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,14 +51,19 @@ function SetPasswordPage() {
     try {
       const result = await setPasswordForToken(token, pwd);
       if (!result.ok) return setError(result.error ?? "Could not set password.");
+      rememberCompletedOneTimeToken(COMPLETED_SET_PASSWORD_TOKENS_KEY, token);
       setSuccess({
         isFirstAdmin: !!result.isFirstAdmin,
         role: result.user?.roles[0] ?? "employee",
       });
       setTimeout(() => {
-        if (result.requiresLogin) navigate({ to: "/login" });
-        else if (result.isFirstAdmin) navigate({ to: "/onboarding" });
-        else navigate({ to: dashboardPathForRole(result.user?.roles[0] ?? "employee") });
+        if (result.requiresLogin) navigate({ to: "/login", replace: true });
+        else if (result.isFirstAdmin) navigate({ to: "/onboarding", replace: true });
+        else
+          navigate({
+            to: dashboardPathForRole(result.user?.roles[0] ?? "employee"),
+            replace: true,
+          });
       }, 1400);
     } finally {
       setSubmitting(false);
@@ -63,6 +75,21 @@ function SetPasswordPage() {
       <AuthShell title="Invalid link" subtitle="This password setup link is not valid.">
         <Button asChild className="h-11 w-full rounded-xl" variant="outline">
           <Link to="/signup">Start a new signup</Link>
+        </Button>
+      </AuthShell>
+    );
+  }
+
+  if (completedToken) {
+    return (
+      <AuthShell
+        title="Password link already used"
+        subtitle="This password setup link has already been completed."
+      >
+        <Button asChild className="h-11 w-full rounded-xl" variant="outline">
+          <Link to="/login" replace>
+            Continue to sign in
+          </Link>
         </Button>
       </AuthShell>
     );
@@ -196,7 +223,7 @@ function tone(t: "destructive" | "warning" | "info" | "success") {
     case "destructive":
       return "font-medium text-destructive";
     case "warning":
-      return "font-medium text-warning-foreground";
+      return "font-medium text-warning-foreground dark:text-warning";
     case "info":
       return "font-medium text-info";
     case "success":

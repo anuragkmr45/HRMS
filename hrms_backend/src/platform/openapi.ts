@@ -898,7 +898,7 @@ const adminPolicySchema = {
     config: {
       type: "object",
       additionalProperties: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }] },
-      example: { graceMinutes: 10, allowRegularization: true }
+      example: { graceMinutes: 10, allowRegularization: true, autoPunchOutEnabled: true, autoPunchOutTime: "23:59" }
     },
     updated_at: dateTime("Admin policy update timestamp"),
     version: { type: "integer", minimum: 1, example: 1 }
@@ -916,7 +916,7 @@ const adminPolicyUpdateBody = {
     config: {
       type: "object",
       additionalProperties: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }] },
-      example: { graceMinutes: 15, allowRegularization: true }
+      example: { graceMinutes: 15, allowRegularization: true, autoPunchOutEnabled: true, autoPunchOutTime: "22:30" }
     },
     expected_version: { type: "integer", minimum: 1, example: 1 }
   },

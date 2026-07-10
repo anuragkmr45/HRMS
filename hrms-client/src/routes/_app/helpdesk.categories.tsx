@@ -164,7 +164,7 @@ function CategoryEditor({
       }
     >
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Key</Label>
             <Input
@@ -179,7 +179,7 @@ function CategoryEditor({
             <Input value={c.label} onChange={(e) => setC({ ...c, label: e.target.value })} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Default assignee</Label>
             <Input

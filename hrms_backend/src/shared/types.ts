@@ -59,6 +59,7 @@ export interface AuthUser {
 
 export interface Department {
   id: UUID;
+  company_id: UUID | null;
   department_code: string;
   name: string;
   cost_center: string | null;
@@ -71,6 +72,7 @@ export interface Department {
 
 export interface Designation {
   id: UUID;
+  company_id: UUID | null;
   designation_code: string;
   title: string;
   level: number | null;
@@ -136,6 +138,7 @@ export interface AdminWorkflowConfigRecord {
 
 export interface AdminPolicyConfigRecord {
   id: UUID;
+  company_id: UUID | null;
   policy_key: AdminPolicyKey;
   module: string;
   label: string;

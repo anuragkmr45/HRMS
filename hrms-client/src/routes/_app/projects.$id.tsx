@@ -282,7 +282,8 @@ function ProjectDetailPage() {
           className={cn(
             "rounded-full border px-2 py-0.5 text-[11px] font-medium",
             m.priority === "critical" && "border-destructive/30 bg-destructive/10 text-destructive",
-            m.priority === "high" && "border-warning/40 bg-warning/15 text-warning-foreground",
+            m.priority === "high" &&
+              "border-warning/40 bg-warning/15 text-warning-foreground dark:border-warning/30 dark:bg-warning/15 dark:text-warning",
             m.priority === "medium" && "border-info/30 bg-info/10 text-info",
             m.priority === "low" && "border-border bg-muted text-muted-foreground",
           )}
@@ -381,7 +382,7 @@ function ProjectDetailPage() {
       />
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="flex w-full flex-wrap gap-1 rounded-full bg-secondary/50 p-1">
+        <TabsList className="w-full justify-start rounded-full bg-secondary/50 p-1">
           <TabsTrigger value="overview" className="rounded-full">
             Overview
           </TabsTrigger>

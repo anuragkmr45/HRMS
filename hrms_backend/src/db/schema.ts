@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   uuid
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const core = pgSchema("core");
 export const expenses = pgSchema("expenses");
@@ -35,6 +36,7 @@ export const departments = core.table(
   "departments",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id"),
     departmentCode: text("department_code").notNull(),
     name: text("name").notNull(),
     costCenter: text("cost_center"),
@@ -47,8 +49,8 @@ export const departments = core.table(
     version
   },
   (table) => [
-    uniqueIndex("core_departments_code_active_uq").on(table.departmentCode),
-    index("core_departments_status_name_idx").on(table.status, table.name)
+    uniqueIndex("core_departments_company_code_uq").on(sql`COALESCE(${table.companyId}, '00000000-0000-0000-0000-000000000000'::uuid)`, table.departmentCode),
+    index("core_departments_company_status_idx").on(table.companyId, table.status, table.name)
   ]
 );
 
@@ -56,6 +58,7 @@ export const designations = core.table(
   "designations",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id"),
     designationCode: text("designation_code").notNull(),
     title: text("title").notNull(),
     level: integer("level"),
@@ -66,8 +69,8 @@ export const designations = core.table(
     version
   },
   (table) => [
-    uniqueIndex("core_designations_code_active_uq").on(table.designationCode),
-    index("core_designations_level_title_idx").on(table.level, table.title)
+    uniqueIndex("core_designations_company_code_uq").on(sql`COALESCE(${table.companyId}, '00000000-0000-0000-0000-000000000000'::uuid)`, table.designationCode),
+    index("core_designations_company_status_idx").on(table.companyId, table.status, table.title)
   ]
 );
 
@@ -332,6 +335,7 @@ export const adminPolicies = platform.table(
   "admin_policies",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id"),
     policyKey: text("policy_key").notNull(),
     module: text("module").notNull(),
     label: text("label").notNull(),
@@ -343,8 +347,8 @@ export const adminPolicies = platform.table(
     version
   },
   (table) => [
-    uniqueIndex("platform_admin_policies_key_uq").on(table.policyKey),
-    index("platform_admin_policies_module_status_idx").on(table.module, table.status)
+    uniqueIndex("platform_admin_policies_company_key_uq").on(sql`COALESCE(${table.companyId}, '00000000-0000-0000-0000-000000000000'::uuid)`, table.policyKey),
+    index("platform_admin_policies_company_module_status_idx").on(table.companyId, table.module, table.status)
   ]
 );
 

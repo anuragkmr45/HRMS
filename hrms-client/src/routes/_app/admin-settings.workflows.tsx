@@ -207,7 +207,7 @@ function WorkflowsScreen() {
               approvers, escalation window and rejection rule.
             </p>
           </div>
-          <div className="grid min-w-[280px] grid-cols-2 gap-2">
+          <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 md:min-w-[280px]">
             <MetricTile label="Workflows" value={workflowStats.total} icon={RouteIcon} />
             <MetricTile label="Active" value={workflowStats.active} icon={CheckCircle2} />
             <MetricTile label="Stages" value={workflowStats.stages} icon={UserRoundCheck} />
@@ -220,8 +220,8 @@ function WorkflowsScreen() {
         </div>
       </section>
 
-      <Card className="flex items-start gap-3 rounded-2xl border-warning/40 bg-warning/5 p-4 text-sm">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
+      <Card className="flex items-start gap-3 rounded-2xl border-warning/40 bg-warning/5 p-4 text-sm dark:border-warning/30 dark:bg-warning/10">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground dark:text-warning" />
         <div>
           <p className="font-medium text-foreground">Self-approval protection is enforced.</p>
           <p className="mt-0.5 text-muted-foreground">
@@ -387,9 +387,9 @@ function WorkflowCard({
             />
           </div>
 
-          <div className="mt-5 rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs text-muted-foreground">
+          <div className="mt-5 rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs text-muted-foreground dark:border-warning/30 dark:bg-warning/10">
             <div className="mb-1 flex items-center gap-2 font-medium text-foreground">
-              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
+              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground dark:text-warning" />
               Change impact
             </div>
             New submissions use the latest saved workflow. Existing in-flight requests keep their

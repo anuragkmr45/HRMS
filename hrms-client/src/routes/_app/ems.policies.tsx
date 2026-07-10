@@ -96,9 +96,12 @@ function MyPolicies() {
   };
   return (
     <div className="space-y-4 pt-4">
-      <p className="text-sm text-muted-foreground">
-        Read and acknowledge company policies. New versions appear at the top.
-      </p>
+      <div className="ems-tab-intro p-4">
+        <p className="text-sm font-medium">Policy library</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Read and acknowledge company policies. New versions appear at the top.
+        </p>
+      </div>
       {apiEnabled && policiesQuery.error ? (
         <EmptyState
           title="Policies could not be loaded"
@@ -110,12 +113,9 @@ function MyPolicies() {
       ) : null}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {rows.map((p) => (
-          <Card
-            key={p.id}
-            className="rounded-2xl border-border/60 p-5 transition hover:-translate-y-0.5 hover:shadow-md"
-          >
+          <Card key={p.id} className="ems-record-card rounded-2xl p-5">
             <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+              <div className="ems-record-icon">
                 <BookOpen className="h-5 w-5" />
               </div>
               <div className="flex-1">

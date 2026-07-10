@@ -224,7 +224,7 @@ function TimesheetReports() {
 
   return (
     <Tabs defaultValue="missing">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="missing">Missing</TabsTrigger>
         <TabsTrigger value="submitted">Submitted Hours</TabsTrigger>
         <TabsTrigger value="approved">Approved Hours</TabsTrigger>

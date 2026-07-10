@@ -311,7 +311,7 @@ function UtilizationPage() {
         </TabsList>
 
         <TabsContent value="dashboard" className="space-y-3">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total capacity"
               value={`${stats.cap}h`}
@@ -341,7 +341,7 @@ function UtilizationPage() {
               hint="Across team"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Billable hours"
               value={`${stats.billable.toFixed(0)}h`}
@@ -418,7 +418,7 @@ function UtilizationPage() {
                     />
                     {statusBadge(r.status)}
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                     <div>
                       <p className="text-muted-foreground">Available from</p>
                       <p className="font-semibold">Now</p>
@@ -495,7 +495,7 @@ function UtilizationPage() {
         </TabsContent>
 
         <TabsContent value="billable" className="space-y-3">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <StatCard
               label="Billable"
               value={`${stats.billable.toFixed(0)}h`}
@@ -535,7 +535,7 @@ function UtilizationPage() {
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs">
                   <span>Non-billable</span>
-                  <span className="font-semibold text-warning-foreground">
+                  <span className="font-semibold text-warning-foreground dark:text-warning">
                     {stats.nonBillable.toFixed(0)}h
                   </span>
                 </div>

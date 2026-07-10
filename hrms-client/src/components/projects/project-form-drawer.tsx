@@ -503,10 +503,10 @@ export function ProjectFormDrawer({ open, onOpenChange, initial, actor = "System
                     />
                   </div>
                   {m.allocation > 100 && (
-                    <div className="sm:col-span-2 rounded-xl border border-warning/30 bg-warning/10 p-3">
+                    <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 sm:col-span-2">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium text-warning-foreground">
+                          <p className="text-sm font-medium text-warning-foreground dark:text-warning">
                             Allocation is above 100%
                           </p>
                           <p className="text-xs text-muted-foreground">

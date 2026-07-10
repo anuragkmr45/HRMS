@@ -22,6 +22,7 @@ export interface EmailDeliveryConfig {
   resendFromName?: string;
   resendReplyToEmail?: string;
   resendWebhookSecret?: string;
+  resendRequestTimeoutMs: number;
   frontendUrl: string;
   appUrl: string;
   verificationTokenTtlSeconds: number;

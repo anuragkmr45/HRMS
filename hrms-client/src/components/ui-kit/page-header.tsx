@@ -94,7 +94,7 @@ export function PageHeader({
       {showCrumbs && (
         <nav
           aria-label="Breadcrumb"
-          className="flex items-center gap-1 text-xs text-muted-foreground"
+          className="-mx-1 flex max-w-full items-center gap-1 overflow-x-auto px-1 text-xs text-muted-foreground"
         >
           <Link
             to="/dashboard"
@@ -107,7 +107,7 @@ export function PageHeader({
             const last = i === crumbs.length - 1;
             const label = c.isParam ? c.raw : pretty(c.raw);
             return (
-              <span key={c.href} className="inline-flex items-center gap-1">
+              <span key={c.href} className="inline-flex shrink-0 items-center gap-1">
                 <ChevronRight className="h-3 w-3 opacity-60" />
                 {last || c.isParam ? (
                   <span className={last ? "font-medium text-foreground" : ""}>{label}</span>
@@ -132,7 +132,7 @@ export function PageHeader({
               {eyebrow}
             </p>
           )}
-          <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-[26px]">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-[26px]">
             {title}
           </h1>
           {description && (
@@ -141,7 +141,11 @@ export function PageHeader({
             </p>
           )}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        {actions && (
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            {actions}
+          </div>
+        )}
       </div>
     </div>
   );

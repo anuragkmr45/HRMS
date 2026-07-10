@@ -25,6 +25,7 @@ const configSchema = z.object({
   DATABASE_URL: z.string().optional(),
   TEST_DATABASE_URL: z.string().optional(),
   VALKEY_URL: z.string().optional(),
+  HRMS_SEED_IF_EMPTY: booleanEnv.default(false),
   CLOUDINARY_CLOUD_NAME: z.string().default("local-cloudinary-mock"),
   CLOUDINARY_API_KEY: z.string().default("local-cloudinary-key"),
   CLOUDINARY_API_SECRET: z.string().default("local-cloudinary-secret"),
@@ -66,6 +67,7 @@ const configSchema = z.object({
   RESEND_FROM_NAME: z.string().optional(),
   RESEND_REPLY_TO_EMAIL: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  RESEND_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5000),
   RESEND_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
   EMAIL_VERIFICATION_TOKEN_TTL_SECONDS: z.coerce.number().int().min(300).default(runtimeDefaults.EMAIL_VERIFICATION_TOKEN_TTL_SECONDS),
   EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(1).default(runtimeDefaults.EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS),
@@ -107,17 +109,11 @@ const configSchema = z.object({
       message: "Hosted QA and production must run with NODE_ENV=production."
     });
   }
-  if (appEnv === "production" && config.EMAIL_DELIVERY_MODE !== "send") {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["EMAIL_DELIVERY_MODE"],
-      message: "EMAIL_DELIVERY_MODE must be 'send' in production."
-    });
-  }
   if (config.EMAIL_DELIVERY_MODE === "send") {
     requireField("RESEND_API_KEY");
     requireField("RESEND_FROM_EMAIL");
     requireField("FRONTEND_URL");
+    requireField("RESEND_WEBHOOK_SECRET");
   }
   if (config.CLOUDINARY_MOCK_UPLOADS && !localLikeEnvironments.has(appEnv)) {
     context.addIssue({
@@ -137,7 +133,6 @@ const configSchema = z.object({
         });
       }
     }
-    requireField("RESEND_WEBHOOK_SECRET");
     if (config.CLOUDINARY_MOCK_UPLOADS) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

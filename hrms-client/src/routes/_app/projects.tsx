@@ -477,7 +477,8 @@ function ProjectsPage() {
           <CircleDot className="h-3 w-3 text-success" /> Green = on track
         </span>
         <span className="inline-flex items-center gap-1">
-          <CircleDot className="h-3 w-3 text-warning-foreground" /> Amber = at risk
+          <CircleDot className="h-3 w-3 text-warning-foreground dark:text-warning" /> Amber = at
+          risk
         </span>
         <span className="inline-flex items-center gap-1">
           <CircleDot className="h-3 w-3 text-destructive" /> Red = critical

@@ -66,7 +66,7 @@ function ExpensesDashboard() {
 
     return (
       <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
           <StatCard
             label="Verification pending"
             value={summaryValue("finance_pending", verifPending.length)}
@@ -133,7 +133,7 @@ function ExpensesDashboard() {
     const returned = tickets.filter((t) => t.status === "manager_returned");
     return (
       <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
           <StatCard
             label="Pending verification"
             value={numberValue(queueCounts.manager_pending, queue.length)}
@@ -184,7 +184,7 @@ function ExpensesDashboard() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label="Submitted"
           value={summaryValue("submitted", submitted.length)}

@@ -193,7 +193,7 @@ function MonitorPage() {
 
   return (
     <div className="space-y-4 pt-2">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
         <StatCard
           label="Total requests"
           value={requests.length}
@@ -218,11 +218,11 @@ function MonitorPage() {
       </div>
 
       <Card className="rounded-2xl border-border/60 p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="grid gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:col-span-2 lg:col-span-1">
             <Filter className="h-3.5 w-3.5" /> Filters
           </div>
-          <div className="min-w-[160px]">
+          <div className="min-w-0">
             <Select value={dept} onValueChange={setDept}>
               <SelectTrigger>
                 <SelectValue placeholder="Department" />
@@ -237,7 +237,7 @@ function MonitorPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="min-w-[160px]">
+          <div className="min-w-0">
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger>
                 <SelectValue placeholder="Status" />
@@ -256,18 +256,18 @@ function MonitorPage() {
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="w-[160px]"
+            className="w-full lg:w-[160px]"
           />
           <Input
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="w-[160px]"
+            className="w-full lg:w-[160px]"
           />
-          <div className="ml-auto">
+          <div className="sm:col-span-2 lg:ml-auto">
             <Button
               size="sm"
-              className="rounded-full"
+              className="w-full rounded-full sm:w-auto"
               onClick={exportCsv}
               disabled={exportMutation.isPending}
             >

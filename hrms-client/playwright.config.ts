@@ -1,12 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 4173);
-const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${frontendPort}`;
+const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 5173);
+const frontendHost = process.env.E2E_FRONTEND_HOST ?? "localhost";
+const baseURL = process.env.E2E_BASE_URL ?? `http://${frontendHost}:${frontendPort}`;
 const apiBaseURL = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:3001";
 const skipWebServer = process.env.E2E_SKIP_WEB_SERVER === "1";
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: ["**/frontend-theme/**"],
   timeout: 60_000,
   expect: {
     timeout: 10_000,
@@ -23,7 +25,7 @@ export default defineConfig({
   webServer: skipWebServer
     ? undefined
     : {
-        command: `pnpm exec vite dev --host 127.0.0.1 --port ${frontendPort}`,
+        command: `pnpm exec vite dev --host ${frontendHost} --port ${frontendPort}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

@@ -30,6 +30,8 @@ import { useAuth, ROLE_MAP } from "@/lib/auth";
 import { UserAvatar } from "@/components/ui-kit/user-avatar";
 import { NotificationPanel } from "@/components/ui-kit/notification-panel";
 import { isApiEnabled } from "@/shared/api";
+import { AppearanceMenuItems } from "@/components/theme/appearance-menu";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -82,18 +84,18 @@ export function Topbar() {
         : "unavailable";
   const platformLabel =
     platformStatus === "ready"
-      ? "Platform API ready"
+      ? "Connected"
       : platformStatus === "checking"
-        ? "Checking platform API"
+        ? "Checking connection"
         : platformStatus === "disabled"
-          ? "Platform API disabled"
-          : "Platform API unavailable";
+          ? "Connection not configured"
+          : "Connection unavailable";
 
   if (!user || !activeRole) return null;
   const switchableRoles = Array.from(new Set(user.roles));
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/65 sm:px-6">
+    <header className="glass-topbar sticky top-0 z-30 flex h-16 items-center gap-2 border-b px-3 sm:px-6">
       <SidebarTrigger className="text-muted-foreground" />
 
       {/* Page title */}
@@ -110,7 +112,7 @@ export function Topbar() {
           <DropdownMenuTrigger asChild>
             <Button
               size="sm"
-              className="hidden rounded-full text-primary-foreground shadow-sm sm:inline-flex"
+              className="hidden rounded-full text-primary-foreground shadow-sm lg:inline-flex"
               style={{ background: "var(--gradient-primary)" }}
             >
               <Plus className="mr-1 h-4 w-4" /> Quick action
@@ -144,7 +146,7 @@ export function Topbar() {
           <TooltipTrigger asChild>
             <span
               aria-label={platformLabel}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border bg-card text-muted-foreground"
+              className="glass-control inline-flex h-9 w-9 items-center justify-center rounded-full border text-muted-foreground"
             >
               {platformStatus === "ready" ? (
                 <Server className="h-4 w-4 text-success" />
@@ -158,19 +160,21 @@ export function Topbar() {
           <TooltipContent>{platformLabel}</TooltipContent>
         </Tooltip>
 
+        <ThemeToggle className="hidden lg:inline-flex" />
+
         {/* Profile dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              className="flex items-center gap-2 rounded-full border bg-card px-1.5 py-1 text-left transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2"
+              className="glass-control flex items-center gap-2 rounded-full border px-1.5 py-1 text-left transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2"
               aria-label="Account menu"
             >
               <UserAvatar name={user.name} size="sm" />
-              <div className="hidden pr-1 text-xs leading-tight md:block">
+              <div className="hidden pr-1 text-xs leading-tight lg:block">
                 <p className="font-semibold">{user.name.split(" ")[0]}</p>
                 <p className="text-muted-foreground">{ROLE_MAP[activeRole].label}</p>
               </div>
-              <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground md:block" />
+              <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground lg:block" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">
@@ -193,6 +197,7 @@ export function Topbar() {
                 </Link>
               </DropdownMenuItem>
             )}
+            <AppearanceMenuItems />
             {switchableRoles.length > 1 && (
               <>
                 <DropdownMenuSeparator />

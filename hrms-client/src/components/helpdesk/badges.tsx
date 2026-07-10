@@ -12,7 +12,8 @@ const SLA_LABEL: Record<SlaState, string> = {
 
 const SLA_CLS: Record<SlaState, string> = {
   on_track: "bg-success/15 text-success border-success/20",
-  near_breach: "bg-warning/20 text-warning-foreground border-warning/40",
+  near_breach:
+    "bg-warning/20 text-warning-foreground border-warning/40 dark:bg-warning/15 dark:text-warning dark:border-warning/30",
   breached: "bg-destructive/15 text-destructive border-destructive/30",
   met: "bg-muted text-muted-foreground border-border",
 };

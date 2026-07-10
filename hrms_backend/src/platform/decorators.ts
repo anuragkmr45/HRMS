@@ -20,6 +20,7 @@ declare module "fastify" {
       DATABASE_URL?: string;
       TEST_DATABASE_URL?: string;
       VALKEY_URL?: string;
+      HRMS_SEED_IF_EMPTY: boolean;
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -61,6 +62,7 @@ declare module "fastify" {
       RESEND_FROM_NAME?: string;
       RESEND_REPLY_TO_EMAIL?: string;
       RESEND_WEBHOOK_SECRET?: string;
+      RESEND_REQUEST_TIMEOUT_MS: number;
       RESEND_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: number;
       EMAIL_VERIFICATION_TOKEN_TTL_SECONDS: number;
       EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS: number;

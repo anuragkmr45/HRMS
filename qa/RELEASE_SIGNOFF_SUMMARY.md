@@ -2,27 +2,44 @@
 
 ## Current Scope
 
-Deployment hardening, branch CI/CD, environment isolation, agile delivery process, and QA workbook upgrade.
+Strict 7-day hosted QA execution for Hawkaii HRMS on the active shared hosted QA/staging deployment.
+
+## Timeline
+
+- QA start: `2026-06-10 09:00 IST`
+- Planned completion: `2026-06-16`
+- Final submission: `2026-06-16 18:00 IST`
+
+## Active Environment
+
+- Frontend: `https://hawkaii-hrms.vercel.app`
+- API: `https://hawkaii-hrms-dev-gyvr.onrender.com`
+
+Future `hawkaii.in`, `qa.hawkaii.in`, and `dev.hawkaii.in` domain checks remain setup-required until isolated services are live.
 
 ## Release Gate
 
-- All P0 tests in `qa/TESTING_TEST_CASES.xlsx` must pass or have approved waiver.
-- Hosted QA/prod must use real DB, Valkey, Cloudinary, and API mode.
-- Production frontend is `https://hawkaii.in`.
+- All executable P0 tests in `qa/TESTING_TEST_CASES.xlsx` must pass or have an approved waiver.
+- Any failed P0 is `No-Go` unless explicitly waived.
+- Any P0 setup-required environment item makes the recommendation `Conditional Go` or `No-Go`, not `Go`.
+- Production create/update/delete testing is disabled without a documented safe test tenant and reset process.
 
-## Sprint Plan
+## Day-Wise Execution Points
 
-- Sprint 1: 41 story points
-- Sprint 2: 20 story points
-- Sprint 3: 8 story points
-- Sprint 4: 10 story points
-- Sprint 5: 9 story points
+- Day 1: 18 story points
+- Day 2: 13 story points
+- Day 3: 15 story points
+- Day 4: 11 story points
+- Day 5: 9 story points
+- Day 6: 19 story points
+- Day 7: 3 story points
 
 ## Known Manual Inputs
 
-- DNS records.
+- Future domain DNS records and certificates.
 - Render deploy hooks and secrets.
 - Neon branch connection strings.
 - Cloudinary credentials/product environments.
 - Resend secrets and verified sender.
 - GitHub Environment protection settings.
+- Safe production test tenant and reset process if production mutation testing is ever requested.

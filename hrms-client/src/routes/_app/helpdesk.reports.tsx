@@ -100,7 +100,7 @@ function ReportsScreen() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
         <StatCard label="Total tickets" value={tickets.length} icon={BarChart3} tone="primary" />
         <StatCard label="Resolved" value={totalResolved.length} icon={Activity} tone="success" />
         <StatCard label="Avg resolution" value={avgResolutionH + "h"} icon={Timer} tone="info" />

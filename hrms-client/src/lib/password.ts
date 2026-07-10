@@ -7,7 +7,7 @@ export interface PasswordRule {
 }
 
 export const PASSWORD_RULES: PasswordRule[] = [
-  { key: "len", label: "At least 8 characters", test: (v) => v.length >= 8 },
+  { key: "len", label: "At least 10 characters", test: (v) => v.length >= 10 },
   { key: "upper", label: "An uppercase letter", test: (v) => /[A-Z]/.test(v) },
   { key: "lower", label: "A lowercase letter", test: (v) => /[a-z]/.test(v) },
   { key: "num", label: "A number", test: (v) => /\d/.test(v) },

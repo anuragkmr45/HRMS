@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const API_BASE_URL = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:3001";
 const LOCAL_DEMO_PASSWORD = process.env.E2E_LOCAL_DEMO_PASSWORD ?? "LocalDev@123";
-const EMPLOYEE_EMAIL = process.env.E2E_EMPLOYEE_EMAIL ?? "e1@hawkaii.hex";
+const EMPLOYEE_EMAIL = process.env.E2E_EMPLOYEE_EMAIL ?? "e1@example.test";
 
 test.beforeAll(async ({ request }) => {
   const ready = await request.get(`${API_BASE_URL}/api/v1/health/ready`, { timeout: 5_000 });

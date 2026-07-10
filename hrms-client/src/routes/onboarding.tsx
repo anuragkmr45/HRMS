@@ -6,6 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useDocumentUploadPolicy } from "@/domains/documents";
 import {
   DEFAULT_MEDIA_UPLOAD_POLICY,
@@ -33,6 +40,7 @@ import {
   LifeBuoy,
 } from "lucide-react";
 import { ROLES } from "@/lib/mock";
+import { useAdminSettings, type Policies } from "@/lib/admin-settings-store";
 
 export const Route = createFileRoute("/onboarding")({
   head: () => ({ meta: [{ title: "Company setup — Hawkaii HRMS" }] }),
@@ -102,44 +110,175 @@ const DEFAULT_PROFILE: CompanyProfile = {
 };
 
 const ONBOARDING_DRAFT_KEY_PREFIX = "hawkaii_onboarding_draft_v1";
-const POLICIES = [
+type PolicyPreview = {
+  key: keyof Policies;
+  title: string;
+  icon: typeof Clock;
+  body: string;
+  summary: (policies: Policies) => string;
+  details: (policies: Policies) => Array<{ label: string; value: string; note?: string }>;
+};
+
+const POLICY_PREVIEWS: PolicyPreview[] = [
   {
     key: "attendance",
     title: "Attendance Policy",
     icon: Clock,
     body: "Geo-tag, IP-locked or open clock-in. Configure grace period and break rules.",
+    summary: ({ attendance }) =>
+      `${attendance.graceMinutes} min grace • ${attendance.allowRegularization ? "Regularization on" : "Regularization off"}`,
+    details: ({ attendance }) => [
+      {
+        label: "Punch-in window",
+        value: attendance.fullDayPunchWindow
+          ? `${attendance.punchInStart} to ${attendance.punchInEnd}`
+          : "Open punch-in",
+        note: "Used to decide the valid full-day start window.",
+      },
+      {
+        label: "Punch-out window",
+        value: attendance.fullDayPunchWindow
+          ? `${attendance.punchOutStart} to ${attendance.punchOutEnd}`
+          : "Open punch-out",
+        note: "Used with the punch-in window for daily attendance.",
+      },
+      {
+        label: "Grace period",
+        value: `${attendance.graceMinutes} minutes`,
+      },
+      {
+        label: "Half day / absent rule",
+        value: `${attendance.halfDayAfterMinutes} min for half day, ${attendance.autoMarkAbsentMinutes} min for absent`,
+      },
+      {
+        label: "Regularization",
+        value: attendance.allowRegularization ? "Allowed" : "Not allowed",
+      },
+      {
+        label: "Auto punch-out",
+        value: attendance.autoPunchOutEnabled
+          ? `Enabled at ${attendance.autoPunchOutTime}`
+          : "Disabled",
+      },
+      {
+        label: "Off-day punches",
+        value: attendance.allowOffDayPunches ? "Allowed" : "Blocked",
+      },
+    ],
   },
   {
     key: "leave",
     title: "Leave Policy",
     icon: CalendarDays,
     body: "Define leave types, accrual cadence, carry-forward and blackout dates.",
+    summary: ({ leave }) =>
+      `${leave.casualPerYear + leave.sickPerYear + leave.earnedPerYear} days/year • ${leave.carryForwardCap} carry-forward cap`,
+    details: ({ leave }) => [
+      { label: "Casual leave", value: `${leave.casualPerYear} days per year` },
+      { label: "Sick leave", value: `${leave.sickPerYear} days per year` },
+      { label: "Earned leave", value: `${leave.earnedPerYear} days per year` },
+      { label: "Carry-forward cap", value: `${leave.carryForwardCap} days` },
+      { label: "Encashment", value: leave.encashmentAllowed ? "Allowed" : "Not allowed" },
+    ],
   },
   {
     key: "timesheet",
     title: "Timesheet Policy",
     icon: Briefcase,
     body: "Daily/weekly cadence, billable rules, approval routing.",
+    summary: ({ timesheet }) =>
+      `${timesheet.weeklyHours} hrs/week • Submit by ${timesheet.submitBy}`,
+    details: ({ timesheet }) => [
+      { label: "Weekly target", value: `${timesheet.weeklyHours} hours` },
+      { label: "Minimum daily hours", value: `${timesheet.minDailyHours} hours` },
+      { label: "Submission deadline", value: timesheet.submitBy },
+      {
+        label: "After approval",
+        value: timesheet.lockAfterApproval ? "Locked from edits" : "Editable after approval",
+      },
+    ],
   },
   {
     key: "expense",
     title: "Expense Policy",
     icon: Receipt,
     body: "Per-category limits, receipts threshold, multi-currency settlement.",
+    summary: ({ expense }) =>
+      `Limit ${formatCurrency(expense.perDayLimit)} • Receipts above ${formatCurrency(expense.receiptMandatoryAbove)}`,
+    details: ({ expense }) => [
+      { label: "Daily claim limit", value: formatCurrency(expense.perDayLimit) },
+      {
+        label: "Receipt required above",
+        value: formatCurrency(expense.receiptMandatoryAbove),
+      },
+      {
+        label: "Self approval",
+        value: expense.selfApprovalAllowed ? "Allowed" : "Not allowed",
+      },
+      {
+        label: "Auto escalation",
+        value: `${expense.autoEscalateDays} days`,
+      },
+    ],
   },
   {
     key: "asset",
     title: "Asset Policy",
     icon: ShieldCheck,
     body: "Issuance flow, depreciation method, return-on-exit checklist.",
+    summary: ({ asset }) =>
+      `${asset.returnSlaDays} day return SLA • Warranty alerts ${asset.warrantyAlertDays} days early`,
+    details: ({ asset }) => [
+      {
+        label: "Damage penalty",
+        value: asset.damagePenalty ? "Enabled" : "Disabled",
+      },
+      {
+        label: "Employee acknowledgement",
+        value: asset.mandatoryAck ? "Mandatory" : "Optional",
+      },
+      { label: "Return SLA", value: `${asset.returnSlaDays} days` },
+      {
+        label: "Warranty alert",
+        value: `${asset.warrantyAlertDays} days before expiry`,
+      },
+    ],
   },
   {
-    key: "helpdesk",
+    key: "sla",
     title: "Helpdesk SLA",
     icon: LifeBuoy,
     body: "Priority tiers, response and resolution targets, escalation matrix.",
+    summary: ({ sla }) =>
+      `Urgent ${sla.urgentResponseHrs}h/${sla.urgentResolveHrs}h • Normal ${sla.normalResponseHrs}h/${sla.normalResolveHrs}h`,
+    details: ({ sla }) => [
+      {
+        label: "Urgent tickets",
+        value: `${sla.urgentResponseHrs}h response, ${sla.urgentResolveHrs}h resolution`,
+      },
+      {
+        label: "High priority",
+        value: `${sla.highResponseHrs}h response, ${sla.highResolveHrs}h resolution`,
+      },
+      {
+        label: "Normal priority",
+        value: `${sla.normalResponseHrs}h response, ${sla.normalResolveHrs}h resolution`,
+      },
+      {
+        label: "Low priority",
+        value: `${sla.lowResponseHrs}h response, ${sla.lowResolveHrs}h resolution`,
+      },
+    ],
   },
 ];
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 0,
+    style: "currency",
+    currency: "INR",
+  }).format(value);
+}
 
 const STEPS = [
   { id: 1, title: "Company profile", icon: Building2 },
@@ -235,6 +374,27 @@ function logoOnlyPolicy(
   };
 }
 
+function firstSetupValidationIssue(input: {
+  profile: CompanyProfile;
+  departments: string[];
+  designations: string[];
+  enabledRoles: string[];
+}): { step: number; message: string } | null {
+  if (!input.profile.companyName.trim()) {
+    return { step: 1, message: "Company name is required before finishing setup." };
+  }
+  if (!input.departments.some((item) => item.trim().length > 0)) {
+    return { step: 2, message: "Add at least one department before finishing setup." };
+  }
+  if (!input.designations.some((item) => item.trim().length > 0)) {
+    return { step: 3, message: "Add at least one designation before finishing setup." };
+  }
+  if (!input.enabledRoles.length) {
+    return { step: 4, message: "Keep at least one role enabled before finishing setup." };
+  }
+  return null;
+}
+
 async function logoFileFromProfile(profile: CompanyProfile): Promise<File | null> {
   if (!profile.logoDataUrl || !profile.logoName) return null;
   try {
@@ -250,7 +410,8 @@ async function logoFileFromProfile(profile: CompanyProfile): Promise<File | null
 }
 
 function OnboardingPage() {
-  const { user, activeRole, isCompanySetupComplete, completeCompanySetup } = useAuth();
+  const { user, activeRole, isInitializing, isCompanySetupComplete, completeCompanySetup } =
+    useAuth();
   const navigate = useNavigate();
   const uploadPolicyQuery = useDocumentUploadPolicy(Boolean(user));
   const [step, setStep] = useState(1);
@@ -307,6 +468,7 @@ function OnboardingPage() {
   ]);
 
   useEffect(() => {
+    if (isInitializing) return;
     if (!user) {
       navigate({ to: "/login" });
       return;
@@ -315,9 +477,9 @@ function OnboardingPage() {
       if (draftKey) clearOnboardingDraft(draftKey);
       navigate({ to: dashboardPathForRole(activeRole) });
     }
-  }, [user, activeRole, draftKey, isCompanySetupComplete, navigate]);
+  }, [user, activeRole, draftKey, isCompanySetupComplete, isInitializing, navigate]);
 
-  if (!user) return null;
+  if (!user || isInitializing) return null;
 
   const totalSteps = STEPS.length;
   const progress = ((step - 1) / (totalSteps - 1)) * 100;
@@ -327,6 +489,17 @@ function OnboardingPage() {
 
   const finish = async () => {
     setError("");
+    const validationIssue = firstSetupValidationIssue({
+      profile,
+      departments,
+      designations,
+      enabledRoles,
+    });
+    if (validationIssue) {
+      setStep(validationIssue.step);
+      setError(validationIssue.message);
+      return;
+    }
     setSubmitting(true);
     try {
       const companyLogoFile = logoFile ?? (await logoFileFromProfile(profile));
@@ -336,6 +509,8 @@ function OnboardingPage() {
         locale: "en-IN",
         fullName: user.name,
         landingPage: dashboardPathForRole(activeRole),
+        departments,
+        designations,
         companyLogoFile,
       });
       if (!result.ok) {
@@ -773,11 +948,6 @@ function StepRoles({
       label: "Module Lead",
       description: "Own a delivery module within a project.",
     },
-    {
-      key: "auditor",
-      label: "Auditor",
-      description: "Read-only access for compliance and audits.",
-    },
   ];
   const all = [
     ...ROLES.map((r) => ({ key: r.key, label: r.label, description: r.description })),
@@ -826,28 +996,94 @@ function StepRoles({
 
 // -------- Step 5 --------
 function StepPolicies() {
+  const { policies } = useAdminSettings();
+  const [selectedPolicy, setSelectedPolicy] = useState<PolicyPreview | null>(null);
+  const selectedDetails = selectedPolicy?.details(policies) ?? [];
+
   return (
     <div className="space-y-5">
       <Header
         title="Policies preview"
-        subtitle="We've pre-configured sensible defaults. Open any policy from Admin Settings to fine-tune."
+        subtitle="These are the policy values currently applying to this workspace. You can fine-tune them later from Admin Settings."
       />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {POLICIES.map((p) => (
-          <Card key={p.key} className="flex items-start gap-3 rounded-2xl border-border/60 p-4">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+        {POLICY_PREVIEWS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setSelectedPolicy(p)}
+            className="group flex min-h-[7.5rem] items-start gap-3 rounded-2xl border border-border/60 bg-card p-4 text-left shadow-sm transition duration-300 ease-out hover:-translate-y-0.5 hover:border-primary/30 hover:bg-primary/5 hover:shadow-lg hover:shadow-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:hover:bg-primary/10"
+          >
+            <div className="glass-control grid h-10 w-10 shrink-0 place-items-center rounded-xl border text-primary transition duration-300 group-hover:border-primary/30 group-hover:shadow-md group-hover:shadow-primary/10">
               <p.icon className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">{p.title}</p>
-              <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.body}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold">{p.title}</p>
+                <Badge variant="outline" className="border-success/30 text-[10px] text-success">
+                  Applying
+                </Badge>
+              </div>
+              <p className="mt-1 text-xs font-medium text-foreground">{p.summary(policies)}</p>
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{p.body}</p>
             </div>
-            <Badge variant="outline" className="shrink-0">
-              Default
-            </Badge>
-          </Card>
+          </button>
         ))}
       </div>
+      <Dialog
+        open={Boolean(selectedPolicy)}
+        onOpenChange={(open) => !open && setSelectedPolicy(null)}
+      >
+        <DialogContent className="glass-panel overflow-hidden rounded-3xl border-border/70 p-0 shadow-2xl sm:max-w-2xl data-[state=open]:duration-300">
+          {selectedPolicy && (
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-br from-primary/20 via-primary/5 to-transparent" />
+              <div className="relative border-b border-border/60 p-6 pr-12">
+                <DialogHeader className="space-y-3 text-left">
+                  <div className="flex items-start gap-4">
+                    <div className="glass-control grid h-12 w-12 shrink-0 place-items-center rounded-2xl border text-primary shadow-lg shadow-primary/10">
+                      <selectedPolicy.icon className="h-6 w-6" />
+                    </div>
+                    <div className="min-w-0">
+                      <Badge variant="outline" className="mb-2 border-success/30 text-success">
+                        Currently applying
+                      </Badge>
+                      <DialogTitle className="text-xl">{selectedPolicy.title}</DialogTitle>
+                      <DialogDescription className="mt-1">
+                        {selectedPolicy.summary(policies)}
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+              </div>
+              <div className="space-y-4 p-6">
+                <div className="rounded-2xl border border-border/60 bg-background/50 p-4">
+                  <p className="text-sm font-medium text-foreground">What this means</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    {selectedPolicy.body}
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {selectedDetails.map((item) => (
+                    <div
+                      key={item.label}
+                      className="rounded-2xl border border-border/60 bg-card/70 p-4 transition duration-300 hover:border-primary/25 hover:bg-primary/5"
+                    >
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {item.label}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">{item.value}</p>
+                      {item.note && (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.note}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

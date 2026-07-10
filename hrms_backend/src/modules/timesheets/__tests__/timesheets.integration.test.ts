@@ -37,6 +37,57 @@ describe("timesheets", () => {
     return response.json();
   }
 
+  it("blocks admin self-service timesheet entry while preserving approval oversight", async () => {
+    const employee = await loginAs(app, "E1");
+    const admin = await loginAs(app, "ADM");
+
+    const adminSegment = await app.inject({
+      method: "POST",
+      url: "/api/v1/timesheets/work-segments",
+      headers: authHeader(admin.token),
+      payload: {
+        work_date: "2026-05-04",
+        project_code: "PRJ-100",
+        task_code: "DEV",
+        hours: "8.00",
+        billable: true
+      }
+    });
+    expect(adminSegment.statusCode).toBe(403);
+
+    const adminSegments = await app.inject({
+      method: "GET",
+      url: "/api/v1/timesheets/work-segments?page=1&page_size=10",
+      headers: authHeader(admin.token)
+    });
+    expect(adminSegments.statusCode).toBe(403);
+
+    const adminSubmission = await app.inject({
+      method: "POST",
+      url: "/api/v1/timesheets/submissions",
+      headers: authHeader(admin.token),
+      payload: { cycle_start: "2026-05-04", cycle_end: "2026-05-08" }
+    });
+    expect(adminSubmission.statusCode).toBe(403);
+
+    await createSegment(employee.token, {
+      work_date: "2026-05-04",
+      project_code: "PRJ-100",
+      task_code: "DEV",
+      hours: "8.00",
+      billable: true
+    });
+    await submitCycle(employee.token, "2026-05-04", "2026-05-08");
+
+    const adminQueue = await app.inject({
+      method: "GET",
+      url: "/api/v1/timesheets/queue/approver?page=1&page_size=10",
+      headers: authHeader(admin.token)
+    });
+    expect(adminQueue.statusCode).toBe(200);
+    expect(adminQueue.json().summary.admin_override_view).toBe(true);
+  });
+
   it("returns approver queue metadata and decision audit/outbox details while preserving OCC", async () => {
     const employee = await loginAs(app, "E1");
     const manager = await loginAs(app, "D1");

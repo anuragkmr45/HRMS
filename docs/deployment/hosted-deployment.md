@@ -2,7 +2,7 @@
 
 This guide describes the recommended hosted deployment shape for Hawkaii HRMS using:
 
-- Frontend: Cloudflare Pages currently fits the checked-in TanStack Start/Cloudflare setup best.
+- Frontend: Vercel for the TanStack Start frontend, using Nitro build output.
 - Backend: Render Docker web service.
 - Worker: Render Docker background worker.
 - Database: Neon Postgres.
@@ -81,15 +81,19 @@ Render setup requirement:
 - Configure each Render service to build from its matching Git branch.
 - If you want CI-gated deployments, turn off Render auto-deploy and let GitHub Actions trigger deploy hooks.
 - If Render auto-deploy stays enabled, Render can deploy before checks finish, which defeats the purpose of gated CI.
+- Render service health checks should use `/api/v1/health/live`. Use `/api/v1/health/ready` for manual deployment smoke because it checks PostgreSQL, Valkey, and object storage and is intentionally heavier.
 
 Frontend setup requirement:
 
-- Preferred: create three Cloudflare frontend projects or branch deployments:
-  - production project: branch `main`, custom domain `hawkaii.in`
-  - QA project: branch `qa`, custom domain `qa.hawkaii.in`
-  - dev project: branch `dev`, custom domain `dev.hawkaii.in`
+- Create three Vercel frontend projects, or equivalent isolated Vercel deployments:
+  - production project: branch main, custom domain https://hawkaii.in
+  - QA project: branch qa, custom domain https://qa.hawkaii.in
+  - hosted dev project: branch dev, custom domain https://dev.hawkaii.in
+- Set Vercel project root directory to hrms-client.
+- Set install command to pnpm install --frozen-lockfile.
+- Set build command to pnpm build:vercel.
 - Set each frontend project env from the matching tracked example file.
-- The current GitHub workflow validates frontend builds. It does not directly deploy Cloudflare because the checked-in frontend is Cloudflare-specific and should be connected to the Cloudflare project/branch configuration.
+- The current GitHub workflow validates frontend builds. Vercel Git integration should perform frontend deployment, while GitHub Actions deploys the Render backend only.
 
 ### Production Domain Values
 
@@ -133,9 +137,9 @@ Create one Neon project and long-lived branches:
 
 | Environment | Neon branch | Backend env |
 | --- | --- | --- |
-| Production | `main` or `prod` | `NODE_ENV=production` |
-| QA/UAT | `qa` | `NODE_ENV=qa` |
-| Hosted dev | `dev` | `NODE_ENV=development` |
+| Production | `main` or `prod` | `NODE_ENV=production`, `APP_ENV=production` |
+| QA/UAT | `qa` | `NODE_ENV=production`, `APP_ENV=qa` |
+| Hosted dev | `dev` | `NODE_ENV=production`, `APP_ENV=development` |
 
 Each branch must use its own pooled `DATABASE_URL`. Do not point dev or QA to the production connection string.
 
@@ -187,14 +191,13 @@ Do not share Valkey across environments. It stores session, rate-limit, and outb
 
 ## Backend Env Templates
 
-Tracked hosted examples:
+Tracked backend examples:
 
 | File | Purpose |
 | --- | --- |
-| `hrms_backend/.env.dev.hosted.example` | Hosted internal dev |
-| `hrms_backend/.env.qa.hosted.example` | Hosted QA/UAT |
-| `hrms_backend/.env.prod.hosted.example` | Hosted production with Neon/Render/Cloudinary/Resend |
-| `hrms_backend/.env.prod.example` | Production |
+| `hrms_backend/.env.dev.example` | Hosted dev backend template for `https://dev-api.hawkaii.in` |
+| `hrms_backend/.env.qa.example` | QA/UAT template |
+| `hrms_backend/.env.prod.example` | Production template |
 
 Important production/hosted values:
 
@@ -204,6 +207,8 @@ COOKIE_SECURE=true
 CLOUDINARY_MOCK_UPLOADS=false
 OPENAPI_PUBLIC=false
 ```
+
+With `COOKIE_SECURE=true`, backend login/logout cookies are emitted as `SameSite=None; Secure`. Keep this enabled for hosted dev, QA, and production so a browser refresh can restore the session through `/api/v1/auth/me` when the frontend and API are deployed on separate origins.
 
 Environment keys are intentionally explicit:
 
@@ -230,43 +235,52 @@ Set `APP_VERSION` and `BUILD_SHA` in hosted environments so testers can identify
 
 ## Frontend Hosting
 
-The current frontend is TanStack Start with the Cloudflare Vite plugin and `wrangler.jsonc`, so Cloudflare Pages/Workers is the lowest-risk first deployment target.
+The frontend is TanStack Start configured for Vercel through Nitro. The Vite config uses nitro/vite for production builds, and hrms-client/vercel.json pins the Vercel install and build commands.
+
+Create one Vercel project per hosted environment for the clearest free-tier isolation:
+
+| Environment | Git branch | Vercel project root | Domain | API env |
+| --- | --- | --- | --- | --- |
+| Hosted dev | dev | hrms-client | https://dev.hawkaii.in | https://dev-api.hawkaii.in |
+| QA/UAT | qa | hrms-client | https://qa.hawkaii.in | https://qa-api.hawkaii.in |
+| Production | main | hrms-client | https://hawkaii.in | https://api.hawkaii.in |
+
+Use these Vercel settings for every frontend project:
+
+| Setting | Value |
+| --- | --- |
+| Root directory | hrms-client |
+| Install command | pnpm install --frozen-lockfile |
+| Build command | pnpm build:vercel |
+| Output directory | leave empty / framework default |
 
 Tracked frontend hosted examples:
 
 | File | Purpose |
 | --- | --- |
-| `hrms-client/.env.dev.hosted.example` | Hosted dev frontend |
-| `hrms-client/.env.qa.example` | Hosted QA frontend |
-| `hrms-client/.env.production.example` | Production frontend |
+| hrms-client/.env.dev.example | Hosted dev frontend |
+| hrms-client/.env.qa.example | Hosted QA frontend |
+| hrms-client/.env.prod.example | Production frontend |
 
 Production frontend env:
 
-```env
-VITE_API_BASE_URL=https://api.hawkaii.in
-VITE_API_ENABLED=true
-VITE_API_MOCK_FALLBACK=false
-```
+    VITE_API_BASE_URL=https://api.hawkaii.in
+    VITE_API_ENABLED=true
+    VITE_API_MOCK_FALLBACK=false
 
 QA frontend env:
 
-```env
-VITE_API_BASE_URL=https://qa-api.hawkaii.in
-VITE_API_ENABLED=true
-VITE_API_MOCK_FALLBACK=false
-```
+    VITE_API_BASE_URL=https://qa-api.hawkaii.in
+    VITE_API_ENABLED=true
+    VITE_API_MOCK_FALLBACK=false
 
 Dev frontend env:
 
-```env
-VITE_API_BASE_URL=https://dev-api.hawkaii.in
-VITE_API_ENABLED=true
-VITE_API_MOCK_FALLBACK=false
-```
+    VITE_API_BASE_URL=https://dev-api.hawkaii.in
+    VITE_API_ENABLED=true
+    VITE_API_MOCK_FALLBACK=false
 
-### Vercel Or Netlify Note
-
-Do not assume Vercel or Netlify deployment is production-ready from the current code alone. The app currently has Cloudflare-specific frontend build wiring. If Vercel or Netlify is required, first verify the TanStack Start hosting adapter/output and add a platform-specific config after a successful production build test.
+Do not enable a separate GitHub Actions frontend deploy unless Vercel Git deploys are disabled.
 
 ## Deployment Checklist
 
@@ -282,8 +296,8 @@ Do not assume Vercel or Netlify deployment is production-ready from the current 
    - `CLOUDINARY_CLOUD_NAME`
    - `CLOUDINARY_API_KEY`
    - `CLOUDINARY_API_SECRET`
-   - `RESEND_API_KEY`
-   - `RESEND_WEBHOOK_SECRET`
+   - `RESEND_API_KEY` only when `EMAIL_DELIVERY_MODE=send`
+   - `RESEND_WEBHOOK_SECRET` only when `EMAIL_DELIVERY_MODE=send`
 4. Add Render custom domain:
    - `api.hawkaii.in`
    - `qa-api.hawkaii.in`
@@ -301,7 +315,7 @@ curl https://api.hawkaii.in/api/v1/health/ready
 
 8. Run QA smoke:
    - login/logout
-   - signup/email verification
+   - signup/email verification, or disabled-email message when Resend is intentionally off
    - document upload/download/delete
    - profile photo upload
    - attendance punch
@@ -317,8 +331,12 @@ COOKIE_SECURE=true
 TRUST_PROXY=true
 OPENAPI_PUBLIC=false
 CLOUDINARY_MOCK_UPLOADS=false
-EMAIL_DELIVERY_MODE=send
+EMAIL_DELIVERY_MODE=disabled  # switch to send after Resend secrets are configured
 VITE_API_MOCK_FALLBACK=false
 ```
+
+Do not set `COOKIE_SECURE=false` on hosted HTTPS services. It will cause the browser session cookie to be unsuitable for cross-origin refresh/session bootstrap.
+
+Resend is optional during initial hosted setup. If `EMAIL_DELIVERY_MODE=disabled`, the API still starts and the frontend tells users that verification email delivery is disabled. Enable `send` with real Resend secrets before opening public self-signup.
 
 Do not run seed scripts against production unless you are intentionally creating a new controlled demo workspace.

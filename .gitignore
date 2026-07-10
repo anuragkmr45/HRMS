@@ -58,10 +58,10 @@ lerna-debug.log*
 # Backend local runtime data
 hrms_backend/backups/
 
-# Cloudflare / Wrangler local state
-.wrangler/
+# Frontend hosting local state
+.vercel/
+hrms-client/.vercel/
 .dev.vars
-hrms-client/.wrangler/
 hrms-client/.dev.vars
 
 # OS and editor files
@@ -74,3 +74,5 @@ hrms-client/.dev.vars
 *.njsproj
 *.sln
 *.sw?
+
+design-audit

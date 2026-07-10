@@ -45,7 +45,7 @@ export class EmailDeliveryService {
     private readonly config: EmailDeliveryConfig,
     provider?: EmailProvider
   ) {
-    this.provider = provider ?? (config.mode === "send" ? new ResendEmailProvider(config.resendApiKey ?? "") : null);
+    this.provider = provider ?? (config.mode === "send" ? new ResendEmailProvider(config.resendApiKey ?? "", config.resendRequestTimeoutMs) : null);
   }
 
   async queueVerificationEmail(input: VerificationEmailInput): Promise<EmailDeliveryRecord> {
@@ -66,6 +66,10 @@ export class EmailDeliveryService {
     });
     markTokenSent(input.token);
     return delivery;
+  }
+
+  deliveryMode(): EmailDeliveryConfig["mode"] {
+    return this.config.mode;
   }
 
   verificationTokenTtlSeconds(): number {

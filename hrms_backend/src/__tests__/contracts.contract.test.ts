@@ -608,6 +608,57 @@ describe("CORS configuration", () => {
 });
 
 describe("Auth guard", () => {
+  it("sets browser session cookies for local and hosted refresh flows", async () => {
+    const previousCookieSecure = process.env.COOKIE_SECURE;
+    try {
+      process.env.COOKIE_SECURE = "false";
+      const localApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+      try {
+        await localApp.ready();
+        const login = await localApp.inject({
+          method: "POST",
+          url: "/api/v1/auth/login",
+          payload: { email: "finance@example.test", password: localDemoPassword }
+        });
+        const setCookie = cookieHeader(login.headers["set-cookie"]);
+        expect(login.statusCode).toBe(200);
+        expect(setCookie).toContain("SameSite=Lax");
+        expect(setCookie).not.toContain("Secure");
+      } finally {
+        await localApp.close();
+      }
+
+      process.env.COOKIE_SECURE = "true";
+      const hostedApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+      try {
+        await hostedApp.ready();
+        const login = await hostedApp.inject({
+          method: "POST",
+          url: "/api/v1/auth/login",
+          payload: { email: "finance@example.test", password: localDemoPassword }
+        });
+        const loginCookie = cookieHeader(login.headers["set-cookie"]);
+        expect(login.statusCode).toBe(200);
+        expect(loginCookie).toContain("SameSite=None");
+        expect(loginCookie).toContain("Secure");
+
+        const logout = await hostedApp.inject({ method: "POST", url: "/api/v1/auth/logout" });
+        const clearCookie = cookieHeader(logout.headers["set-cookie"]);
+        expect(logout.statusCode).toBe(200);
+        expect(clearCookie).toContain("SameSite=None");
+        expect(clearCookie).toContain("Secure");
+      } finally {
+        await hostedApp.close();
+      }
+    } finally {
+      if (previousCookieSecure === undefined) {
+        delete process.env.COOKIE_SECURE;
+      } else {
+        process.env.COOKIE_SECURE = previousCookieSecure;
+      }
+    }
+  });
+
   it("does not flush persistence for invalid login attempts", async () => {
     const store = createMemoryDataStore();
     let flushCalls = 0;
@@ -639,6 +690,48 @@ describe("Auth guard", () => {
         code: "UNAUTHORIZED",
         message: "Invalid email or password"
       });
+      expect(flushCalls).toBe(0);
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("does not flush persistence for successful login and logout", async () => {
+    const store = createMemoryDataStore();
+    let flushCalls = 0;
+    store.persistence = {
+      async flush() {
+        flushCalls += 1;
+        throw new Error("flush should not run for session-only auth mutations");
+      },
+      async reload() {
+        // no-op test persistence
+      },
+      async close() {
+        // no-op test persistence
+      }
+    };
+    const localApp = await buildApp({ dataStore: store, rateLimit: false });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword
+        }
+      });
+      expect(login.statusCode).toBe(200);
+
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          cookie: cookieHeader(login.headers["set-cookie"])
+        }
+      });
+      expect(logout.statusCode).toBe(200);
       expect(flushCalls).toBe(0);
     } finally {
       await localApp.close();
@@ -1105,6 +1198,10 @@ async function openApiSpec(app: FastifyInstance): Promise<OpenApiDocument> {
   const response = await app.inject({ method: "GET", url: "/api/v1/openapi.json" });
   expect(response.statusCode).toBe(200);
   return response.json() as OpenApiDocument;
+}
+
+function cookieHeader(header: string | string[] | undefined): string {
+  return Array.isArray(header) ? header.join("; ") : header ?? "";
 }
 
 function operations(spec: OpenApiDocument): Array<{ key: string; method: string; path: string; operation: Operation }> {

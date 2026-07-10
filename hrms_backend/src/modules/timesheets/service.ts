@@ -8,7 +8,11 @@ import { workdaysInclusive } from "../../platform/work-schedule.js";
 import { appendOutboxEvent } from "../expenses/events.js";
 import { CoreService } from "../core/service.js";
 import { timesheetEvents } from "./events.js";
-import { assertCurrentApprover, assertTimesheetOwner } from "./policy.js";
+import {
+  assertCanUseSelfTimesheet,
+  assertCurrentApprover,
+  assertTimesheetOwner
+} from "./policy.js";
 import { TimesheetRepository } from "./repository.js";
 import { assertTimesheetTransition } from "./state-machine.js";
 
@@ -104,6 +108,7 @@ export class TimesheetService {
   }
 
   createSegment(actor: AuthUser, input: { work_date: string; project_code?: string; task_code?: string; hours: string; description?: string; billable: boolean }) {
+    assertCanUseSelfTimesheet(actor);
     assertTimesheetOwner(actor, actor.id);
     if (Number(input.hours) <= 0 || Number(input.hours) > 24) {
       throw badRequest("Work segment hours must be between 0 and 24");
@@ -120,11 +125,13 @@ export class TimesheetService {
   }
 
   listSegments(actor: AuthUser, pageNumber: number, pageSize: number) {
+    assertCanUseSelfTimesheet(actor);
     const items = this.store.workSegments.filter((segment) => segment.employee_user_id === actor.id && !segment.deleted_at);
     return page(items, pageNumber, pageSize);
   }
 
   submit(actor: AuthUser, input: { cycle_start: string; cycle_end: string }): TimesheetSubmission {
+    assertCanUseSelfTimesheet(actor);
     if (input.cycle_end < input.cycle_start) {
       throw badRequest("Cycle end cannot be before cycle start");
     }
@@ -185,6 +192,7 @@ export class TimesheetService {
   }
 
   mySubmissions(actor: AuthUser, pageNumber: number, pageSize: number) {
+    assertCanUseSelfTimesheet(actor);
     return page(
       this.store.timesheetSubmissions
         .filter((submission) => submission.employee_user_id === actor.id && !submission.deleted_at)

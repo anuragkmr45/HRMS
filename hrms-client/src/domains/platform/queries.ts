@@ -4,8 +4,8 @@ import { platformApi } from "./api";
 
 export function useApiReady(enabled = true) {
   return useQuery({
-    queryKey: queryKeys.action("platform", "health", "ready"),
-    queryFn: () => platformApi.versionedReady(),
+    queryKey: queryKeys.action("platform", "health", "live"),
+    queryFn: () => platformApi.versionedLive(),
     enabled,
     staleTime: queryTimings.realtimeStaleMs,
   });

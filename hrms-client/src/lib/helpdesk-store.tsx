@@ -565,7 +565,10 @@ export const PRIORITY_TONE: Record<TicketPriority, { cls: string; dot: string }>
     cls: "bg-destructive/15 text-destructive border-destructive/30",
     dot: "bg-destructive",
   },
-  High: { cls: "bg-warning/20 text-warning-foreground border-warning/40", dot: "bg-warning" },
+  High: {
+    cls: "bg-warning/20 text-warning-foreground border-warning/40 dark:bg-warning/15 dark:text-warning dark:border-warning/30",
+    dot: "bg-warning",
+  },
   Medium: { cls: "bg-info/15 text-info border-info/30", dot: "bg-info" },
   Low: { cls: "bg-muted text-muted-foreground border-border", dot: "bg-muted-foreground/60" },
 };

@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useAuth } from "@/lib/auth";
 import { useExpenseMetadata } from "@/domains/expenses";
+import { useIndiaLocations } from "@/domains/locations";
 import { useDocumentUploadPolicy } from "@/domains/documents";
 import { asArray, asRecord, text, toastApiError } from "@/shared/api";
 import {
@@ -17,6 +18,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -25,7 +35,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Plus, Trash2, Upload, FileText } from "lucide-react";
+import { Check, ChevronsUpDown, FileText, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { prepareDocumentUploadFile, uploadPolicyAccept } from "@/shared/uploads/documents";
 
@@ -126,6 +136,16 @@ interface StoredExpenseDraft {
   savedAt: string;
 }
 
+interface LocationOption {
+  value: string;
+  label: string;
+  code: string;
+  city: string;
+  state: string;
+  country: string;
+  description: string;
+}
+
 const createInitialForm = (): FormState => ({
   ...initial,
   lineItems: initial.lineItems.map((item) => ({ ...item })),
@@ -144,6 +164,22 @@ const draftStorageKey = (userId?: string) => `${EXPENSE_CREATE_DRAFT_KEY}:${user
 const toNumber = (value: unknown, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const formatIndianAmountInput = (value: number) => {
+  if (!value) return "";
+  return new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 2,
+  }).format(value);
+};
+
+const parseIndianAmountInput = (value: string) => {
+  const sanitized = value.replace(/,/g, "").replace(/[^\d.]/g, "");
+  const [wholePart, ...decimalParts] = sanitized.split(".");
+  const decimalPart = decimalParts.join("").slice(0, 2);
+  const normalized = decimalParts.length ? `${wholePart}.${decimalPart}` : wholePart;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const normalizeLineItems = (value: unknown): LineItem[] => {
@@ -259,6 +295,35 @@ const clearStoredDraft = (userId?: string) => {
   window.localStorage.removeItem(draftStorageKey(userId));
 };
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [delayMs, value]);
+
+  return debounced;
+}
+
+function locationOptionsFromResponse(data: unknown): LocationOption[] {
+  return asArray(data)
+    .map((item) => {
+      const record = asRecord(item);
+      const label = text(record.label || record.name || record.value);
+      return {
+        value: text(record.value || record.name || record.label),
+        label,
+        code: text(record.code),
+        city: text(record.city),
+        state: text(record.state),
+        country: text(record.country),
+        description: text(record.description),
+      };
+    })
+    .filter((option): option is LocationOption => Boolean(option.value && option.label));
+}
+
 function CreateExpense() {
   const { user } = useAuth();
   const { add } = useExpenses();
@@ -275,6 +340,15 @@ function CreateExpense() {
   const documentInputRef = useRef<HTMLInputElement>(null);
   const [pendingDocumentKind, setPendingDocumentKind] =
     useState<FormState["documents"][number]["kind"]>("other");
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  const [locationSearch, setLocationSearch] = useState("");
+  const debouncedLocationSearch = useDebouncedValue(locationSearch.trim(), 250);
+  const shouldSearchLocations = locationPickerOpen && debouncedLocationSearch.length > 0;
+  const defaultLocationQuery = useIndiaLocations({ limit: 30 }, locationPickerOpen);
+  const locationSearchQuery = useIndiaLocations(
+    { search: debouncedLocationSearch, limit: 30 },
+    shouldSearchLocations,
+  );
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }));
 
   useEffect(() => {
@@ -340,6 +414,23 @@ function CreateExpense() {
         ),
     [metadataQuery.data],
   );
+  const defaultLocationOptions = useMemo(
+    () => locationOptionsFromResponse(defaultLocationQuery.data),
+    [defaultLocationQuery.data],
+  );
+  const searchedLocationOptions = useMemo(
+    () => locationOptionsFromResponse(locationSearchQuery.data),
+    [locationSearchQuery.data],
+  );
+  const locationOptions = shouldSearchLocations ? searchedLocationOptions : defaultLocationOptions;
+  const locationLoading =
+    defaultLocationQuery.isLoading ||
+    (shouldSearchLocations && (locationSearchQuery.isLoading || locationSearchQuery.isFetching));
+  const locationError =
+    (shouldSearchLocations && locationSearchQuery.error instanceof Error
+      ? locationSearchQuery.error.message
+      : "") ||
+    (defaultLocationQuery.error instanceof Error ? defaultLocationQuery.error.message : "");
 
   const total = f.lineItems.reduce((s, li) => s + li.quantity * li.unitCost, 0);
 
@@ -533,18 +624,41 @@ function CreateExpense() {
                   />
                 </Field>
                 <Field label="Location">
-                  <Input
+                  <LocationCombobox
                     value={f.location}
-                    onChange={(e) => set("location", e.target.value)}
-                    placeholder="City, Country"
+                    options={locationOptions}
+                    open={locationPickerOpen}
+                    onOpenChange={setLocationPickerOpen}
+                    search={locationSearch}
+                    onSearchChange={setLocationSearch}
+                    loading={locationLoading}
+                    error={locationError}
+                    onRefresh={() => {
+                      if (shouldSearchLocations) void locationSearchQuery.refetch();
+                      else void defaultLocationQuery.refetch();
+                    }}
+                    onChange={(value) => set("location", value)}
                   />
                 </Field>
-                <Field label="Estimated Amount">
-                  <Input
-                    type="number"
-                    value={f.estimatedAmount || ""}
-                    onChange={(e) => set("estimatedAmount", Number(e.target.value))}
-                  />
+                <Field label="Estimated Amount (INR)">
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+                      🇮🇳 ₹
+                    </span>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={formatIndianAmountInput(f.estimatedAmount)}
+                      onChange={(e) =>
+                        set("estimatedAmount", parseIndianAmountInput(e.target.value))
+                      }
+                      placeholder="0"
+                      className="pl-14 pr-14 text-right"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                      INR
+                    </span>
+                  </div>
                 </Field>
                 <Field label="Payment Type">
                   <Select
@@ -690,8 +804,74 @@ function CreateExpense() {
             description: "Categories & vendors",
             content: (
               <div className="space-y-3">
-                <div className="overflow-x-auto rounded-xl border">
-                  <table className="w-full text-sm">
+                <div className="space-y-3 md:hidden">
+                  {f.lineItems.map((li, index) => (
+                    <Card key={li.id} className="space-y-3 rounded-xl border-border/70 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold">Line item {index + 1}</p>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => delLi(li.id)}
+                          className="h-8 w-8 text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <Field label="Category">
+                        <Input
+                          value={li.category}
+                          onChange={(e) => updateLi(li.id, { category: e.target.value })}
+                          className="h-9"
+                        />
+                      </Field>
+                      <Field label="Description">
+                        <Input
+                          value={li.description}
+                          onChange={(e) => updateLi(li.id, { description: e.target.value })}
+                          className="h-9"
+                        />
+                      </Field>
+                      <Field label="Vendor">
+                        <Input
+                          value={li.vendor}
+                          onChange={(e) => updateLi(li.id, { vendor: e.target.value })}
+                          className="h-9"
+                        />
+                      </Field>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <Field label="Qty">
+                          <Input
+                            type="number"
+                            value={li.quantity}
+                            onChange={(e) => updateLi(li.id, { quantity: Number(e.target.value) })}
+                            className="h-9 text-right"
+                          />
+                        </Field>
+                        <Field label="Unit Cost">
+                          <Input
+                            type="number"
+                            value={li.unitCost || ""}
+                            onChange={(e) => updateLi(li.id, { unitCost: Number(e.target.value) })}
+                            className="h-9 text-right"
+                          />
+                        </Field>
+                      </div>
+                      <div className="rounded-lg bg-secondary/40 p-3 text-right text-sm">
+                        <span className="text-muted-foreground">Total </span>
+                        <span className="font-semibold">
+                          {fmtCurrency(li.quantity * li.unitCost)}
+                        </span>
+                      </div>
+                    </Card>
+                  ))}
+                  <div className="rounded-xl border bg-secondary/30 p-3 text-right text-sm">
+                    <span className="text-muted-foreground">Total </span>
+                    <span className="font-semibold">{fmtCurrency(total)}</span>
+                  </div>
+                </div>
+                <div className="hidden overflow-x-auto rounded-xl border md:block">
+                  <table className="w-full min-w-[760px] text-sm">
                     <thead className="bg-secondary/40 text-xs">
                       <tr>
                         <th className="p-2 text-left">Category</th>
@@ -784,7 +964,7 @@ function CreateExpense() {
             title: "Documents",
             description: "Attach proofs",
             content: (
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
                 <input
                   ref={documentInputRef}
                   type="file"
@@ -854,7 +1034,7 @@ function CreateExpense() {
             content: (
               <div className="space-y-3">
                 <DataCard title="Summary" padded>
-                  <dl className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
+                  <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 md:grid-cols-3">
                     <Info
                       k="Type"
                       v={f.expenseType === "project" ? "Project" : "Sales / Pre-Sales"}
@@ -887,6 +1067,138 @@ function CreateExpense() {
         ]}
       />
     </div>
+  );
+}
+
+function LocationCombobox({
+  value,
+  options,
+  open,
+  onOpenChange,
+  search,
+  onSearchChange,
+  loading,
+  error,
+  onRefresh,
+  onChange,
+}: {
+  value: string;
+  options: LocationOption[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  search: string;
+  onSearchChange: (search: string) => void;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  onChange: (value: string) => void;
+}) {
+  const selected = options.find((option) => option.value === value);
+  const displayValue = selected?.label || value;
+  const didRefreshForOpenRef = useRef(false);
+  const filteredOptions = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return options;
+    return options.filter((option) =>
+      [
+        option.label,
+        option.value,
+        option.code,
+        option.city,
+        option.state,
+        option.country,
+        option.description,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [options, search]);
+
+  useEffect(() => {
+    if (!open) {
+      didRefreshForOpenRef.current = false;
+      return;
+    }
+    if (loading || options.length > 0 || didRefreshForOpenRef.current) return;
+    didRefreshForOpenRef.current = true;
+    onRefresh();
+  }, [loading, onRefresh, open, options.length]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        onOpenChange(nextOpen);
+        if (!nextOpen) onSearchChange("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-10 w-full justify-between rounded-md border-input bg-background px-3 font-normal"
+        >
+          <span className={displayValue ? "truncate" : "truncate text-muted-foreground"}>
+            {displayValue || (loading ? "Loading locations..." : "Select location")}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-[var(--radix-popover-trigger-width)] overflow-hidden p-0"
+        align="start"
+      >
+        <Command shouldFilter={false}>
+          <CommandInput
+            value={search}
+            onValueChange={onSearchChange}
+            placeholder="Search city, state, or country..."
+            className="h-9 rounded-none border-0 px-0 py-2 shadow-none outline-none ring-0 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          <CommandList>
+            <CommandEmpty>
+              {error
+                ? "Could not load locations. Please try again."
+                : loading
+                  ? "Loading locations..."
+                  : options.length
+                    ? "No matching location found."
+                    : "No active location found."}
+            </CommandEmpty>
+            <CommandGroup>
+              {filteredOptions.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={option.value}
+                  onSelect={() => {
+                    onChange(option.value);
+                    onOpenChange(false);
+                    onSearchChange("");
+                  }}
+                >
+                  <Check
+                    className={`h-4 w-4 ${option.value === value ? "opacity-100" : "opacity-0"}`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{option.label}</span>
+                    {(option.city || option.state || option.country || option.description) && (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {[option.city, option.state, option.country, option.description]
+                          .filter(Boolean)
+                          .join(" • ")}
+                      </span>
+                    )}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

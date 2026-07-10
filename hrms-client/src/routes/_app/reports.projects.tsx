@@ -162,7 +162,7 @@ function ProjectReports() {
 
   return (
     <Tabs defaultValue="master">
-      <TabsList className="flex-wrap">
+      <TabsList className="w-full justify-start">
         <TabsTrigger value="master">Project Master</TabsTrigger>
         <TabsTrigger value="alloc">Allocation</TabsTrigger>
         <TabsTrigger value="util">Utilization</TabsTrigger>

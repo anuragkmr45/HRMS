@@ -1,6 +1,7 @@
 import { loadEnvFile } from "../../scripts/env.js";
 import { runtimeDefaults } from "../config/runtime-defaults.js";
 import { createPostgresDataStore } from "../platform/postgres-data-store.js";
+import { AttendanceAutoPunchoutWorker } from "./attendance-auto-punchout-worker.js";
 import { OutboxWorker, ValkeyStreamPublisher } from "./outbox-worker.js";
 
 loadEnvFile(process.env.HRMS_ENV_FILE ?? ".env.local", { required: !process.env.DATABASE_URL });
@@ -85,7 +86,11 @@ function listFromEnv(name: string, fallback: string): string[] {
 
 const publisher = new ValkeyStreamPublisher(valkeyUrl);
 const worker = new OutboxWorker(store, publisher);
+const attendanceAutoPunchoutWorker = new AttendanceAutoPunchoutWorker(store);
 const intervalMs = numberFromEnv("OUTBOX_WORKER_INTERVAL_MS", 2000);
+const attendanceAutoPunchoutScheduleCheckMs = 5 * 60_000;
+let nextAttendanceAutoPunchoutCheckAt = 0;
+let attendanceAutoPunchoutCatchUpPending = true;
 let stopping = false;
 
 async function tick(): Promise<void> {
@@ -96,6 +101,31 @@ async function tick(): Promise<void> {
     }
   } catch (error) {
     console.error("Outbox worker publish cycle failed", error);
+  }
+
+  if (Date.now() < nextAttendanceAutoPunchoutCheckAt) {
+    return;
+  }
+  nextAttendanceAutoPunchoutCheckAt = Date.now() + attendanceAutoPunchoutScheduleCheckMs;
+  try {
+    const result = await attendanceAutoPunchoutWorker.runScheduled({
+      includeCatchUp: attendanceAutoPunchoutCatchUpPending
+    });
+    attendanceAutoPunchoutCatchUpPending = false;
+    if (result.skipped || result.closed_sessions > 0 || result.punches_created > 0) {
+      console.log(JSON.stringify({
+        worker: "attendance-auto-punchout",
+        skipped: result.skipped,
+        skip_reason: result.skip_reason,
+        run_keys: result.run_keys,
+        scanned_users: result.scanned_users,
+        closed_sessions: result.closed_sessions,
+        punches_created: result.punches_created,
+        day_records_recomputed: result.day_records_recomputed
+      }));
+    }
+  } catch (error) {
+    console.error("Attendance auto punch-out worker cycle failed", error);
   }
 }
 
@@ -116,7 +146,11 @@ process.on("SIGTERM", () => {
   void shutdown();
 });
 
-console.log("Outbox worker started with Valkey Streams publisher.");
+console.log(JSON.stringify({
+  worker: "outbox",
+  message: "Outbox worker started with Valkey Streams publisher.",
+  attendance_auto_punchout_schedule_check_ms: attendanceAutoPunchoutScheduleCheckMs
+}));
 while (!stopping) {
   await tick();
   await new Promise((resolve) => setTimeout(resolve, intervalMs));

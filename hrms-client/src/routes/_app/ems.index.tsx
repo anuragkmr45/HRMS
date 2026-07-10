@@ -48,6 +48,8 @@ export const Route = createFileRoute("/_app/ems/")({
   component: EmsDashboard,
 });
 
+const SELF_ATTENDANCE_EXCLUDED_ROLES = new Set(["hr_admin", "main_admin", "manager"]);
+
 const ANNOUNCEMENTS = [
   {
     id: 1,
@@ -126,7 +128,7 @@ function attendanceTone(
 }
 
 function queryHint(error: unknown, fallback: string): string {
-  return userFacingErrorMessage(error, fallback).replace(/\s*Request id:.*/i, "");
+  return userFacingErrorMessage(error, fallback);
 }
 
 function recordDate(record: ApiRecord): string {
@@ -146,9 +148,10 @@ function EmsDashboard() {
   const [now, setNow] = useState(new Date());
   const todayIso = localIsoDate();
   const weekRange = useMemo(() => weekRangeFor(todayIso), [todayIso]);
+  const hasSelfAttendance = !activeRole || !SELF_ATTENDANCE_EXCLUDED_ROLES.has(activeRole);
   const attendanceQuery = useMyAttendanceSummary(
     { date_from: todayIso, date_to: todayIso, month: currentLocalMonth() },
-    apiEnabled,
+    apiEnabled && hasSelfAttendance,
   );
   const leaveBalancesQuery = useMyLeaveBalances(
     { year: Number(todayIso.slice(0, 4)), page: 1, page_size: 25 },
@@ -179,18 +182,22 @@ function EmsDashboard() {
   const todayRecord = asRecord(attendancePayload.today);
   const liveToday = liveAttendanceToday(todayRecord, attendancePayload.generated_at, now);
   const todayStatus = text(todayRecord.status);
-  const todayValue = attendanceQuery.isLoading
-    ? "..."
-    : attendanceQuery.isError
-      ? "Issue"
-      : attendanceStatusLabel(todayStatus);
-  const todayHint = attendanceQuery.isLoading
-    ? "Loading live attendance"
-    : attendanceQuery.isError
-      ? queryHint(attendanceQuery.error, "Attendance unavailable")
-      : text(todayRecord.in_time)
-        ? `In ${text(todayRecord.in_time)} · ${liveToday.hours}`
-        : text(todayRecord.detail, "No punch-in recorded");
+  const todayValue = !hasSelfAttendance
+    ? "N/A"
+    : attendanceQuery.isLoading
+      ? "..."
+      : attendanceQuery.isError
+        ? "Issue"
+        : attendanceStatusLabel(todayStatus);
+  const todayHint = !hasSelfAttendance
+    ? "Not required for this role"
+    : attendanceQuery.isLoading
+      ? "Loading live attendance"
+      : attendanceQuery.isError
+        ? queryHint(attendanceQuery.error, "Attendance unavailable")
+        : text(todayRecord.in_time)
+          ? `In ${text(todayRecord.in_time)} · ${liveToday.hours}`
+          : text(todayRecord.detail, "No punch-in recorded");
   const leaveBalances = asArray(asRecord(leaveBalancesQuery.data).balances).map(asRecord);
   const leaveAvailable = leaveBalances.reduce((total, balance) => {
     const leaveType = text(balance.leave_type);
@@ -236,7 +243,7 @@ function EmsDashboard() {
   return (
     <div className="space-y-6 pt-4">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="rounded-2xl border-border/60 lg:col-span-1">
+        <Card className="glass-panel ems-profile-card rounded-2xl border-border/60 lg:col-span-1">
           <div className="p-6 text-center" style={{ background: "var(--gradient-hero)" }}>
             <Avatar className="mx-auto h-20 w-20 ring-4 ring-background">
               {apiProfile?.user.profilePhotoUrl && (
@@ -288,23 +295,27 @@ function EmsDashboard() {
         <div className="space-y-4 lg:col-span-2">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatCard
-              label="Today"
-              value={showDemoData ? "Present" : todayValue}
-              hint={showDemoData ? "In at 09:08" : todayHint}
+              label={hasSelfAttendance ? "Today" : "Attendance"}
+              value={showDemoData && hasSelfAttendance ? "Present" : todayValue}
+              hint={showDemoData && hasSelfAttendance ? "In at 09:08" : todayHint}
               icon={Clock}
               tone={
-                showDemoData
-                  ? "success"
-                  : attendanceQuery.isError
-                    ? "destructive"
-                    : attendanceTone(todayStatus)
+                !hasSelfAttendance
+                  ? "info"
+                  : showDemoData
+                    ? "success"
+                    : attendanceQuery.isError
+                      ? "destructive"
+                      : attendanceTone(todayStatus)
               }
+              className="ems-kpi-card"
             />
             <StatCard
               label="Leave balance"
               value={showDemoData ? "12" : leaveValue}
               hint={showDemoData ? "days remaining" : leaveHint}
               tone="info"
+              className="ems-kpi-card"
             />
             <StatCard
               label="Pending policies"
@@ -312,6 +323,7 @@ function EmsDashboard() {
               hint="to acknowledge"
               icon={Timer}
               tone="warning"
+              className="ems-kpi-card"
             />
             <StatCard
               label="Available letters"
@@ -319,6 +331,7 @@ function EmsDashboard() {
               hint="ready to review"
               icon={Receipt}
               tone="primary"
+              className="ems-kpi-card"
             />
           </div>
 
@@ -328,6 +341,7 @@ function EmsDashboard() {
               description={
                 showDemoData ? "Hybrid policy: 2 days/week" : "Approved and pending requests"
               }
+              className="glass-panel ems-profile-card"
             >
               {showDemoData ? (
                 <div className="space-y-2">
@@ -363,7 +377,7 @@ function EmsDashboard() {
                     {wfhRows.slice(0, 3).map((request) => (
                       <div
                         key={text(request.id) || text(request.request_code)}
-                        className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2 text-sm"
+                        className="ems-inline-row flex items-center justify-between rounded-xl px-3 py-2 text-sm"
                       >
                         <span className="font-medium">
                           {shortDate(text(request.date_from))} - {shortDate(text(request.date_to))}
@@ -390,7 +404,11 @@ function EmsDashboard() {
               )}
             </DataCard>
 
-            <DataCard title="My assets" description="3 assigned to you">
+            <DataCard
+              title="My assets"
+              description={showDemoData ? "3 assigned to you" : "Live inventory opens in Assets"}
+              className="glass-panel ems-profile-card"
+            >
               {showDemoData ? (
                 <ul className="space-y-2.5 text-sm">
                   {[
@@ -400,7 +418,7 @@ function EmsDashboard() {
                   ].map((a) => (
                     <li
                       key={a.tag}
-                      className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2"
+                      className="ems-inline-row flex items-center justify-between rounded-xl px-3 py-2"
                     >
                       <div className="flex items-center gap-2.5">
                         <Laptop className="h-4 w-4 text-primary" />
@@ -431,7 +449,7 @@ function EmsDashboard() {
         <DataCard
           title="Company announcements"
           description="Latest updates from leadership and HR"
-          className="lg:col-span-2"
+          className="glass-panel ems-profile-card lg:col-span-2"
         >
           {showDemoData ? (
             <ul className="divide-y">
@@ -461,7 +479,11 @@ function EmsDashboard() {
           )}
         </DataCard>
 
-        <DataCard title="Upcoming holidays" description="Next 30 days">
+        <DataCard
+          title="Upcoming holidays"
+          description="Next 30 days"
+          className="glass-panel ems-profile-card"
+        >
           {showDemoData ? (
             <ul className="space-y-3">
               {HOLIDAYS.map((h) => (
@@ -518,7 +540,11 @@ function EmsDashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <DataCard title="My helpdesk tickets" description="Recent activity">
+        <DataCard
+          title="My helpdesk tickets"
+          description="Recent activity"
+          className="glass-panel ems-profile-card"
+        >
           {showDemoData ? (
             <ul className="space-y-2.5 text-sm">
               {[
@@ -531,7 +557,7 @@ function EmsDashboard() {
               ].map((t) => (
                 <li
                   key={t.id}
-                  className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2.5"
+                  className="ems-inline-row flex items-center justify-between rounded-xl px-3 py-2.5"
                 >
                   <div>
                     <p className="font-medium">{t.subject}</p>
@@ -555,7 +581,11 @@ function EmsDashboard() {
           )}
         </DataCard>
 
-        <DataCard title="My documents" description="Personal documents">
+        <DataCard
+          title="My documents"
+          description="Personal documents"
+          className="glass-panel ems-profile-card"
+        >
           {showDemoData ? (
             <ul className="space-y-2.5 text-sm">
               {[
@@ -565,7 +595,7 @@ function EmsDashboard() {
               ].map((d) => (
                 <li
                   key={d.name}
-                  className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2.5"
+                  className="ems-inline-row flex items-center justify-between rounded-xl px-3 py-2.5"
                 >
                   <span className="font-medium">{d.name}</span>
                   <StatusBadge

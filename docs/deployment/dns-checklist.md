@@ -2,11 +2,11 @@
 
 | Host | Target |
 | --- | --- |
-| `hawkaii.in` | Cloudflare frontend production |
+| `hawkaii.in` | Vercel frontend production |
 | `api.hawkaii.in` | Render production API custom domain |
-| `qa.hawkaii.in` | Cloudflare QA frontend |
+| `qa.hawkaii.in` | Vercel QA frontend |
 | `qa-api.hawkaii.in` | Render QA API custom domain |
-| `dev.hawkaii.in` | Cloudflare hosted dev frontend |
+| `dev.hawkaii.in` | Vercel hosted dev frontend |
 | `dev-api.hawkaii.in` | Render hosted dev API custom domain |
 
 ## Checks

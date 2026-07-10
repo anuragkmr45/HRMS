@@ -255,7 +255,7 @@ function AssetsDashboard() {
                     </p>
                   </Link>
                   <span
-                    className={`text-xs font-medium ${d < 0 ? "text-destructive" : d <= 14 ? "text-warning-foreground" : "text-muted-foreground"}`}
+                    className={`text-xs font-medium ${d < 0 ? "text-destructive" : d <= 14 ? "text-warning-foreground dark:text-warning" : "text-muted-foreground"}`}
                   >
                     {d < 0 ? `${Math.abs(d)}d expired` : `${d}d left`}
                   </span>

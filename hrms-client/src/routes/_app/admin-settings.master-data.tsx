@@ -407,7 +407,7 @@ function MasterDataScreen() {
 
   return (
     <Tabs value={activeKey} onValueChange={(v) => setActiveKey(v as MasterKey)}>
-      <TabsList className="h-auto flex-wrap">
+      <TabsList className="h-auto w-full justify-start">
         {KEYS.map((k) => (
           <TabsTrigger key={k} value={k}>
             {MASTER_LABELS[k]}

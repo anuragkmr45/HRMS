@@ -18,3 +18,4 @@ export { QuickActionCard } from "./quick-action-card";
 export { ConfirmDialog } from "./confirm-dialog";
 export { SkeletonCard, SkeletonList, SkeletonStats } from "./skeletons";
 export { ModuleTabs, type ModuleTab } from "./module-tabs";
+export { PhoneInput } from "./phone-input";

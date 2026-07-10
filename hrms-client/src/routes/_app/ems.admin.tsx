@@ -557,7 +557,7 @@ function OnboardingChecklist() {
   return (
     <div className="space-y-3">
       {rows.map((o) => (
-        <Card key={o.name} className="rounded-2xl p-5">
+        <Card key={o.name} className="ems-record-card rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold">{o.name}</p>
@@ -569,7 +569,7 @@ function OnboardingChecklist() {
             {ONBOARDING_STEPS.map(([k, label]) => (
               <label
                 key={k}
-                className="flex items-center gap-2 rounded-xl bg-muted/40 px-3 py-2 text-sm"
+                className="ems-check-item flex items-center gap-2 rounded-xl px-3 py-2 text-sm"
               >
                 <Checkbox
                   checked={o[k]}
@@ -741,7 +741,7 @@ function ExitChecklist() {
   return (
     <div className="space-y-3">
       {rows.map((e) => (
-        <Card key={e.name} className="rounded-2xl p-5">
+        <Card key={e.name} className="ems-record-card rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold">{e.name}</p>
@@ -753,7 +753,7 @@ function ExitChecklist() {
             {EXIT_STEPS.map(([k, label]) => (
               <label
                 key={k}
-                className="flex items-center gap-2 rounded-xl bg-muted/40 px-3 py-2 text-sm"
+                className="ems-check-item flex items-center gap-2 rounded-xl px-3 py-2 text-sm"
               >
                 <Checkbox
                   checked={e[k]}
@@ -833,7 +833,7 @@ function PolicyMgmt() {
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
       {rows.map((p) => (
-        <Card key={p.name} className="rounded-2xl p-5">
+        <Card key={p.name} className="ems-record-card rounded-2xl p-5">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-semibold">{p.name}</p>
@@ -984,22 +984,46 @@ function EmsAdmin() {
 
   return (
     <div className="space-y-4 pt-4">
-      <p className="text-sm text-muted-foreground">Operational queues for the people-ops team.</p>
+      <div className="ems-tab-intro p-4">
+        <p className="text-sm font-medium">People operations command center</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Operational queues for the people-ops team.
+        </p>
+      </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Docs to verify" value={docsToVerify} icon={FileCheck2} tone="warning" />
-        <StatCard label="Profile updates" value={profileUpdates} icon={UserCog} tone="info" />
-        <StatCard label="Probation due" value={probationDue} icon={BadgeCheck} tone="primary" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+        <StatCard
+          label="Docs to verify"
+          value={docsToVerify}
+          icon={FileCheck2}
+          tone="warning"
+          className="ems-kpi-card"
+        />
+        <StatCard
+          label="Profile updates"
+          value={profileUpdates}
+          icon={UserCog}
+          tone="info"
+          className="ems-kpi-card"
+        />
+        <StatCard
+          label="Probation due"
+          value={probationDue}
+          icon={BadgeCheck}
+          tone="primary"
+          className="ems-kpi-card"
+        />
         <StatCard
           label="Letters in queue"
           value={lettersInQueue}
           icon={FileSignature}
           tone="success"
+          className="ems-kpi-card"
         />
       </div>
 
       <Tabs defaultValue="docs">
-        <TabsList className="flex w-full flex-wrap justify-start">
+        <TabsList className="w-full justify-start">
           <TabsTrigger value="docs">
             <FileCheck2 className="mr-1.5 h-4 w-4" />
             Documents

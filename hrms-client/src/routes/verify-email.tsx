@@ -21,6 +21,9 @@ interface SearchParams {
   email?: string;
   token?: string;
   state?: "sent" | "verified" | "expired" | "invalid";
+  delivery_mode?: "send" | "log" | "disabled";
+  delivery_status?: string;
+  notice?: string;
 }
 
 export const Route = createFileRoute("/verify-email")({
@@ -30,13 +33,25 @@ export const Route = createFileRoute("/verify-email")({
     state: (["sent", "verified", "expired", "invalid"] as const).find(
       (x) => x === s.state,
     ) as SearchParams["state"],
+    delivery_mode: (["send", "log", "disabled"] as const).find(
+      (x) => x === s.delivery_mode,
+    ) as SearchParams["delivery_mode"],
+    delivery_status: typeof s.delivery_status === "string" ? s.delivery_status : undefined,
+    notice: typeof s.notice === "string" ? s.notice : undefined,
   }),
   head: () => ({ meta: [{ title: "Verify your email — Hawkaii HRMS" }] }),
   component: VerifyEmailPage,
 });
 
 function VerifyEmailPage() {
-  const { email, token, state: stateParam } = Route.useSearch();
+  const {
+    email,
+    token,
+    state: stateParam,
+    delivery_mode: deliveryMode,
+    delivery_status: deliveryStatus,
+    notice,
+  } = Route.useSearch();
   const { verifyToken, resendVerification } = useAuth();
   const navigate = useNavigate();
   const [resentAt, setResentAt] = useState<number | null>(null);
@@ -44,13 +59,17 @@ function VerifyEmailPage() {
     null,
   );
   const [verifying, setVerifying] = useState(false);
+  const devExperience =
+    import.meta.env.DEV ||
+    ["local", "development", "dev"].includes(
+      String(import.meta.env.VITE_APP_ENV ?? import.meta.env.MODE ?? "").toLowerCase(),
+    );
   const [demoToken, setDemoToken] = useState<string | null>(() =>
-    readDemoEmailVerificationToken(email),
+    devExperience ? readDemoEmailVerificationToken(email) : null,
   );
   const [demoError, setDemoError] = useState("");
-  const autoVerifyTokenLinks =
-    import.meta.env.DEV ||
-    ["development", "dev", "local"].includes(String(import.meta.env.MODE ?? "").toLowerCase());
+  const autoVerifyTokenLinks = devExperience;
+  const emailDeliveryNotice = notice ?? deliveryNoticeFor(deliveryMode, deliveryStatus);
 
   const submitVerificationToken = useCallback(
     async (verificationToken: string) => {
@@ -89,18 +108,18 @@ function VerifyEmailPage() {
   }, [autoVerifyTokenLinks, token, verifyToken]);
 
   useEffect(() => {
-    setDemoToken(readDemoEmailVerificationToken(email));
-  }, [email]);
+    setDemoToken(devExperience ? readDemoEmailVerificationToken(email) : null);
+  }, [devExperience, email]);
 
   const continueAfterVerification = useCallback(
     (result: Awaited<ReturnType<typeof verifyToken>>) => {
       if (result.status !== "ok" || !result.pending) return false;
       if (result.nextStep === "set_password") {
         if (!result.pending.token) return false;
-        navigate({ to: "/set-password", search: { token: result.pending.token } });
+        navigate({ to: "/set-password", search: { token: result.pending.token }, replace: true });
         return true;
       }
-      navigate({ to: "/login" });
+      navigate({ to: "/login", replace: true });
       return true;
     },
     [navigate],
@@ -127,10 +146,21 @@ function VerifyEmailPage() {
     if (!email) return;
     const rec = await resendVerification(email);
     if (rec) {
-      rememberDemoEmailVerificationToken(rec.email, rec.token);
-      setDemoToken(readDemoEmailVerificationToken(rec.email));
+      if (devExperience && rec.token) {
+        rememberDemoEmailVerificationToken(rec.email, rec.token);
+      }
+      setDemoToken(devExperience ? readDemoEmailVerificationToken(rec.email) : null);
       setResentAt(Date.now());
-      navigate({ to: "/verify-email", search: { email, state: "sent" } });
+      navigate({
+        to: "/verify-email",
+        search: {
+          email,
+          state: "sent",
+          delivery_mode: rec.emailDeliveryMode,
+          delivery_status: rec.emailDeliveryStatus ?? undefined,
+          notice: rec.emailDeliveryNotice ?? undefined,
+        },
+      });
     }
   };
 
@@ -210,6 +240,12 @@ function VerifyEmailPage() {
           </div>
         )}
 
+        {emailDeliveryNotice && state === "sent" && (
+          <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            {emailDeliveryNotice}
+          </p>
+        )}
+
         {(state === "sent" || state === "expired") && (
           <div className="space-y-3">
             {token && !autoVerifyTokenLinks && (
@@ -223,7 +259,7 @@ function VerifyEmailPage() {
                 {verifying ? "Verifying..." : "Confirm verification"}
               </Button>
             )}
-            {demoToken && (
+            {devExperience && demoToken && (
               <Button
                 onClick={handleDemoVerify}
                 className="h-11 w-full rounded-xl text-primary-foreground"
@@ -254,7 +290,9 @@ function VerifyEmailPage() {
 
         {resentAt && (
           <p className="text-center text-xs text-success">
-            A new verification email has been sent.
+            {deliveryMode === "disabled"
+              ? "Verification request accepted. Email delivery is disabled in this environment."
+              : "A new verification email has been sent."}
           </p>
         )}
 
@@ -270,4 +308,17 @@ function VerifyEmailPage() {
       </div>
     </AuthShell>
   );
+}
+
+function deliveryNoticeFor(mode?: SearchParams["delivery_mode"], status?: string): string | null {
+  if (mode === "disabled" || status === "disabled" || status === "not_configured") {
+    return "Email delivery is disabled for this environment. Ask an administrator to complete verification. The development setup shortcut is available only in dev.";
+  }
+  if (mode === "log") {
+    return "Email delivery is in log mode for this environment. In dev, use the demo setup shortcut; in QA or production, ask an administrator to enable email sending before public signup.";
+  }
+  if (status === "failed") {
+    return "The verification email could not be sent. Ask an administrator to check the email delivery configuration.";
+  }
+  return null;
 }

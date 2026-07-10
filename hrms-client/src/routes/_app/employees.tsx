@@ -43,6 +43,7 @@ import {
   Pencil,
   KeyRound,
   Hourglass,
+  LoaderCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -80,6 +81,27 @@ function EmployeesPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [pendingRowAction, setPendingRowAction] = useState<{
+    employeeId: string;
+    type: "login" | "status";
+  } | null>(null);
+
+  const isPendingRowAction = (employeeId: string, type?: "login" | "status") =>
+    pendingRowAction?.employeeId === employeeId && (!type || pendingRowAction.type === type);
+
+  const runRowAction = async (
+    employee: Employee,
+    type: "login" | "status",
+    action: () => Promise<void>,
+  ) => {
+    if (pendingRowAction) return;
+    setPendingRowAction({ employeeId: employee.id, type });
+    try {
+      await action();
+    } finally {
+      setPendingRowAction(null);
+    }
+  };
 
   const filtered = useMemo(() => {
     return visible.filter((e) => {
@@ -249,23 +271,31 @@ function EmployeesPage() {
     {
       key: "status",
       header: "Status",
-      render: (e) => <StatusBadge status={e.status} label={EMPLOYEE_STATUS_LABEL[e.status]} />,
+      render: (e) => (
+        <div className="inline-flex flex-wrap items-center justify-end gap-2">
+          <StatusBadge status={e.status} label={EMPLOYEE_STATUS_LABEL[e.status]} />
+          {isPendingRowAction(e.id, "status") && <InlineSaving label="Updating" />}
+        </div>
+      ),
     },
     {
       key: "login",
       header: "Login",
       render: (e) =>
         canEdit ? (
-          <Switch
-            checked={e.loginEnabled}
-            onCheckedChange={(c) => {
-              void setLogin(e.id, c)
-                .then(() =>
-                  toast.success(c ? "Login enabled" : "Login disabled", { description: e.name }),
-                )
-                .catch((error) => toastApiError(error, "Login access could not be updated."));
-            }}
-          />
+          <div className="inline-flex flex-wrap items-center justify-end gap-2">
+            <Switch
+              checked={e.loginEnabled}
+              disabled={isPendingRowAction(e.id)}
+              onCheckedChange={(c) => {
+                void runRowAction(e, "login", async () => {
+                  await setLogin(e.id, c);
+                  toast.success(c ? "Login enabled" : "Login disabled", { description: e.name });
+                }).catch((error) => toastApiError(error, "Login access could not be updated."));
+              }}
+            />
+            {isPendingRowAction(e.id, "login") && <InlineSaving label="Saving" />}
+          </div>
         ) : (
           <StatusBadge
             status={e.loginEnabled ? "active" : "inactive"}
@@ -414,41 +444,52 @@ function EmployeesPage() {
             label: string;
             onClick?: () => void;
             tone?: "default" | "destructive";
+            disabled?: boolean;
           }[] = [{ label: "View profile", onClick: () => goProfile(e.id) }];
           if (canEdit) {
             actions.push({ label: "Edit", onClick: () => openEdit(e) });
             actions.push({ label: "Manage roles", onClick: () => goProfile(e.id) });
             actions.push({
-              label: e.loginEnabled ? "Disable login" : "Enable login",
+              label: isPendingRowAction(e.id, "login")
+                ? "Saving login..."
+                : e.loginEnabled
+                  ? "Disable login"
+                  : "Enable login",
+              disabled: isPendingRowAction(e.id),
               onClick: () => {
-                void setLogin(e.id, !e.loginEnabled)
-                  .then(() =>
-                    toast.success(!e.loginEnabled ? "Login enabled" : "Login disabled", {
-                      description: e.name,
-                    }),
-                  )
-                  .catch((error) => toastApiError(error, "Login access could not be updated."));
+                void runRowAction(e, "login", async () => {
+                  await setLogin(e.id, !e.loginEnabled);
+                  toast.success(!e.loginEnabled ? "Login enabled" : "Login disabled", {
+                    description: e.name,
+                  });
+                }).catch((error) => toastApiError(error, "Login access could not be updated."));
               },
             });
             if (!isApiBacked && e.status !== "notice_period" && e.status !== "exited") {
               actions.push({
-                label: "Mark notice period",
+                label: isPendingRowAction(e.id, "status")
+                  ? "Updating status..."
+                  : "Mark notice period",
+                disabled: isPendingRowAction(e.id),
                 onClick: () => {
-                  void setStatus(e.id, "notice_period")
-                    .then(() => toast.success("Marked notice period", { description: e.name }))
-                    .catch((error) =>
-                      toastApiError(error, "Employee status could not be updated."),
-                    );
+                  void runRowAction(e, "status", async () => {
+                    await setStatus(e.id, "notice_period");
+                    toast.success("Marked notice period", { description: e.name });
+                  }).catch((error) =>
+                    toastApiError(error, "Employee status could not be updated."),
+                  );
                 },
               });
             }
             actions.push({
-              label: "Deactivate",
+              label: isPendingRowAction(e.id, "status") ? "Deactivating..." : "Deactivate",
               tone: "destructive",
+              disabled: isPendingRowAction(e.id),
               onClick: () => {
-                void setStatus(e.id, "inactive")
-                  .then(() => toast.success("Employee deactivated", { description: e.name }))
-                  .catch((error) => toastApiError(error, "Employee could not be deactivated."));
+                void runRowAction(e, "status", async () => {
+                  await setStatus(e.id, "inactive");
+                  toast.success("Employee deactivated", { description: e.name });
+                }).catch((error) => toastApiError(error, "Employee could not be deactivated."));
               },
             });
           }
@@ -480,5 +521,14 @@ function EmployeesPage() {
         </span>
       </div>
     </>
+  );
+}
+
+function InlineSaving({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+      <LoaderCircle className="h-3 w-3 animate-spin" />
+      {label}
+    </span>
   );
 }
