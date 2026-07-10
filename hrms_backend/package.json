@@ -48,7 +48,7 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:contracts": "vitest run --project contracts",
-    "test:e2e": "vitest run --project e2e --passWithNoTests",
+    "test:e2e": "vitest run --project e2e",
     "api:docs:generate": "tsx scripts/api-docs-generate.ts && pnpm api:frontend-contract:generate",
     "api:docs:verify": "tsx scripts/api-docs-verify.ts",
     "api:consumer:verify": "tsx scripts/api-consumer-verify.ts",
