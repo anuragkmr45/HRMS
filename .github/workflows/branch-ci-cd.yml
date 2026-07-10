@@ -6,48 +6,76 @@ on:
       - dev
       - qa
       - main
+      - "release-*"
   pull_request:
     branches:
       - dev
       - qa
       - main
-  workflow_dispatch:
-    inputs:
-      target_environment:
-        description: Environment to deploy
-        required: true
-        type: choice
-        options:
-          - dev
-          - qa
-          - production
+      - "release-*"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: hrms-${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: branch-ci-cd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-checks:
     name: Backend checks
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://hrms_ci:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/hrms_ci_test
+      VALKEY_URL: redis://127.0.0.1:6379
+      CLOUDINARY_MOCK_UPLOADS: "true"
+      EMAIL_DELIVERY_MODE: log
+      LOCAL_DEMO_PASSWORD: ci-demo-${{ github.run_id }}-${{ github.run_attempt }}-A1!
+      JWT_ACCESS_SECRET: ci-access-${{ github.run_id }}-${{ github.run_attempt }}-secret
+      JWT_REFRESH_SECRET: ci-refresh-${{ github.run_id }}-${{ github.run_attempt }}-secret
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hrms_ci_test
+          POSTGRES_USER: hrms_ci
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hrms_ci -d hrms_ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      valkey:
+        image: valkey/valkey:9.0.3-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     defaults:
       run:
         working-directory: hrms_backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 10.25.0
+          package_json_file: hrms_backend/package.json
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: pnpm
@@ -56,8 +84,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Migrate test database
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: pnpm db:migrate
+
+      - name: Verify database constraints
+        run: pnpm db:verify:no-cross-schema-fks
+
+      - name: Test
+        run: pnpm test
 
       - name: Build
         run: pnpm build
@@ -65,21 +107,31 @@ jobs:
   frontend-checks:
     name: Frontend checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_APP_ENV: ci
+      VITE_APP_VERSION: 0.1.0-ci
+      VITE_BUILD_SHA: ${{ github.sha }}
+      VITE_API_BASE_URL: http://127.0.0.1:3001
+      VITE_API_ENABLED: "true"
+      VITE_API_MOCK_FALLBACK: "false"
     defaults:
       run:
         working-directory: hrms-client
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 10.25.0
+          package_json_file: hrms-client/package.json
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: pnpm
@@ -87,6 +139,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Production API mode guard
         run: pnpm api:production-config-guard
@@ -100,23 +158,26 @@ jobs:
     needs:
       - backend-checks
       - frontend-checks
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    environment: ${{ github.event_name == 'workflow_dispatch' && (inputs.target_environment == 'dev' && 'development' || inputs.target_environment) || (github.ref_name == 'qa' && 'qa' || github.ref_name == 'dev' && 'development' || 'production') }}
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/dev' ||
+      github.ref == 'refs/heads/qa' ||
+      github.ref == 'refs/heads/main')
+    environment: ${{ github.ref_name == 'dev' && 'development' || github.ref_name == 'qa' && 'qa' || 'production' }}
+    timeout-minutes: 10
     steps:
       - name: Resolve deployment target
         id: target
         shell: bash
+        env:
+          DEPLOY_BRANCH: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            target="${{ inputs.target_environment }}"
-          else
-            case "${{ github.ref_name }}" in
-              dev) target="dev" ;;
-              qa) target="qa" ;;
-              main) target="production" ;;
-              *) echo "Unsupported branch ${{ github.ref_name }}" >&2; exit 1 ;;
-            esac
-          fi
+          case "$DEPLOY_BRANCH" in
+            dev) target="dev" ;;
+            qa) target="qa" ;;
+            main) target="production" ;;
+            *) echo "Unsupported deployment branch." >&2; exit 1 ;;
+          esac
 
           case "$target" in
             dev)

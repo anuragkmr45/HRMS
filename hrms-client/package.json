@@ -11,6 +11,7 @@
     "build:vercel": "node scripts/build-vercel.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
     "format": "prettier --write .",
     "test:e2e": "playwright test",
     "test:e2e:frontend-theme": "playwright test -c playwright.frontend-theme.config.ts",

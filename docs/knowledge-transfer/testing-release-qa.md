@@ -53,6 +53,7 @@ Common commands:
 ```bash
 cd hrms-client
 pnpm lint
+pnpm typecheck
 pnpm build
 pnpm build:vercel
 pnpm api:production-config-guard
@@ -88,8 +89,13 @@ Backend CI:
 
 - Setup pnpm 10.25.0.
 - Setup Node 24.
+- Start isolated PostgreSQL 16 and Valkey 9.0.3 services.
 - `pnpm install --frozen-lockfile`
+- `pnpm lint`
 - `pnpm typecheck`
+- `pnpm db:migrate`
+- `pnpm db:verify:no-cross-schema-fks`
+- `pnpm test`
 - `pnpm build`
 
 Frontend CI:
@@ -97,10 +103,12 @@ Frontend CI:
 - Setup pnpm 10.25.0.
 - Setup Node 24.
 - `pnpm install --frozen-lockfile`
+- `pnpm lint`
+- `pnpm typecheck`
 - `pnpm api:production-config-guard`
 - `pnpm build:vercel`
 
-Deploy job triggers Render API and worker deploy hooks on push or manual workflow dispatch after checks pass.
+The backend deploy job triggers Render API and worker deploy hooks only on pushes to `dev`, `qa`, or `main` after both checks pass. Pull requests, `release-*` pushes, and manual workflow dispatches run validation only. Frontend Playwright remains a dedicated isolated-environment check because the current suite requires and mutates a seeded backend.
 
 ## Branch Flow
 
@@ -166,4 +174,3 @@ Backend QA artifacts are generally written under `hrms_backend/docs/qa/runs/`. F
 | Helpdesk | Ticket create/detail, comments, internal notes, assignment, status, SLA, reports. |
 | Admin settings | Master data, RBAC, workflows, policies, templates, security, audit logs. |
 | Reports | Filters, role scope, pagination, export/document IDs, aggregate correctness. |
-
