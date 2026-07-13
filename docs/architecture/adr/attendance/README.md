@@ -1,7 +1,7 @@
 # Attendance Architecture ADR Pack
 
 Project: Hawkaii HRMS   
-Date: 2026-07-13   
+Date: 2026-07-13    
 Domain: Attendance Architecture  
 Review Required Before: Attendance migration work starts  
 

@@ -1,4 +1,4 @@
-# ADR-01: Attendance as a Bounded Context inside the Existing Fastify Backend
+# ADR-001: Attendance as a Bounded Context inside the Existing Fastify Backend
 
 Project: Hawkaii HRMS   
 Date: 2026-07-13  
