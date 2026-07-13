@@ -1,4 +1,4 @@
-# ADR-003: Manual vs Geo Attendance Semantics
+# ADR-03: Manual vs Geo Attendance Semantics
 
 Project: Hawkaii HRMS     
 Date: 2026-07-13  

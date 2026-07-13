@@ -2,7 +2,7 @@
 
 Project: Hawkaii HRMS   
 Date: 2026-07-13    
-Domain: Attendance Architecture  
+Domain: Attendance Architecture   
 Review Required Before: Attendance migration work starts  
 
 ## Purpose

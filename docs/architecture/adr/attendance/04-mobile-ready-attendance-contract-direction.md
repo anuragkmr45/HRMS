@@ -1,4 +1,4 @@
-# ADR-004: Mobile-Ready Attendance Contract Direction
+# ADR-04: Mobile-Ready Attendance Contract Direction
 
 Project: Hawkaii HRMS     
 Date: 2026-07-13    
