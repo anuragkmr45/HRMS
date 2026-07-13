@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { createMemoryDataStore, seedIds } from "../../../platform/data-store.js";
+import {
+  createMemoryDataStore,
+  seedIds,
+} from "../../../platform/data-store.js";
 import { AttendanceRepository } from "../repository.js";
 
 describe("AttendanceRepository", () => {
@@ -15,7 +18,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       expect(punch.id).toBeDefined();
@@ -38,7 +41,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T18:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       repository.addPunch({
@@ -47,7 +50,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       const punches = repository.listPunches(seedIds.employee1);
@@ -67,7 +70,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       repository.addPunch({
@@ -76,7 +79,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       expect(repository.listPunches(seedIds.employee1)).toHaveLength(1);
@@ -93,7 +96,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       punch.deleted_at = "2026-07-08T12:00:00.000Z";
@@ -111,7 +114,7 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-07T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       repository.addPunch({
@@ -120,13 +123,13 @@ describe("AttendanceRepository", () => {
         occurred_at: "2026-07-08T09:00:00.000Z",
         work_mode: "office",
         source: "web",
-        metadata: {}
+        metadata: {},
       });
 
       const punches = repository.listPunches(
         seedIds.employee1,
         "2026-07-08",
-        "2026-07-08"
+        "2026-07-08",
       );
 
       expect(punches).toHaveLength(1);
@@ -139,9 +142,7 @@ describe("AttendanceRepository", () => {
       const store = createMemoryDataStore();
       const repository = new AttendanceRepository(store);
 
-      expect(
-        repository.dayRecord(seedIds.employee1, "2026-07-08")
-      ).toBeNull();
+      expect(repository.dayRecord(seedIds.employee1, "2026-07-08")).toBeNull();
     });
 
     it("returns existing day record", () => {
@@ -161,12 +162,12 @@ describe("AttendanceRepository", () => {
         work_mode: "office",
         note: null,
         exception_type: null,
-        regularization_status: null
+        regularization_status: null,
       });
 
-      expect(
-        repository.dayRecord(seedIds.employee1, "2026-07-08")
-      ).toEqual(record);
+      expect(repository.dayRecord(seedIds.employee1, "2026-07-08")).toEqual(
+        record,
+      );
     });
   });
 
@@ -188,7 +189,7 @@ describe("AttendanceRepository", () => {
         work_mode: "office",
         note: null,
         exception_type: null,
-        regularization_status: null
+        regularization_status: null,
       });
 
       expect(record.version).toBe(1);
@@ -212,7 +213,7 @@ describe("AttendanceRepository", () => {
         work_mode: "office",
         note: null,
         exception_type: null,
-        regularization_status: null
+        regularization_status: null,
       });
 
       const updated = repository.upsertDayRecord({
@@ -228,7 +229,7 @@ describe("AttendanceRepository", () => {
         work_mode: "office",
         note: "updated",
         exception_type: null,
-        regularization_status: null
+        regularization_status: null,
       });
 
       expect(updated.version).toBe(2);
@@ -238,312 +239,306 @@ describe("AttendanceRepository", () => {
   });
 
   describe("listDayRecords", () => {
-  it("filters by user ids", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
+    it("filters by user ids", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    repository.upsertDayRecord({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      status: "present",
-      first_check_in: null,
-      last_check_out: null,
-      work_minutes: 480,
-      break_minutes: 60,
-      late_minutes: 0,
-      early_out_minutes: 0,
-      work_mode: "office",
-      note: null,
-      exception_type: null,
-      regularization_status: null
+      repository.upsertDayRecord({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        status: "present",
+        first_check_in: null,
+        last_check_out: null,
+        work_minutes: 480,
+        break_minutes: 60,
+        late_minutes: 0,
+        early_out_minutes: 0,
+        work_mode: "office",
+        note: null,
+        exception_type: null,
+        regularization_status: null,
+      });
+
+      repository.upsertDayRecord({
+        employee_user_id: seedIds.employee2,
+        work_date: "2026-07-08",
+        status: "present",
+        first_check_in: null,
+        last_check_out: null,
+        work_minutes: 420,
+        break_minutes: 45,
+        late_minutes: 0,
+        early_out_minutes: 0,
+        work_mode: "office",
+        note: null,
+        exception_type: null,
+        regularization_status: null,
+      });
+
+      const records = repository.listDayRecords({
+        userIds: new Set([seedIds.employee1]),
+      });
+
+      expect(records).toHaveLength(1);
+      expect(records[0]!.employee_user_id).toBe(seedIds.employee1);
     });
 
-    repository.upsertDayRecord({
-      employee_user_id: seedIds.employee2,
-      work_date: "2026-07-08",
-      status: "present",
-      first_check_in: null,
-      last_check_out: null,
-      work_minutes: 420,
-      break_minutes: 45,
-      late_minutes: 0,
-      early_out_minutes: 0,
-      work_mode: "office",
-      note: null,
-      exception_type: null,
-      regularization_status: null
-    });
+    it("filters by date range", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    const records = repository.listDayRecords({
-      userIds: new Set([seedIds.employee1])
-    });
+      repository.upsertDayRecord({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-07",
+        status: "present",
+        first_check_in: null,
+        last_check_out: null,
+        work_minutes: 480,
+        break_minutes: 60,
+        late_minutes: 0,
+        early_out_minutes: 0,
+        work_mode: "office",
+        note: null,
+        exception_type: null,
+        regularization_status: null,
+      });
 
-    expect(records).toHaveLength(1);
-    expect(records[0]!.employee_user_id).toBe(seedIds.employee1);
+      repository.upsertDayRecord({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        status: "present",
+        first_check_in: null,
+        last_check_out: null,
+        work_minutes: 480,
+        break_minutes: 60,
+        late_minutes: 0,
+        early_out_minutes: 0,
+        work_mode: "office",
+        note: null,
+        exception_type: null,
+        regularization_status: null,
+      });
+
+      const records = repository.listDayRecords({
+        dateFrom: "2026-07-08",
+        dateTo: "2026-07-08",
+      });
+
+      expect(records).toHaveLength(1);
+      expect(records[0]!.work_date).toBe("2026-07-08");
+    });
   });
 
-  it("filters by date range", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
+  describe("addRegularization", () => {
+    it("creates a pending request", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    repository.upsertDayRecord({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-07",
-      status: "present",
-      first_check_in: null,
-      last_check_out: null,
-      work_minutes: 480,
-      break_minutes: 60,
-      late_minutes: 0,
-      early_out_minutes: 0,
-      work_mode: "office",
-      note: null,
-      exception_type: null,
-      regularization_status: null
+      const request = repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [
+          {
+            event_type: "check_out",
+            occurred_at: "2026-07-08T18:00:00.000Z",
+          },
+        ],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      expect(request.version).toBe(1);
+      expect(request.status).toBe("pending");
+      expect(store.attendanceRegularizations).toHaveLength(1);
     });
 
-    repository.upsertDayRecord({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      status: "present",
-      first_check_in: null,
-      last_check_out: null,
-      work_minutes: 480,
-      break_minutes: 60,
-      late_minutes: 0,
-      early_out_minutes: 0,
-      work_mode: "office",
-      note: null,
-      exception_type: null,
-      regularization_status: null
-    });
+    it("rejects duplicate pending requests", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    const records = repository.listDayRecords({
-      dateFrom: "2026-07-08",
-      dateTo: "2026-07-08"
-    });
-
-    expect(records).toHaveLength(1);
-    expect(records[0]!.work_date).toBe("2026-07-08");
-  });
-});
-
-describe("addRegularization", () => {
-  it("creates a pending request", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    const request = repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [
-        {
-          event_type: "check_out",
-          occurred_at: "2026-07-08T18:00:00.000Z"
-        }
-      ],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
-    });
-
-    expect(request.version).toBe(1);
-    expect(request.status).toBe("pending");
-    expect(store.attendanceRegularizations).toHaveLength(1);
-  });
-
-  it("rejects duplicate pending requests", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
-    });
-
-    expect(() =>
       repository.addRegularization({
         employee_user_id: seedIds.employee1,
         work_date: "2026-07-08",
-        reason: "Duplicate",
+        reason: "Forgot checkout",
         requested_punches: [],
         status: "pending",
-        current_approver_user_id: seedIds.manager
-      })
-    ).toThrow();
+        current_approver_user_id: seedIds.manager,
+      });
+
+      expect(() =>
+        repository.addRegularization({
+          employee_user_id: seedIds.employee1,
+          work_date: "2026-07-08",
+          reason: "Duplicate",
+          requested_punches: [],
+          status: "pending",
+          current_approver_user_id: seedIds.manager,
+        }),
+      ).toThrow();
+    });
   });
-});
 
-describe("findRegularization", () => {
-  it("finds an existing request", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
+  describe("findRegularization", () => {
+    it("finds an existing request", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    const created = repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
+      const created = repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      expect(repository.findRegularization(created.id)).toEqual(created);
     });
 
-    expect(repository.findRegularization(created.id)).toEqual(created);
-  });
+    it("throws when request is missing", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-  it("throws when request is missing", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    expect(() =>
-      repository.findRegularization(randomUUID())
-    ).toThrow();
-  });
-});
-
-describe("updateRegularizationVersioned", () => {
-  it("updates matching version", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    const request = repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
+      expect(() => repository.findRegularization(randomUUID())).toThrow();
     });
-
-    const updated = repository.updateRegularizationVersioned(
-      request.id,
-      1,
-      (item) => {
-        item.status = "approved";
-      }
-    );
-
-    expect(updated.status).toBe("approved");
-    expect(updated.version).toBe(2);
   });
 
-  it("throws optimistic concurrency conflict", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
+  describe("updateRegularizationVersioned", () => {
+    it("updates matching version", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    const request = repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
-    });
+      const request = repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
 
-    expect(() =>
-      repository.updateRegularizationVersioned(
+      const updated = repository.updateRegularizationVersioned(
         request.id,
-        99,
-        () => {}
-      )
-    ).toThrow();
-  });
-});
+        1,
+        (item) => {
+          item.status = "approved";
+        },
+      );
 
-describe("listRegularizations", () => {
-  it("filters by status", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
+      expect(updated.status).toBe("approved");
+      expect(updated.version).toBe(2);
     });
 
-    repository.addRegularization({
-      employee_user_id: seedIds.employee2,
-      work_date: "2026-07-09",
-      reason: "Medical",
-      requested_punches: [],
-      status: "approved",
-      current_approver_user_id: seedIds.manager
-    });
+    it("throws optimistic concurrency conflict", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    const pending = repository.listRegularizations({
-      status: "pending"
-    });
+      const request = repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
 
-    expect(pending).toHaveLength(1);
-    expect(pending[0]!.status).toBe("pending");
+      expect(() =>
+        repository.updateRegularizationVersioned(request.id, 99, () => {}),
+      ).toThrow();
+    });
   });
 
-  it("filters by user ids", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
+  describe("listRegularizations", () => {
+    it("filters by status", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
+      repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      repository.addRegularization({
+        employee_user_id: seedIds.employee2,
+        work_date: "2026-07-09",
+        reason: "Medical",
+        requested_punches: [],
+        status: "approved",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      const pending = repository.listRegularizations({
+        status: "pending",
+      });
+
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.status).toBe("pending");
     });
 
-    repository.addRegularization({
-      employee_user_id: seedIds.employee2,
-      work_date: "2026-07-09",
-      reason: "Medical",
-      requested_punches: [],
-      status: "approved",
-      current_approver_user_id: seedIds.manager
+    it("filters by user ids", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
+
+      repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      repository.addRegularization({
+        employee_user_id: seedIds.employee2,
+        work_date: "2026-07-09",
+        reason: "Medical",
+        requested_punches: [],
+        status: "approved",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      const result = repository.listRegularizations({
+        userIds: new Set([seedIds.employee2]),
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.employee_user_id).toBe(seedIds.employee2);
     });
 
-    const result = repository.listRegularizations({
-      userIds: new Set([seedIds.employee2])
-    });
+    it("filters by date range", () => {
+      const store = createMemoryDataStore();
+      const repository = new AttendanceRepository(store);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]!.employee_user_id).toBe(seedIds.employee2);
+      repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-08",
+        reason: "Forgot checkout",
+        requested_punches: [],
+        status: "pending",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      repository.addRegularization({
+        employee_user_id: seedIds.employee1,
+        work_date: "2026-07-10",
+        reason: "Medical",
+        requested_punches: [],
+        status: "approved",
+        current_approver_user_id: seedIds.manager,
+      });
+
+      const result = repository.listRegularizations({
+        dateFrom: "2026-07-09",
+        dateTo: "2026-07-10",
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.work_date).toBe("2026-07-10");
+    });
   });
-
-  it("filters by date range", () => {
-    const store = createMemoryDataStore();
-    const repository = new AttendanceRepository(store);
-
-    repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-08",
-      reason: "Forgot checkout",
-      requested_punches: [],
-      status: "pending",
-      current_approver_user_id: seedIds.manager
-    });
-
-    repository.addRegularization({
-      employee_user_id: seedIds.employee1,
-      work_date: "2026-07-10",
-      reason: "Medical",
-      requested_punches: [],
-      status: "approved",
-      current_approver_user_id: seedIds.manager
-    });
-
-    const result = repository.listRegularizations({
-      dateFrom: "2026-07-09",
-      dateTo: "2026-07-10"
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.work_date).toBe("2026-07-10");
-  });
-});
 });
