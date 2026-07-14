@@ -14,6 +14,7 @@ export function appendAttendanceOutboxEvent(
   store: MemoryDataStore,
   input: {
     aggregateId: string;
+    companyId: string;
     eventType: (typeof attendanceEvents)[keyof typeof attendanceEvents];
     payload: Record<string, unknown>;
     idempotencyKey: string;
@@ -23,7 +24,7 @@ export function appendAttendanceOutboxEvent(
     aggregateType: "attendance",
     aggregateId: input.aggregateId,
     eventType: input.eventType,
-    payload: input.payload,
+    payload: { ...input.payload, company_id: input.companyId },
     idempotencyKey: input.idempotencyKey
   });
 }
