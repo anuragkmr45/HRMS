@@ -45,6 +45,7 @@ export class AttendanceRepository {
   }
 
   listPunches(
+    companyId: UUID,
     employeeUserId: UUID,
     dateFrom?: string,
     dateTo?: string,
@@ -52,7 +53,7 @@ export class AttendanceRepository {
   ): AttendancePunch[] {
     return this.store.attendancePunches
       .filter((punch) => {
-        if (punch.employee_user_id !== employeeUserId || punch.deleted_at) {
+        if (punch.company_id !== companyId || punch.employee_user_id !== employeeUserId || punch.deleted_at) {
           return false;
         }
         const date = dateInTimeZone(punch.occurred_at, timeZone);
@@ -67,9 +68,10 @@ export class AttendanceRepository {
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
   }
 
-  dayRecord(employeeUserId: UUID, workDate: string): AttendanceDayRecord | null {
+  dayRecord(companyId: UUID, employeeUserId: UUID, workDate: string): AttendanceDayRecord | null {
     return this.store.attendanceDayRecords.find(
       (record) =>
+        record.company_id === companyId &&
         record.employee_user_id === employeeUserId &&
         record.work_date === workDate &&
         !record.deleted_at
@@ -77,7 +79,7 @@ export class AttendanceRepository {
   }
 
   upsertDayRecord(input: Omit<AttendanceDayRecord, "id" | "created_at" | "updated_at" | "version" | "deleted_at">): AttendanceDayRecord {
-    const existing = this.dayRecord(input.employee_user_id, input.work_date);
+    const existing = this.dayRecord(input.company_id, input.employee_user_id, input.work_date);
     const now = nowIso();
     if (!existing) {
       const record: AttendanceDayRecord = {
@@ -97,10 +99,13 @@ export class AttendanceRepository {
     return existing;
   }
 
-  listDayRecords(query: { userIds?: Set<UUID>; dateFrom?: string; dateTo?: string }): AttendanceDayRecord[] {
+  listDayRecords(query: { companyIds: Set<UUID>; userIds?: Set<UUID>; dateFrom?: string; dateTo?: string }): AttendanceDayRecord[] {
     return this.store.attendanceDayRecords
       .filter((record) => {
         if (record.deleted_at) {
+          return false;
+        }
+        if (!query.companyIds.has(record.company_id)) {
           return false;
         }
         if (query.userIds && !query.userIds.has(record.employee_user_id)) {
@@ -120,6 +125,7 @@ export class AttendanceRepository {
   addRegularization(input: Omit<AttendanceRegularizationRequest, "id" | "created_at" | "updated_at" | "version" | "deleted_at" | "decided_at" | "decided_by_user_id" | "decision_remarks">): AttendanceRegularizationRequest {
     const duplicate = this.store.attendanceRegularizations.find(
       (request) =>
+        request.company_id === input.company_id &&
         request.employee_user_id === input.employee_user_id &&
         request.work_date === input.work_date &&
         request.status === "pending" &&
@@ -146,8 +152,8 @@ export class AttendanceRepository {
     return request;
   }
 
-  findRegularization(id: UUID): AttendanceRegularizationRequest {
-    const request = this.store.attendanceRegularizations.find((candidate) => candidate.id === id && !candidate.deleted_at);
+  findRegularization(id: UUID, companyIds: Set<UUID>): AttendanceRegularizationRequest {
+    const request = this.store.attendanceRegularizations.find((candidate) => candidate.id === id && companyIds.has(candidate.company_id) && !candidate.deleted_at);
     if (!request) {
       throw notFound("Attendance regularization request not found", { id });
     }
@@ -156,10 +162,11 @@ export class AttendanceRepository {
 
   updateRegularizationVersioned(
     id: UUID,
+    companyIds: Set<UUID>,
     expectedVersion: number,
     mutator: (request: AttendanceRegularizationRequest) => void
   ): AttendanceRegularizationRequest {
-    const request = this.findRegularization(id);
+    const request = this.findRegularization(id, companyIds);
     if (request.version !== expectedVersion) {
       throw conflict("Attendance regularization request was modified by another actor.", {
         aggregate: "attendance_regularization",
@@ -172,10 +179,13 @@ export class AttendanceRepository {
     return request;
   }
 
-  listRegularizations(query: { userIds?: Set<UUID>; status?: string; dateFrom?: string; dateTo?: string }): AttendanceRegularizationRequest[] {
+  listRegularizations(query: { companyIds: Set<UUID>; userIds?: Set<UUID>; status?: string; dateFrom?: string; dateTo?: string }): AttendanceRegularizationRequest[] {
     return this.store.attendanceRegularizations
       .filter((request) => {
         if (request.deleted_at) {
+          return false;
+        }
+        if (!query.companyIds.has(request.company_id)) {
           return false;
         }
         if (query.userIds && !query.userIds.has(request.employee_user_id)) {

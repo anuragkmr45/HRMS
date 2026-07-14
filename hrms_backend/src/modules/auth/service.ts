@@ -1047,7 +1047,6 @@ export class AuthService {
   private async sendVerificationEmail(
     input: VerificationEmailSendInput,
   ): Promise<VerificationEmailSendResult> {
-    
     if (input.enforceResendLimits) {
       console.log("sendVerificationEmail called");
       const rateLimit = this.checkEmailSendLimit(

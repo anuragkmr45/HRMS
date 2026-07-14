@@ -14,6 +14,9 @@ export class AppError extends Error {
 export const badRequest = (message: string, details?: unknown) =>
   new AppError(ErrorCodes.BadRequest, message, 400, details);
 
+export const companyContextRequired = (details?: unknown) =>
+  new AppError(ErrorCodes.CompanyContextRequired, "Company context is required for attendance access.", 400, details);
+
 export const unauthorized = (message = "Authentication required") =>
   new AppError(ErrorCodes.Unauthorized, message, 401);
 
