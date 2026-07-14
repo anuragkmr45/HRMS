@@ -17,7 +17,7 @@ import {
 } from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import { nowIso } from "../../platform/data-store.js";
-import { badRequest, conflict, forbidden, missingRemarks, notFound } from "../../platform/errors.js";
+import { badRequest, companyContextRequired, conflict, forbidden, missingRemarks, notFound } from "../../platform/errors.js";
 import { createGeneratedExportDocument, type GeneratedExportFormat } from "../../platform/generated-exports.js";
 import { isWorkingDate } from "../../platform/work-schedule.js";
 import { CoreService } from "../core/service.js";
@@ -39,6 +39,7 @@ export interface AttendancePageQuery {
   date_from?: string;
   date_to?: string;
   month?: string;
+  company_id?: UUID;
   user_id?: UUID;
   department_id?: UUID;
   status?: string;
@@ -46,7 +47,15 @@ export interface AttendancePageQuery {
 }
 
 export interface AttendanceExportInput {
-  filters?: Record<string, unknown>;
+  company_id?: UUID;
+  filters?: {
+    user_id?: UUID;
+    employee_user_id?: UUID;
+    department_id?: UUID;
+    status?: string;
+    date_from?: string;
+    date_to?: string;
+  };
   columns?: string[];
   format?: "csv" | "xlsx" | "json";
 }
@@ -294,11 +303,12 @@ export class AttendanceService {
     }
   ) {
     assertCanUseSelfAttendance(actor);
+    const companyId = this.selfCompanyId(actor);
     const occurredAt = input.occurred_at ?? nowIso();
-    const timeZone = this.timezoneForUser(actor.id);
-    this.autoPunchOutExpiredSessions(actor.id, timeZone, occurredAt);
-    const workDate = this.workDateForPunch(actor.id, input.event_type, occurredAt, timeZone);
-    const availability = this.punchAvailability(actor.id, workDate, timeZone, occurredAt);
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    this.autoPunchOutExpiredSessions(companyId, actor.id, timeZone, occurredAt);
+    const workDate = this.workDateForPunch(companyId, actor.id, input.event_type, occurredAt, timeZone);
+    const availability = this.punchAvailability(companyId, actor.id, workDate, timeZone, occurredAt);
     if (!availability.next_allowed_actions.includes(input.event_type)) {
       const policyReason = availability.blocked_action_reasons[input.event_type];
       if (availability.sequence_allowed_actions.includes(input.event_type) && policyReason) {
@@ -314,6 +324,7 @@ export class AttendanceService {
       });
     }
     const punch = this.repository.addPunch({
+      company_id: companyId,
       employee_user_id: actor.id,
       event_type: input.event_type,
       occurred_at: occurredAt,
@@ -321,9 +332,10 @@ export class AttendanceService {
       source: input.source,
       metadata: input.metadata
     });
-    const day = this.recomputeDay(actor.id, workDate, timeZone, occurredAt);
+    const day = this.recomputeDay(companyId, actor.id, workDate, timeZone, occurredAt);
     appendAttendanceOutboxEvent(this.store, {
       aggregateId: punch.id,
+      companyId,
       eventType: attendanceEvents.Punched,
       payload: {
         punch_id: punch.id,
@@ -335,7 +347,7 @@ export class AttendanceService {
       },
       idempotencyKey: `attendance.punched:${punch.id}`
     });
-    const nextAvailability = this.punchAvailability(actor.id, workDate, timeZone, occurredAt);
+    const nextAvailability = this.punchAvailability(companyId, actor.id, workDate, timeZone, occurredAt);
     return {
       punch_id: punch.id,
       punch,
@@ -348,26 +360,28 @@ export class AttendanceService {
 
   listMyPunches(actor: AuthUser, query: AttendancePageQuery) {
     assertCanUseSelfAttendance(actor);
-    const timeZone = this.timezoneForUser(actor.id);
-    this.autoPunchOutExpiredSessions(actor.id, timeZone);
+    const companyId = this.selfCompanyId(actor);
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    this.autoPunchOutExpiredSessions(companyId, actor.id, timeZone);
     const range = dateRange(query, timeZone);
-    const punches = this.repository.listPunches(actor.id, range.from, range.to, timeZone).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+    const punches = this.repository.listPunches(companyId, actor.id, range.from, range.to, timeZone).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
     return page(punches.map((punch) => this.presentPunch(punch, timeZone)), query.page, query.page_size);
   }
 
   mySummary(actor: AuthUser, query: AttendancePageQuery) {
     assertCanUseSelfAttendance(actor);
-    const timeZone = this.timezoneForUser(actor.id);
+    const companyId = this.selfCompanyId(actor);
+    const timeZone = this.timezoneForUser(actor.id, companyId);
     const range = dateRange(query, timeZone);
-    const today = this.resolveDay(actor.id, todayDate(timeZone), timeZone);
-    const availabilityWorkDate = this.openSessionWorkDate(actor.id, nowIso(), timeZone) ?? today.work_date;
-    const todayPunchAvailability = this.punchAvailability(actor.id, availabilityWorkDate, timeZone);
-    const records = this.recordsForUsers(new Set([actor.id]), range.from, range.to).map((record) =>
+    const today = this.resolveDay(companyId, actor.id, todayDate(timeZone), timeZone);
+    const availabilityWorkDate = this.openSessionWorkDate(companyId, actor.id, nowIso(), timeZone) ?? today.work_date;
+    const todayPunchAvailability = this.punchAvailability(companyId, actor.id, availabilityWorkDate, timeZone);
+    const records = this.recordsForUsers(companyId, new Set([actor.id]), range.from, range.to).map((record) =>
       record.employee_user_id === actor.id && record.work_date === today.work_date ? today : record
     );
-    const weekRecords = this.weekRecords(actor.id, timeZone);
-    const weeklyBalance = this.weeklyBalance(weekRecords);
-    const targetWorkMinutes = this.targetWorkMinutes();
+    const weekRecords = this.weekRecords(companyId, actor.id, timeZone);
+    const weeklyBalance = this.weeklyBalance(companyId, weekRecords);
+    const targetWorkMinutes = this.targetWorkMinutes(companyId);
     const exceptionHistory = records
       .filter((record) => record.exception_type || record.regularization_status)
       .sort((a, b) => b.work_date.localeCompare(a.work_date))
@@ -401,10 +415,11 @@ export class AttendanceService {
   }
 
   teamSummary(actor: AuthUser, query: AttendancePageQuery) {
-    const date = query.date_from ?? todayDate(this.timezoneForUser(actor.id));
-    const visibleUsers = this.visibleUsers(actor, query.department_id);
+    const companyId = this.companyForActor(actor, query.company_id);
+    const date = query.date_from ?? todayDate(this.timezoneForUser(actor.id, companyId));
+    const visibleUsers = this.visibleUsers(actor, companyId, query.department_id);
     const activeUsers = visibleUsers.filter((user) => user.employment_status === EmploymentStatuses.Active);
-    const records = activeUsers.map((user) => this.resolveDay(user.id, date, this.timezoneForUser(user.id)));
+    const records = activeUsers.map((user) => this.resolveDay(companyId, user.id, date, this.timezoneForUser(user.id, companyId)));
     const exceptions = this.exceptions(actor, { ...query, page: 1, page_size: 8, date_from: date, date_to: date }).items;
     return {
       generated_at: nowIso(),
@@ -417,16 +432,18 @@ export class AttendanceService {
 
   monthlyCalendar(actor: AuthUser, query: AttendancePageQuery) {
     const user = query.user_id ? this.requireUser(query.user_id) : this.requireUser(actor.id);
+    const companyId = user.id === actor.id ? this.selfCompanyId(actor) : this.companyForActor(actor, query.company_id);
     if (user.id === actor.id) {
       assertCanUseSelfAttendance(actor);
     }
     assertCanSeeAttendanceUser(actor, user);
-    const timeZone = this.timezoneForUser(user.id);
+    this.assertUserInCompany(user.id, companyId);
+    const timeZone = this.timezoneForUser(user.id, companyId);
     const range = monthRange(query.month, timeZone);
     const days = new Date(`${range.to}T00:00:00.000Z`).getUTCDate();
     const calendarDays = Array.from({ length: days }, (_, index) => {
       const date = `${range.month}-${String(index + 1).padStart(2, "0")}`;
-      return this.presentDay(this.resolveDay(user.id, date, timeZone), timeZone);
+      return this.presentDay(this.resolveDay(companyId, user.id, date, timeZone), timeZone);
     });
     return {
       generated_at: nowIso(),
@@ -438,15 +455,18 @@ export class AttendanceService {
   }
 
   dailyCalendar(actor: AuthUser, query: AttendancePageQuery) {
-    const date = query.date ?? query.date_from ?? todayDate(this.timezoneForUser(actor.id));
-    const users = query.user_id ? [this.requireUser(query.user_id)] : this.visibleUsers(actor, query.department_id);
+    const companyId = this.companyForActor(actor, query.company_id);
+    const date = query.date ?? query.date_from ?? todayDate(this.timezoneForUser(actor.id, companyId));
+    const users = query.user_id ? [this.requireUser(query.user_id)] : this.visibleUsers(actor, companyId, query.department_id);
     for (const user of users) {
       assertCanSeeAttendanceUser(actor, user);
+      this.assertUserInCompany(user.id, companyId);
     }
     const activeUsers = users.filter((user) => user.employment_status === EmploymentStatuses.Active);
     const userIds = new Set(activeUsers.map((user) => user.id));
-    const records = activeUsers.map((user) => this.resolveDay(user.id, date, this.timezoneForUser(user.id)));
+    const records = activeUsers.map((user) => this.resolveDay(companyId, user.id, date, this.timezoneForUser(user.id, companyId)));
     const regularizations = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds,
       dateFrom: date,
       dateTo: date
@@ -456,7 +476,7 @@ export class AttendanceService {
       .map((record) => {
         const user = activeUsers.find((candidate) => candidate.id === record.employee_user_id);
         const request = regularizationByUser.get(record.employee_user_id);
-        const timeZone = this.timezoneForUser(record.employee_user_id);
+        const timeZone = this.timezoneForUser(record.employee_user_id, companyId);
         return {
           ...this.presentDay(record, timeZone),
           employee: userLabel(user),
@@ -489,8 +509,10 @@ export class AttendanceService {
       requested_punches: Array<{ event_type: AttendancePunchEventType; occurred_at: string }>;
     }
   ) {
+    const companyId = this.selfCompanyId(actor);
     const approver = this.core.resolveImmediateManager(actor.id) ?? this.adminFallback();
     const request = this.repository.addRegularization({
+      company_id: companyId,
       employee_user_id: actor.id,
       work_date: input.work_date,
       reason: input.reason.trim(),
@@ -498,11 +520,12 @@ export class AttendanceService {
       status: AttendanceRegularizationStatuses.Pending,
       current_approver_user_id: approver?.id ?? null
     });
-    const day = this.resolveDay(actor.id, input.work_date, this.timezoneForUser(actor.id));
+    const day = this.resolveDay(companyId, actor.id, input.work_date, this.timezoneForUser(actor.id, companyId));
     day.regularization_status = AttendanceRegularizationStatuses.Pending;
     day.updated_at = nowIso();
     appendAttendanceOutboxEvent(this.store, {
       aggregateId: request.id,
+      companyId,
       eventType: attendanceEvents.RegularizationSubmitted,
       payload: {
         request_id: request.id,
@@ -517,8 +540,10 @@ export class AttendanceService {
   }
 
   myRegularizations(actor: AuthUser, query: AttendancePageQuery) {
-    const range = dateRange(query, this.timezoneForUser(actor.id));
+    const companyId = this.selfCompanyId(actor);
+    const range = dateRange(query, this.timezoneForUser(actor.id, companyId));
     const requests = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds: new Set([actor.id]),
       status: query.status,
       dateFrom: range.from,
@@ -528,14 +553,15 @@ export class AttendanceService {
   }
 
   managerRegularizationQueue(actor: AuthUser, query: AttendancePageQuery) {
+    const companyId = this.companyForActor(actor, query.company_id);
     if (!canSeeAllAttendance(actor) && !this.hasVisibleSubordinates(actor)) {
       throw forbidden("Only managers, HR, Admin, or Auditor users can read attendance regularization queues.");
     }
-    const range = dateRange(query, this.timezoneForUser(actor.id));
-    const visibleUsers = this.visibleUsers(actor, query.department_id).filter((user) => user.id !== actor.id);
+    const range = dateRange(query, this.timezoneForUser(actor.id, companyId));
+    const visibleUsers = this.visibleUsers(actor, companyId, query.department_id).filter((user) => user.id !== actor.id);
     const visibleUserIds = new Set(visibleUsers.map((user) => user.id));
     const scoped = this.repository
-      .listRegularizations({ userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
+      .listRegularizations({ companyIds: new Set([companyId]), userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
       .filter((request) => canSeeAllAttendance(actor) || request.current_approver_user_id === actor.id);
     const status = query.status ?? AttendanceRegularizationStatuses.Pending;
     const filtered = scoped.filter((request) => !status || request.status === status);
@@ -546,14 +572,16 @@ export class AttendanceService {
   }
 
   exceptions(actor: AuthUser, query: AttendancePageQuery) {
-    const actorTimeZone = this.timezoneForUser(actor.id);
+    const companyId = this.companyForActor(actor, query.company_id);
+    const actorTimeZone = this.timezoneForUser(actor.id, companyId);
     const range = {
       from: query.date_from ?? todayDate(actorTimeZone).slice(0, 7) + "-01",
       to: query.date_to ?? todayDate(actorTimeZone)
     };
-    const visibleUsers = this.visibleUsers(actor, query.department_id);
+    const visibleUsers = this.visibleUsers(actor, companyId, query.department_id);
     const visibleUserIds = new Set(visibleUsers.map((user) => user.id));
     const regularizations = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds: visibleUserIds,
       status: AttendanceRegularizationStatuses.Pending,
       dateFrom: range.from,
@@ -563,18 +591,18 @@ export class AttendanceService {
       regularizations.map((request) => [`${request.employee_user_id}:${request.work_date}`, request])
     );
     for (const user of visibleUsers) {
-      const timeZone = this.timezoneForUser(user.id);
+      const timeZone = this.timezoneForUser(user.id, companyId);
       for (const date of datesInclusive(range.from, range.to)) {
-        this.resolveDay(user.id, date, timeZone);
+        this.resolveDay(companyId, user.id, date, timeZone);
       }
     }
     const dayExceptions = this.repository
-      .listDayRecords({ userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
+      .listDayRecords({ companyIds: new Set([companyId]), userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
       .filter((record) => record.exception_type || record.regularization_status === AttendanceRegularizationStatuses.Pending)
       .map((record) => this.presentException(record, regularizationByUserDate.get(`${record.employee_user_id}:${record.work_date}`), actor));
     const requestExceptions = regularizations
       .filter((request) => !dayExceptions.some((exception) => exception.request_id === request.id))
-      .map((request) => this.presentException(this.resolveDay(request.employee_user_id, request.work_date), request, actor));
+      .map((request) => this.presentException(this.resolveDay(companyId, request.employee_user_id, request.work_date), request, actor));
     const items = [...dayExceptions, ...requestExceptions]
       .filter((exception) => !query.exception_type || exception.exception_type === query.exception_type)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -591,7 +619,8 @@ export class AttendanceService {
   }
 
   decideRegularization(actor: AuthUser, id: UUID, input: { decision: "approve" | "reject" | "return"; remarks?: string; expected_version: number }) {
-    const current = this.repository.findRegularization(id);
+    const companyId = this.companyForActor(actor);
+    const current = this.repository.findRegularization(id, new Set([companyId]));
     if (current.version !== input.expected_version) {
       throw conflict("Attendance regularization request was modified by another actor.", {
         aggregate: "attendance_regularization",
@@ -615,7 +644,7 @@ export class AttendanceService {
         : input.decision === "reject"
           ? AttendanceRegularizationStatuses.Rejected
           : AttendanceRegularizationStatuses.Returned;
-    const request = this.repository.updateRegularizationVersioned(id, input.expected_version, (candidate) => {
+    const request = this.repository.updateRegularizationVersioned(id, new Set([companyId]), input.expected_version, (candidate) => {
       candidate.status = nextStatus;
       candidate.current_approver_user_id = null;
       candidate.decision_remarks = input.remarks?.trim() ?? null;
@@ -625,8 +654,8 @@ export class AttendanceService {
     if (input.decision === "approve" && request.requested_punches.length > 0) {
       this.applyApprovedPunches(request, actor.id);
     }
-    const requestTimeZone = this.timezoneForUser(request.employee_user_id);
-    const day = this.resolveDay(request.employee_user_id, request.work_date, requestTimeZone);
+    const requestTimeZone = this.timezoneForUser(request.employee_user_id, companyId);
+    const day = this.resolveDay(companyId, request.employee_user_id, request.work_date, requestTimeZone);
     day.regularization_status = nextStatus;
     if (nextStatus === AttendanceRegularizationStatuses.Approved && day.exception_type) {
       day.exception_type = null;
@@ -637,6 +666,7 @@ export class AttendanceService {
     day.version += 1;
     appendAttendanceOutboxEvent(this.store, {
       aggregateId: request.id,
+      companyId,
       eventType: this.eventForDecision(input.decision),
       payload: {
         request_id: request.id,
@@ -661,6 +691,7 @@ export class AttendanceService {
     if (!canSeeAllAttendance(actor)) {
       throw forbidden("Only HR, Admin, or Auditor users can export attendance data.");
     }
+    const companyId = this.companyForActor(actor, input.company_id);
     const jobId = randomUUID();
     const format = input.format ?? "csv";
     const columns = input.columns?.length
@@ -668,7 +699,7 @@ export class AttendanceService {
       : ["employee_code", "employee", "date", "status", "in_time", "out_time", "hours"];
     const filters = input.filters ?? {};
     const createdAt = nowIso();
-    const rows = this.exportRows(filters);
+    const rows = this.exportRows(companyId, filters);
     const generated = await createGeneratedExportDocument(this.store, {
       actor,
       businessObjectType: "attendance_export",
@@ -682,6 +713,7 @@ export class AttendanceService {
     });
     appendAttendanceOutboxEvent(this.store, {
       aggregateId: jobId,
+      companyId,
       eventType: attendanceEvents.ExportRequested,
       payload: {
         job_id: jobId,
@@ -704,7 +736,7 @@ export class AttendanceService {
       job_id: jobId,
       status: generated.status,
       format,
-      filters,
+      filters: { ...filters, company_id: companyId },
       columns,
       requested_by_user_id: actor.id,
       created_at: createdAt,
@@ -718,9 +750,9 @@ export class AttendanceService {
     };
   }
 
-  private exportRows(filters: Record<string, unknown>): Array<Record<string, unknown>> {
+  private exportRows(companyId: UUID, filters: NonNullable<AttendanceExportInput["filters"]>): Array<Record<string, unknown>> {
     return this.store.attendanceDayRecords
-      .filter((record) => !record.deleted_at)
+      .filter((record) => record.company_id === companyId && !record.deleted_at)
       .filter((record) => !textFilter(filters.user_id) || record.employee_user_id === textFilter(filters.user_id))
       .filter((record) => !textFilter(filters.employee_user_id) || record.employee_user_id === textFilter(filters.employee_user_id))
       .filter((record) => !textFilter(filters.status) || record.status === textFilter(filters.status))
@@ -734,7 +766,7 @@ export class AttendanceService {
       .map((record) => {
         const user = this.store.users.find((candidate) => candidate.id === record.employee_user_id);
         const department = user ? this.store.departments.find((candidate) => candidate.id === user.department_id) : null;
-        const timeZone = this.timezoneForUser(record.employee_user_id);
+        const timeZone = this.timezoneForUser(record.employee_user_id, companyId);
         return {
           id: record.id,
           employee_user_id: record.employee_user_id,
@@ -772,17 +804,18 @@ export class AttendanceService {
   }
 
   private punchAvailability(
+    companyId: UUID,
     employeeUserId: UUID,
     workDate: string,
-    timeZone = this.timezoneForUser(employeeUserId),
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
     occurredAt = nowIso()
   ): PunchAvailability {
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
+    const punches = this.punchesForWorkDate(companyId, employeeUserId, workDate, timeZone);
     const sequenceAllowedActions = this.nextAllowedActions(punches);
-    const policy = this.attendancePolicy();
+    const policy = this.attendancePolicy(companyId);
     const activePunches = punches.filter((punch) => !punch.deleted_at);
     const localTime = timeText(occurredAt, timeZone) ?? occurredAt.slice(11, 16);
-    const isCompanyWorkingDay = this.isWorkingDay(workDate);
+    const isCompanyWorkingDay = this.isWorkingDay(companyId, workDate);
     const blockedActionReasons: Partial<Record<AttendancePunchEventType, string>> = {};
     const nextAllowedActions: AttendancePunchEventType[] = [];
 
@@ -866,6 +899,7 @@ export class AttendanceService {
   }
 
   private addAutoPunchOutIfExpired(input: {
+    companyId: UUID;
     employeeUserId: UUID;
     workDate: string;
     firstCheckIn: AttendancePunch;
@@ -897,6 +931,7 @@ export class AttendanceService {
 
     if (input.lastOpenPunch.event_type === AttendancePunchEventTypes.BreakStart) {
       createdPunches.push(this.repository.addPunch({
+        company_id: input.companyId,
         employee_user_id: input.employeeUserId,
         event_type: AttendancePunchEventTypes.BreakEnd,
         occurred_at: closeAt,
@@ -907,6 +942,7 @@ export class AttendanceService {
     }
 
     createdPunches.push(this.repository.addPunch({
+      company_id: input.companyId,
       employee_user_id: input.employeeUserId,
       event_type: AttendancePunchEventTypes.CheckOut,
       occurred_at: closeAt,
@@ -927,18 +963,19 @@ export class AttendanceService {
   }
 
   private autoPunchOutExpiredSessions(
+    companyId: UUID,
     employeeUserId: UUID,
     timeZone: string,
     referenceIso = nowIso(),
     trigger: "api" | "worker" = "api"
   ): AttendanceAutoPunchOutClosure[] {
     const punches = this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= referenceIso)
+      .filter((punch) => punch.company_id === companyId && punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= referenceIso)
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     let openWorkDate: string | null = null;
     let firstCheckIn: AttendancePunch | null = null;
     let lastOpenPunch: AttendancePunch | null = null;
-    const policy = this.attendancePolicy();
+    const policy = this.attendancePolicy(companyId);
     const closures: AttendanceAutoPunchOutClosure[] = [];
     if (!policy.autoPunchOutEnabled) {
       return closures;
@@ -948,6 +985,7 @@ export class AttendanceService {
       if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
         if (openWorkDate && firstCheckIn && lastOpenPunch) {
           const closure = this.addAutoPunchOutIfExpired({
+            companyId,
             employeeUserId,
             workDate: openWorkDate,
             firstCheckIn,
@@ -979,6 +1017,7 @@ export class AttendanceService {
 
     if (openWorkDate && firstCheckIn && lastOpenPunch) {
       const closure = this.addAutoPunchOutIfExpired({
+        companyId,
         employeeUserId,
         workDate: openWorkDate,
         firstCheckIn,
@@ -998,17 +1037,17 @@ export class AttendanceService {
   autoPunchOutExpiredSessionsForAll(input: { referenceIso?: string; batchSize?: number } = {}): AttendanceAutoPunchOutRunResult {
     const referenceIso = input.referenceIso ?? nowIso();
     const batchSize = Math.max(1, Math.floor(input.batchSize ?? Number.MAX_SAFE_INTEGER));
-    const candidateUserIds = Array.from(new Set(
+    const candidateUserCompanyPairs = Array.from(new Map(
       this.store.attendancePunches
         .filter((punch) => !punch.deleted_at && punch.occurred_at <= referenceIso)
         .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
-        .map((punch) => punch.employee_user_id)
-    ));
+        .map((punch) => [`${punch.company_id}:${punch.employee_user_id}`, { companyId: punch.company_id, employeeUserId: punch.employee_user_id }] as const)
+    ).values());
     const closures: AttendanceAutoPunchOutClosure[] = [];
     let scannedUsers = 0;
     let dayRecordsRecomputed = 0;
 
-    for (const employeeUserId of candidateUserIds) {
+    for (const { companyId, employeeUserId } of candidateUserCompanyPairs) {
       if (scannedUsers >= batchSize) {
         break;
       }
@@ -1017,11 +1056,11 @@ export class AttendanceService {
         continue;
       }
       scannedUsers += 1;
-      const timeZone = this.timezoneForUser(employeeUserId);
-      const userClosures = this.autoPunchOutExpiredSessions(employeeUserId, timeZone, referenceIso, "worker");
+      const timeZone = this.timezoneForUser(employeeUserId, companyId);
+      const userClosures = this.autoPunchOutExpiredSessions(companyId, employeeUserId, timeZone, referenceIso, "worker");
       const affectedWorkDates = new Set(userClosures.map((closure) => closure.work_date));
       for (const workDate of affectedWorkDates) {
-        const dayRecord = this.recomputeDay(employeeUserId, workDate, timeZone, referenceIso);
+        const dayRecord = this.recomputeDay(companyId, employeeUserId, workDate, timeZone, referenceIso);
         dayRecordsRecomputed += 1;
         for (const closure of userClosures) {
           if (closure.work_date === workDate) {
@@ -1043,13 +1082,14 @@ export class AttendanceService {
   }
 
   private recomputeDay(
+    companyId: UUID,
     employeeUserId: UUID,
     workDate: string,
-    timeZone = this.timezoneForUser(employeeUserId),
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
     referenceIso = nowIso()
   ): AttendanceDayRecord {
-    this.autoPunchOutExpiredSessions(employeeUserId, timeZone, referenceIso);
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
+    this.autoPunchOutExpiredSessions(companyId, employeeUserId, timeZone, referenceIso);
+    const punches = this.punchesForWorkDate(companyId, employeeUserId, workDate, timeZone);
     const checkIns = punches.filter((punch) => punch.event_type === AttendancePunchEventTypes.CheckIn);
     const checkOuts = punches.filter((punch) => punch.event_type === AttendancePunchEventTypes.CheckOut);
     const firstCheckIn = checkIns[0]?.occurred_at ?? null;
@@ -1058,11 +1098,11 @@ export class AttendanceService {
     const localToday = todayDate(timeZone);
     const isPast = workDate < localToday;
     const isFuture = workDate > localToday;
-    const policy = this.attendancePolicy();
-    const holiday = this.holidayForDate(workDate);
-    const workingDay = this.isWorkingDay(workDate);
+    const policy = this.attendancePolicy(companyId);
+    const holiday = this.holidayForDate(companyId, workDate);
+    const workingDay = this.isWorkingDay(companyId, workDate);
     const shiftStart = zonedClockIso(workDate, 9, 30, timeZone);
-    const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes());
+    const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes(companyId));
     const rawLateMinutes = firstCheckIn ? Math.max(0, minutesBetween(shiftStart, firstCheckIn)) : 0;
     const lateMinutes = rawLateMinutes > policy.graceMinutes ? rawLateMinutes : 0;
     const earlyOutMinutes = lastCheckOut && isPast ? Math.max(0, minutesBetween(lastCheckOut, shiftEnd)) : 0;
@@ -1088,6 +1128,7 @@ export class AttendanceService {
         ? "Company non-working day"
         : null;
     return this.repository.upsertDayRecord({
+      company_id: companyId,
       employee_user_id: employeeUserId,
       work_date: workDate,
       status,
@@ -1100,7 +1141,7 @@ export class AttendanceService {
       work_mode: workMode,
       note: exceptionType ? this.exceptionDetail({ exception_type: exceptionType, late_minutes: lateMinutes, early_out_minutes: earlyOutMinutes, work_minutes: totalMinutes } as AttendanceDayRecord) : passiveNote,
       exception_type: exceptionType,
-      regularization_status: this.repository.dayRecord(employeeUserId, workDate)?.regularization_status ?? null
+      regularization_status: this.repository.dayRecord(companyId, employeeUserId, workDate)?.regularization_status ?? null
     });
   }
 
@@ -1122,34 +1163,34 @@ export class AttendanceService {
     return total;
   }
 
-  private resolveDay(employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord {
-    const existing = this.repository.dayRecord(employeeUserId, workDate);
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
+  private resolveDay(companyId: UUID, employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId, companyId)): AttendanceDayRecord {
+    const existing = this.repository.dayRecord(companyId, employeeUserId, workDate);
+    const punches = this.punchesForWorkDate(companyId, employeeUserId, workDate, timeZone);
     if (existing && punches.length === 0 && this.shouldPreserveManualDay(existing)) {
       return existing;
     }
     if (punches.length > 0 || workDate <= todayDate(timeZone)) {
-      return this.recomputeDay(employeeUserId, workDate, timeZone);
+      return this.recomputeDay(companyId, employeeUserId, workDate, timeZone);
     }
-    return this.getOrSynthesizeDay(employeeUserId, workDate, timeZone);
+    return this.getOrSynthesizeDay(companyId, employeeUserId, workDate, timeZone);
   }
 
   private shouldPreserveManualDay(record: AttendanceDayRecord): boolean {
     return (
       record.status === AttendanceDayStatuses.Leave ||
       record.status === AttendanceDayStatuses.Wfh ||
-      (record.status === AttendanceDayStatuses.Holiday && Boolean(this.holidayForDate(record.work_date))) ||
+      (record.status === AttendanceDayStatuses.Holiday && Boolean(this.holidayForDate(record.company_id, record.work_date))) ||
       record.regularization_status === AttendanceRegularizationStatuses.Approved
     );
   }
 
-  private getOrSynthesizeDay(employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord {
-    const existing = this.repository.dayRecord(employeeUserId, workDate);
+  private getOrSynthesizeDay(companyId: UUID, employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId, companyId)): AttendanceDayRecord {
+    const existing = this.repository.dayRecord(companyId, employeeUserId, workDate);
     if (existing) {
       return existing;
     }
-    const holiday = this.holidayForDate(workDate);
-    const workingDay = this.isWorkingDay(workDate);
+    const holiday = this.holidayForDate(companyId, workDate);
+    const workingDay = this.isWorkingDay(companyId, workDate);
     const status =
       holiday
         ? AttendanceDayStatuses.Holiday
@@ -1159,6 +1200,7 @@ export class AttendanceService {
             ? AttendanceDayStatuses.Future
             : AttendanceDayStatuses.Absent;
     return this.repository.upsertDayRecord({
+      company_id: companyId,
       employee_user_id: employeeUserId,
       work_date: workDate,
       status,
@@ -1181,7 +1223,7 @@ export class AttendanceService {
     });
   }
 
-  private weekRecords(employeeUserId: UUID, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord[] {
+  private weekRecords(companyId: UUID, employeeUserId: UUID, timeZone = this.timezoneForUser(employeeUserId, companyId)): AttendanceDayRecord[] {
     const localToday = todayDate(timeZone);
     const today = new Date(`${localToday}T00:00:00.000Z`);
     const start = new Date(today);
@@ -1191,14 +1233,14 @@ export class AttendanceService {
       const date = new Date(start);
       date.setUTCDate(start.getUTCDate() + index);
       const workDate = date.toISOString().slice(0, 10);
-      return this.resolveDay(employeeUserId, workDate, timeZone);
+      return this.resolveDay(companyId, employeeUserId, workDate, timeZone);
     });
   }
 
-  private punchesForWorkDate(employeeUserId: UUID, workDate: string, timeZone: string): AttendancePunch[] {
+  private punchesForWorkDate(companyId: UUID, employeeUserId: UUID, workDate: string, timeZone: string): AttendancePunch[] {
     let openWorkDate: string | null = null;
     return this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at)
+      .filter((punch) => punch.company_id === companyId && punch.employee_user_id === employeeUserId && !punch.deleted_at)
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
       .filter((punch) => {
         if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
@@ -1214,6 +1256,7 @@ export class AttendanceService {
   }
 
   private workDateForPunch(
+    companyId: UUID,
     employeeUserId: UUID,
     eventType: AttendancePunchEventType,
     occurredAt: string,
@@ -1222,13 +1265,13 @@ export class AttendanceService {
     if (eventType === AttendancePunchEventTypes.CheckIn) {
       return dateInTimeZone(occurredAt, timeZone);
     }
-    return this.openSessionWorkDate(employeeUserId, occurredAt, timeZone) ?? dateInTimeZone(occurredAt, timeZone);
+    return this.openSessionWorkDate(companyId, employeeUserId, occurredAt, timeZone) ?? dateInTimeZone(occurredAt, timeZone);
   }
 
-  private openSessionWorkDate(employeeUserId: UUID, occurredAt: string, timeZone: string): string | null {
+  private openSessionWorkDate(companyId: UUID, employeeUserId: UUID, occurredAt: string, timeZone: string): string | null {
     let openWorkDate: string | null = null;
     const punches = this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= occurredAt)
+      .filter((punch) => punch.company_id === companyId && punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= occurredAt)
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     for (const punch of punches) {
       if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
@@ -1241,11 +1284,11 @@ export class AttendanceService {
     return openWorkDate;
   }
 
-  private weeklyBalance(records: AttendanceDayRecord[]): Record<string, unknown> {
-    const elapsedRecords = records.filter((record) => record.work_date <= todayDate(this.timezoneForUser(record.employee_user_id)));
-    const target = this.targetWorkMinutes();
-    const weekdayRecords = elapsedRecords.filter((record) => this.isWorkingDay(record.work_date) && !this.holidayForDate(record.work_date));
-    const offDayRecords = elapsedRecords.filter((record) => !this.isWorkingDay(record.work_date) || Boolean(this.holidayForDate(record.work_date)));
+  private weeklyBalance(companyId: UUID, records: AttendanceDayRecord[]): Record<string, unknown> {
+    const elapsedRecords = records.filter((record) => record.work_date <= todayDate(this.timezoneForUser(record.employee_user_id, companyId)));
+    const target = this.targetWorkMinutes(companyId);
+    const weekdayRecords = elapsedRecords.filter((record) => this.isWorkingDay(companyId, record.work_date) && !this.holidayForDate(companyId, record.work_date));
+    const offDayRecords = elapsedRecords.filter((record) => !this.isWorkingDay(companyId, record.work_date) || Boolean(this.holidayForDate(companyId, record.work_date)));
     const requiredWeekdayMinutes = weekdayRecords.length * target;
     const weekdayWorkedMinutes = weekdayRecords.reduce((total, record) => total + record.work_minutes, 0);
     const offDayWorkedMinutes = offDayRecords.reduce((total, record) => total + record.work_minutes, 0);
@@ -1268,13 +1311,47 @@ export class AttendanceService {
     };
   }
 
-  private activeCompany() {
-    return this.store.companyProfiles.find((candidate) => candidate.status === "active") ?? this.store.companyProfiles[0];
+  /** The session preference is the application's canonical company membership/context. */
+  private selfCompanyId(actor: AuthUser): UUID {
+    const companyId = this.store.userSessionPreferences.find((preference) => preference.user_id === actor.id)?.company_id;
+    if (!companyId) {
+      throw companyContextRequired({ user_id: actor.id, operation: "attendance_self" });
+    }
+    return companyId;
   }
 
-  private attendancePolicy(): AttendancePunchPolicy {
+  private companyForActor(actor: AuthUser, requestedCompanyId?: UUID): UUID {
+    const companyId = this.selfCompanyId(actor);
+    if (requestedCompanyId && requestedCompanyId !== companyId) {
+      throw forbidden("Attendance access is limited to the actor's company context.", {
+        requested_company_id: requestedCompanyId,
+        company_id: companyId
+      });
+    }
+    return companyId;
+  }
+
+  private company(companyId: UUID) {
+    const company = this.store.companyProfiles.find((candidate) => candidate.id === companyId && candidate.status === "active");
+    if (!company) {
+      throw companyContextRequired({ company_id: companyId, operation: "attendance_company" });
+    }
+    return company;
+  }
+
+  private userInCompany(userId: UUID, companyId: UUID): boolean {
+    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id === companyId;
+  }
+
+  private assertUserInCompany(userId: UUID, companyId: UUID): void {
+    if (!this.userInCompany(userId, companyId)) {
+      throw forbidden("Attendance access is limited to users in the selected company.", { user_id: userId, company_id: companyId });
+    }
+  }
+
+  private attendancePolicy(companyId: UUID): AttendancePunchPolicy {
     const policy = this.store.adminPolicies.find(
-      (candidate) => candidate.policy_key === "attendance" && candidate.status === "active" && !candidate.deleted_at
+      (candidate) => candidate.company_id === companyId && candidate.policy_key === "attendance" && candidate.status === "active" && !candidate.deleted_at
     );
     const config = policy?.config ?? {};
     return {
@@ -1291,38 +1368,38 @@ export class AttendanceService {
     };
   }
 
-  private isWorkingDay(workDate: string): boolean {
-    return isWorkingDate(workDate, this.activeCompany()?.working_week, this.holidayDates());
+  private isWorkingDay(companyId: UUID, workDate: string): boolean {
+    return isWorkingDate(workDate, this.company(companyId).working_week, this.holidayDates(companyId));
   }
 
-  private holidayForDate(workDate: string) {
-    return this.store.holidays.find((holiday) => holiday.holiday_date === workDate && !holiday.optional && !holiday.deleted_at) ?? null;
+  private holidayForDate(companyId: UUID, workDate: string) {
+    return this.store.holidays.find((holiday) => holiday.company_id === companyId && holiday.holiday_date === workDate && !holiday.optional && !holiday.deleted_at) ?? null;
   }
 
-  private holidayDates(): Set<string> {
+  private holidayDates(companyId: UUID): Set<string> {
     return new Set(
       this.store.holidays
-        .filter((holiday) => !holiday.optional && !holiday.deleted_at)
+        .filter((holiday) => holiday.company_id === companyId && !holiday.optional && !holiday.deleted_at)
         .map((holiday) => holiday.holiday_date)
     );
   }
 
-  private targetWorkMinutes(): number {
-    return Math.max(0, Math.round((this.activeCompany()?.work_hours_per_day ?? 8) * 60));
+  private targetWorkMinutes(companyId: UUID): number {
+    return Math.max(0, Math.round(this.company(companyId).work_hours_per_day * 60));
   }
 
-  private timezoneForUser(userId: UUID): string {
+  private timezoneForUser(userId: UUID, companyId: UUID): string {
     const user = this.store.users.find((candidate) => candidate.id === userId && !candidate.deleted_at);
-    const company = this.activeCompany();
+    const company = this.company(companyId);
     return user?.timezone ?? company?.timezone ?? "Asia/Kolkata";
   }
 
-  private recordsForUsers(userIds: Set<UUID>, from: string, to: string): AttendanceDayRecord[] {
+  private recordsForUsers(companyId: UUID, userIds: Set<UUID>, from: string, to: string): AttendanceDayRecord[] {
     const output: AttendanceDayRecord[] = [];
     for (const userId of userIds) {
-      const timeZone = this.timezoneForUser(userId);
+      const timeZone = this.timezoneForUser(userId, companyId);
       for (const date of datesInclusive(from, to)) {
-        output.push(this.resolveDay(userId, date, timeZone));
+        output.push(this.resolveDay(companyId, userId, date, timeZone));
       }
     }
     return output.sort((a, b) => a.work_date.localeCompare(b.work_date));
@@ -1381,9 +1458,9 @@ export class AttendanceService {
       .filter((row) => row.strength > 0);
   }
 
-  private visibleUsers(actor: AuthUser, departmentId?: UUID): CoreUser[] {
+  private visibleUsers(actor: AuthUser, companyId: UUID, departmentId?: UUID): CoreUser[] {
     return this.store.users.filter((user) => {
-      if (!visibleUserPredicate(actor, user)) {
+      if (!visibleUserPredicate(actor, user) || !this.userInCompany(user.id, companyId)) {
         return false;
       }
       if (departmentId && user.department_id !== departmentId) {
@@ -1425,13 +1502,14 @@ export class AttendanceService {
   }
 
   private applyApprovedPunches(request: AttendanceRegularizationRequest, actorUserId: UUID): void {
-    const timeZone = this.timezoneForUser(request.employee_user_id);
+    const timeZone = this.timezoneForUser(request.employee_user_id, request.company_id);
     for (const requested of request.requested_punches) {
       const date = dateInTimeZone(requested.occurred_at, timeZone);
       if (requested.event_type === AttendancePunchEventTypes.CheckIn && date !== request.work_date) {
         throw badRequest("Requested punch timestamps must fall on the regularization work_date.");
       }
       this.repository.addPunch({
+        company_id: request.company_id,
         employee_user_id: request.employee_user_id,
         event_type: requested.event_type,
         occurred_at: requested.occurred_at,
@@ -1440,7 +1518,7 @@ export class AttendanceService {
         metadata: { regularization_request_id: request.id, decided_by_user_id: actorUserId }
       });
     }
-    this.recomputeDay(request.employee_user_id, request.work_date, timeZone);
+    this.recomputeDay(request.company_id, request.employee_user_id, request.work_date, timeZone);
   }
 
   private presentPunch(punch: AttendancePunch, timeZone: string) {
@@ -1489,7 +1567,7 @@ export class AttendanceService {
       status: request?.status ?? record.regularization_status ?? "pending",
       expected_version: request?.version ?? record.version,
       can_decide: Boolean(request && request.status === AttendanceRegularizationStatuses.Pending && actor.id !== request.employee_user_id && (canSeeAllAttendance(actor) || request.current_approver_user_id === actor.id)),
-      record: this.presentDay(record, this.timezoneForUser(record.employee_user_id)),
+      record: this.presentDay(record, this.timezoneForUser(record.employee_user_id, record.company_id)),
       request: request ? this.presentRegularization(request) : null
     };
   }

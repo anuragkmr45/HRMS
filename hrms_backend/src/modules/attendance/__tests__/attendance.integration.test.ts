@@ -35,6 +35,7 @@ function ensureActiveCompany(app: FastifyInstance) {
   const existing = app.store.companyProfiles.find((candidate) => candidate.status === "active") ?? app.store.companyProfiles[0];
   if (existing) {
     existing.status = "active";
+    ensureCompanyContexts(app, existing.id);
     return existing;
   }
   const now = new Date().toISOString();
@@ -64,7 +65,21 @@ function ensureActiveCompany(app: FastifyInstance) {
     version: 1
   };
   app.store.companyProfiles.push(company);
+  ensureCompanyContexts(app, company.id);
   return company;
+}
+
+function ensureCompanyContexts(app: FastifyInstance, companyId: string) {
+  const now = new Date().toISOString();
+  for (const user of app.store.users) {
+    if (!app.store.userSessionPreferences.some((preference) => preference.user_id === user.id)) {
+      app.store.userSessionPreferences.push({
+        id: randomUUID(), user_id: user.id, active_role: user.roles[0]!, company_id: companyId,
+        landing_page: "/dashboard", locale: "en-IN", timezone: user.timezone ?? "Asia/Kolkata",
+        created_at: now, updated_at: now, version: 1
+      });
+    }
+  }
 }
 
 describe("attendance", () => {
@@ -280,6 +295,7 @@ describe("attendance", () => {
 
     app.store.holidays.push({
       id: randomUUID(),
+      company_id: company.id,
       name: "Company Offsite",
       holiday_date: "2026-05-26",
       region: "Company",
@@ -507,6 +523,7 @@ describe("attendance", () => {
     } else {
       app.store.attendanceDayRecords.push({
         id: randomUUID(),
+        company_id: ensureActiveCompany(app).id,
         employee_user_id: employee.user.id,
         work_date: staleDate,
         status: "future",
