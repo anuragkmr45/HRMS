@@ -26,6 +26,7 @@ export interface AttendanceCommandExecutionRecord {
   company_id: UUID;
   actor_user_id: UUID;
   employee_user_id: UUID;
+  platform_idempotency_key_id: UUID | null;
   idempotency_key: string;
   request_hash: string;
   command_type: AttendancePunchEventType;
@@ -37,6 +38,33 @@ export interface AttendanceCommandExecutionRecord {
   response_snapshot: Record<string, unknown> | null;
   completed_at: string | null;
   created_at: string;
+}
+
+export type PlatformIdempotencyStatus = "processing" | "completed";
+
+export interface PlatformIdempotencyKeyRecord {
+  id: UUID;
+  scope: string;
+  idempotency_key: string;
+  actor_user_id: UUID;
+  request_hash: string;
+  response_hash: string | null;
+  status: PlatformIdempotencyStatus;
+  resource_type: string | null;
+  resource_id: UUID | null;
+  response_status: number | null;
+  created_at: Date;
+  expires_at: Date;
+  completed_at: Date | null;
+  is_expired: boolean;
+}
+
+export interface ClaimPlatformIdempotencyKeyInput {
+  scope: string;
+  idempotencyKey: string;
+  actorUserId: UUID;
+  requestHash: string;
+  expiresIn: string;
 }
 
 export interface AttendanceCommandDecisionRecord {
@@ -58,6 +86,7 @@ export interface CreateAttendanceCommandInput {
   companyId: UUID;
   actorUserId: UUID;
   employeeUserId: UUID;
+  platformIdempotencyKeyId: UUID;
   idempotencyKey: string;
   requestHash: string;
   commandType: AttendancePunchEventType;
@@ -166,6 +195,84 @@ export class AttendanceCommandTransactionRepository {
     return this.client.query<T>(text, values);
   }
 
+  async findPlatformIdempotencyKeyForUpdate(input: {
+    scope: string;
+    actorUserId: UUID;
+    idempotencyKey: string;
+  }): Promise<PlatformIdempotencyKeyRecord | null> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `SELECT id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, expires_at <= now() AS is_expired
+        FROM platform.idempotency_keys
+        WHERE scope = $1 AND actor_user_id = $2 AND idempotency_key = $3
+        FOR UPDATE`,
+      [input.scope, input.actorUserId, input.idempotencyKey],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async claimPlatformIdempotencyKey(
+    input: ClaimPlatformIdempotencyKeyInput,
+  ): Promise<PlatformIdempotencyKeyRecord | null> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `INSERT INTO platform.idempotency_keys (
+          scope, idempotency_key, actor_user_id, request_hash, response_hash,
+          status, resource_type, resource_id, response_status, created_at,
+          expires_at, completed_at
+        )
+        VALUES ($1, $2, $3, $4, NULL, 'processing', NULL, NULL, NULL, now(), now() + $5::interval, NULL)
+        ON CONFLICT (scope, idempotency_key, actor_user_id) DO NOTHING
+        RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, false AS is_expired`,
+      [input.scope, input.idempotencyKey, input.actorUserId, input.requestHash, input.expiresIn],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async deleteExpiredPlatformIdempotencyKey(id: UUID): Promise<boolean> {
+    const result = await this.client.query<{ id: UUID }>(
+      `DELETE FROM platform.idempotency_keys
+        WHERE id = $1 AND expires_at <= now()`,
+      [id],
+    );
+    return result.rowCount === 1;
+  }
+
+  async completePlatformIdempotencyKey(input: {
+    id: UUID;
+    resourceType: string;
+    resourceId: UUID;
+    responseHash: string;
+    responseStatus: number;
+  }): Promise<PlatformIdempotencyKeyRecord> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `UPDATE platform.idempotency_keys
+        SET status = 'completed', resource_type = $2, resource_id = $3,
+            response_hash = $4, response_status = $5, completed_at = now()
+        WHERE id = $1 AND status = 'processing'
+        RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, false AS is_expired`,
+      [input.id, input.resourceType, input.resourceId, input.responseHash, input.responseStatus],
+    );
+    const key = result.rows[0];
+    if (!key) throw new Error("Platform idempotency key could not be completed.");
+    return key;
+  }
+
+  async findCommandExecutionById(commandExecutionId: UUID): Promise<AttendanceCommandExecutionRecord | null> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `SELECT id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id, idempotency_key,
+          request_hash, command_type, occurred_at, status, session_id,
+          punch_event_id, request_snapshot, response_snapshot, completed_at, created_at
+        FROM attendance.command_executions WHERE id = $1`,
+      [commandExecutionId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   /**
    * Ensures that a stable employee attendance aggregate exists and then
    * locks it for the remainder of the current database transaction.
@@ -232,6 +339,7 @@ export class AttendanceCommandTransactionRepository {
           company_id,
           actor_user_id,
           employee_user_id,
+          platform_idempotency_key_id,
           idempotency_key,
           request_hash,
           command_type,
@@ -261,6 +369,7 @@ export class AttendanceCommandTransactionRepository {
           company_id,
           actor_user_id,
           employee_user_id,
+          platform_idempotency_key_id,
           idempotency_key,
           request_hash,
           command_type,
@@ -281,20 +390,24 @@ export class AttendanceCommandTransactionRepository {
           $5,
           $6,
           $7,
+          $8,
           'received',
           NULL,
           NULL,
-          $8::jsonb,
+          $9::jsonb,
           NULL,
           NULL,
           now()
         )
-        ON CONFLICT (company_id, actor_user_id, idempotency_key) DO NOTHING
+        ON CONFLICT (platform_idempotency_key_id)
+          WHERE platform_idempotency_key_id IS NOT NULL
+          DO NOTHING
         RETURNING
           id,
           company_id,
           actor_user_id,
           employee_user_id,
+          platform_idempotency_key_id,
           idempotency_key,
           request_hash,
           command_type,
@@ -310,6 +423,7 @@ export class AttendanceCommandTransactionRepository {
         input.companyId,
         input.actorUserId,
         input.employeeUserId,
+        input.platformIdempotencyKeyId,
         input.idempotencyKey,
         input.requestHash,
         input.commandType,

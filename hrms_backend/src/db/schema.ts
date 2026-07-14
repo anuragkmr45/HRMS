@@ -202,12 +202,19 @@ export const idempotencyKeys = platform.table(
     requestHash: text("request_hash").notNull(),
     responseHash: text("response_hash"),
     status: text("status").notNull(),
+    resourceType: text("resource_type"),
+    resourceId: uuid("resource_id"),
+    responseStatus: integer("response_status"),
     createdAt,
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true })
   },
   (table) => [
     uniqueIndex("platform_idempotency_scope_actor_uq").on(table.scope, table.idempotencyKey, table.actorUserId),
-    index("platform_idempotency_expires_idx").on(table.expiresAt)
+    index("platform_idempotency_expires_idx").on(table.expiresAt),
+    index("platform_idempotency_resource_idx")
+      .on(table.resourceType, table.resourceId)
+      .where(sql`${table.resourceId} is not null`)
   ]
 );
 

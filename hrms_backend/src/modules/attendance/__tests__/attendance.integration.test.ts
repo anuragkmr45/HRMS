@@ -1,10 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authHeader, loginAs } from "#testing";
+import { authHeader as baseAuthHeader, loginAs } from "#testing";
 import { buildApp } from "../../../app.js";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
 type TestApp = Awaited<ReturnType<typeof buildApp>>;
+
+let attendanceRequestOrdinal = 0;
+
+function authHeader(token: string) {
+  attendanceRequestOrdinal += 1;
+  return {
+    ...baseAuthHeader(token),
+    "idempotency-key": `attendance-integration-${attendanceRequestOrdinal.toString().padStart(4, "0")}`,
+  };
+}
 
 function localDate(offsetDays = 0, timeZone = "Asia/Kolkata"): string {
   const value = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
@@ -88,6 +98,7 @@ describe("attendance", () => {
   let app: TestApp;
 
   beforeEach(async () => {
+    attendanceRequestOrdinal = 0;
     app = await buildRealApp();
     await app.ready();
   });

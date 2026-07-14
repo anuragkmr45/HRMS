@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { canonicalAttendanceRequestHash } from "../command-service.js";
+import {
+  canonicalAttendanceRequestHash,
+  canonicalAttendanceResponseHash,
+} from "../command-service.js";
 
 describe("attendance command request hashing", () => {
   const command = {
@@ -18,5 +21,46 @@ describe("attendance command request hashing", () => {
 
   it("changes when the effective command changes", () => {
     expect(canonicalAttendanceRequestHash(command)).not.toBe(canonicalAttendanceRequestHash({ ...command, event_type: "check_out" }));
+  });
+
+  it("preserves array order while canonicalizing nested object keys", () => {
+    const first = canonicalAttendanceRequestHash({ ...command, metadata: { locations: ["office", "home"], device: { version: 1, os: "android" } } });
+    const reorderedObject = canonicalAttendanceRequestHash({ ...command, metadata: { device: { os: "android", version: 1 }, locations: ["office", "home"] } });
+    const reorderedArray = canonicalAttendanceRequestHash({ ...command, metadata: { locations: ["home", "office"], device: { os: "android", version: 1 } } });
+
+    expect(first).toBe(reorderedObject);
+    expect(first).not.toBe(reorderedArray);
+  });
+
+  it("keeps an omitted occurred_at stable across retries", () => {
+    const firstRequest = { ...command, occurred_at: null };
+    const retryRequest = { ...command, occurred_at: null, metadata: { location: "office", device: { version: 1, os: "android" } } };
+    expect(canonicalAttendanceRequestHash(firstRequest)).toBe(canonicalAttendanceRequestHash(retryRequest));
+    expect(canonicalAttendanceRequestHash(firstRequest)).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("matches JSON persistence semantics for dates and nested key ordering", () => {
+    const response = {
+      command_id: "command",
+      punch: {
+        id: "punch",
+        occurred_at: new Date("2026-07-14T04:00:00.000Z"),
+        metadata: { b: 2, a: 1 },
+      },
+    };
+    const persisted = JSON.parse(JSON.stringify(response)) as Record<string, unknown>;
+    const reordered = {
+      punch: { metadata: { a: 1, b: 2 }, occurred_at: "2026-07-14T04:00:00.000Z", id: "punch" },
+      command_id: "command",
+    };
+
+    expect(canonicalAttendanceResponseHash(response)).toBe(canonicalAttendanceResponseHash(persisted));
+    expect(canonicalAttendanceResponseHash(response)).toBe(canonicalAttendanceResponseHash(reordered));
+    expect(canonicalAttendanceResponseHash(response)).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("keeps response array order significant", () => {
+    expect(canonicalAttendanceResponseHash({ events: ["check_in", "check_out"] }))
+      .not.toBe(canonicalAttendanceResponseHash({ events: ["check_out", "check_in"] }));
   });
 });

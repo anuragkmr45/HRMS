@@ -1320,10 +1320,11 @@ export class AttendanceService {
     assertCanUseSelfAttendance(actor);
     const companyId = this.selfCompanyId(actor);
     if (!this.store.pgPool) throw conflict("Attendance command service is unavailable.");
-    const occurredAt = input.occurred_at ?? nowIso();
+    const receivedAt = nowIso();
+    const occurredAt = input.occurred_at ?? receivedAt;
     const timeZone = this.timezoneForUser(actor.id, companyId);
     return new AttendanceCommandService(this.store).execute({
-      actor, companyId, timeZone, idempotencyKey: input.idempotency_key, command: input,
+      actor, companyId, timeZone, receivedAt, idempotencyKey: input.idempotency_key, command: input,
       policy: this.attendancePolicy(companyId),
       isWorkingDay: this.isWorkingDay(companyId, dateInTimeZone(occurredAt, timeZone))
     });
