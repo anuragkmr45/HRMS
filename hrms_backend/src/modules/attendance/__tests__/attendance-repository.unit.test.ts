@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryDataStore, seedIds } from "../../../platform/data-store.js";
+import {
+  createMemoryDataStore,
+  seedIds,
+} from "../../../platform/data-store.js";
 import { AttendanceRepository } from "../repository.js";
 
 const companyA = "00000000-0000-4000-8000-000000000001";
@@ -13,7 +16,7 @@ function punch(company_id: string, employee_user_id = seedIds.employee1) {
     occurred_at: "2026-07-08T09:00:00.000Z",
     work_mode: "office" as const,
     source: "web" as const,
-    metadata: {}
+    metadata: {},
   };
 }
 
@@ -32,7 +35,7 @@ function day(company_id: string) {
     work_mode: "office" as const,
     note: null,
     exception_type: null,
-    regularization_status: null
+    regularization_status: null,
   };
 }
 
@@ -49,11 +52,18 @@ describe("AttendanceRepository tenancy", () => {
   it("upserts day records by company, employee, and work date", () => {
     const repository = new AttendanceRepository(createMemoryDataStore());
     const first = repository.upsertDayRecord(day(companyA));
-    const second = repository.upsertDayRecord({ ...day(companyB), status: "late" });
+    const second = repository.upsertDayRecord({
+      ...day(companyB),
+      status: "late",
+    });
 
     expect(first.id).not.toBe(second.id);
-    expect(repository.dayRecord(companyA, seedIds.employee1, "2026-07-08")?.status).toBe("present");
-    expect(repository.dayRecord(companyB, seedIds.employee1, "2026-07-08")?.status).toBe("late");
+    expect(
+      repository.dayRecord(companyA, seedIds.employee1, "2026-07-08")?.status,
+    ).toBe("present");
+    expect(
+      repository.dayRecord(companyB, seedIds.employee1, "2026-07-08")?.status,
+    ).toBe("late");
   });
 
   it("allows pending regularizations for the same employee/date in different companies", () => {
@@ -64,13 +74,17 @@ describe("AttendanceRepository tenancy", () => {
       reason: "Missed punch",
       requested_punches: [],
       status: "pending" as const,
-      current_approver_user_id: seedIds.manager
+      current_approver_user_id: seedIds.manager,
     };
     repository.addRegularization({ ...input, company_id: companyA });
     repository.addRegularization({ ...input, company_id: companyB });
 
-    expect(repository.listRegularizations({ companyIds: new Set([companyA]) })).toHaveLength(1);
-    expect(repository.listRegularizations({ companyIds: new Set([companyB]) })).toHaveLength(1);
+    expect(
+      repository.listRegularizations({ companyIds: new Set([companyA]) }),
+    ).toHaveLength(1);
+    expect(
+      repository.listRegularizations({ companyIds: new Set([companyB]) }),
+    ).toHaveLength(1);
   });
 
   it("does not find or update a regularization across company scope", () => {
@@ -82,11 +96,13 @@ describe("AttendanceRepository tenancy", () => {
         reason: "Missed punch",
         requested_punches: [],
         status: "pending" as const,
-        current_approver_user_id: seedIds.manager
+        current_approver_user_id: seedIds.manager,
       },
-      company_id: companyA
+      company_id: companyA,
     });
 
-    expect(() => repository.findRegularization(request.id, new Set([companyB]))).toThrow();
+    expect(() =>
+      repository.findRegularization(request.id, new Set([companyB])),
+    ).toThrow();
   });
 });

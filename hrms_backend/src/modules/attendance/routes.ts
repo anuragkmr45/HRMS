@@ -48,9 +48,14 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const idempotencyKey = idempotencyKeySchema.parse(
+      request.headers["idempotency-key"],
+    );
     const service = new AttendanceService(fastify.store);
-    const input = { ...attendancePunchSchema.parse(request.body), idempotency_key: idempotencyKey };
+    const input = {
+      ...attendancePunchSchema.parse(request.body),
+      idempotency_key: idempotencyKey,
+    };
     return fastify.store.kind === "postgres"
       ? await service.punchPostgres(request.actor, input)
       : service.punch(request.actor, input);

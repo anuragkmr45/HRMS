@@ -226,7 +226,13 @@ export class AttendanceCommandTransactionRepository {
         RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
           response_hash, status, resource_type, resource_id, response_status,
           created_at, expires_at, completed_at, false AS is_expired`,
-      [input.scope, input.idempotencyKey, input.actorUserId, input.requestHash, input.expiresIn],
+      [
+        input.scope,
+        input.idempotencyKey,
+        input.actorUserId,
+        input.requestHash,
+        input.expiresIn,
+      ],
     );
     return result.rows[0] ?? null;
   }
@@ -255,14 +261,23 @@ export class AttendanceCommandTransactionRepository {
         RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
           response_hash, status, resource_type, resource_id, response_status,
           created_at, expires_at, completed_at, false AS is_expired`,
-      [input.id, input.resourceType, input.resourceId, input.responseHash, input.responseStatus],
+      [
+        input.id,
+        input.resourceType,
+        input.resourceId,
+        input.responseHash,
+        input.responseStatus,
+      ],
     );
     const key = result.rows[0];
-    if (!key) throw new Error("Platform idempotency key could not be completed.");
+    if (!key)
+      throw new Error("Platform idempotency key could not be completed.");
     return key;
   }
 
-  async findCommandExecutionById(commandExecutionId: UUID): Promise<AttendanceCommandExecutionRecord | null> {
+  async findCommandExecutionById(
+    commandExecutionId: UUID,
+  ): Promise<AttendanceCommandExecutionRecord | null> {
     const result = await this.client.query<AttendanceCommandExecutionRecord>(
       `SELECT id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id, idempotency_key,
           request_hash, command_type, occurred_at, status, session_id,
@@ -273,13 +288,6 @@ export class AttendanceCommandTransactionRepository {
     return result.rows[0] ?? null;
   }
 
-  /**
-   * Ensures that a stable employee attendance aggregate exists and then
-   * locks it for the remainder of the current database transaction.
-   *
-   * The stable row is required because a first-time check-in has no
-   * attendance session row available to lock.
-   */
   async ensureAndLockEmployeeState(
     companyId: UUID,
     employeeUserId: UUID,
@@ -663,8 +671,13 @@ export class AttendanceCommandTransactionRepository {
     return session;
   }
 
-  async startBreak(input: { sessionId: UUID; companyId: UUID; employeeUserId: UUID; expectedVersion: number; occurredAt: string },
-  ): Promise<AttendanceSessionRecord> {
+  async startBreak(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
     const result = await this.client.query<AttendanceSessionRecord>(
       `UPDATE attendance.sessions
     SET status = 'on_break',
@@ -694,7 +707,13 @@ export class AttendanceCommandTransactionRepository {
       created_at,
       updated_at,
       deleted_at`,
-      [input.sessionId, input.companyId, input.employeeUserId, input.expectedVersion, input.occurredAt],
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
     );
 
     const session = result.rows[0];
@@ -706,8 +725,13 @@ export class AttendanceCommandTransactionRepository {
     return session;
   }
 
-  async endBreak(input: { sessionId: UUID; companyId: UUID; employeeUserId: UUID; expectedVersion: number; occurredAt: string },
-  ): Promise<AttendanceSessionRecord> {
+  async endBreak(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
     const result = await this.client.query<AttendanceSessionRecord>(
       `UPDATE attendance.sessions
     SET status = 'working',
@@ -738,7 +762,13 @@ export class AttendanceCommandTransactionRepository {
       created_at,
       updated_at,
       deleted_at`,
-      [input.sessionId, input.companyId, input.employeeUserId, input.expectedVersion, input.occurredAt],
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
     );
 
     const session = result.rows[0];
@@ -752,8 +782,13 @@ export class AttendanceCommandTransactionRepository {
     return session;
   }
 
-  async closeSession(input: { sessionId: UUID; companyId: UUID; employeeUserId: UUID; expectedVersion: number; occurredAt: string },
-  ): Promise<AttendanceSessionRecord> {
+  async closeSession(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
     const result = await this.client.query<AttendanceSessionRecord>(
       `UPDATE attendance.sessions
     SET status = 'closed',
@@ -785,7 +820,13 @@ export class AttendanceCommandTransactionRepository {
       created_at,
       updated_at,
       deleted_at`,
-      [input.sessionId, input.companyId, input.employeeUserId, input.expectedVersion, input.occurredAt],
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
     );
 
     const session = result.rows[0];
@@ -834,11 +875,35 @@ export class AttendanceCommandTransactionRepository {
     return state;
   }
 
-  async insertPunchEvent(input: { companyId: UUID; employeeUserId: UUID; eventType: AttendancePunchEventType; occurredAt: string; workMode: string; source: string; metadata: Record<string, unknown>; commandExecutionId: UUID; sessionId: UUID; decisionId: UUID }) {
-    return this.query<{ id: UUID; created_at: string } & Record<string, unknown>>(
+  async insertPunchEvent(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    eventType: AttendancePunchEventType;
+    occurredAt: string;
+    workMode: string;
+    source: string;
+    metadata: Record<string, unknown>;
+    commandExecutionId: UUID;
+    sessionId: UUID;
+    decisionId: UUID;
+  }) {
+    return this.query<
+      { id: UUID; created_at: string } & Record<string, unknown>
+    >(
       `INSERT INTO attendance.punch_events (company_id, employee_user_id, event_type, occurred_at, work_mode, source, metadata, command_execution_id, session_id, decision_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10) RETURNING id, created_at`,
-      [input.companyId, input.employeeUserId, input.eventType, input.occurredAt, input.workMode, input.source, JSON.stringify(input.metadata), input.commandExecutionId, input.sessionId, input.decisionId],
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.eventType,
+        input.occurredAt,
+        input.workMode,
+        input.source,
+        JSON.stringify(input.metadata),
+        input.commandExecutionId,
+        input.sessionId,
+        input.decisionId,
+      ],
     );
   }
 
