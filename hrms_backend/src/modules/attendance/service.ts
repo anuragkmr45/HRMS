@@ -30,6 +30,7 @@ import {
   canSeeAttendanceUser
 } from "./policy.js";
 import { AttendanceRepository } from "./repository.js";
+import { AttendanceCommandService } from "./command-service.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -300,6 +301,7 @@ export class AttendanceService {
       work_mode: "office" | "remote" | "wfh" | "field";
       source: "web" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
+      idempotency_key?: string;
     }
   ) {
     assertCanUseSelfAttendance(actor);
@@ -1309,6 +1311,22 @@ export class AttendanceService {
       overtime_minutes: overtimeMinutes,
       overtime_hours: minutesToHours(overtimeMinutes)
     };
+  }
+
+  async punchPostgres(
+    actor: AuthUser,
+    input: Parameters<AttendanceService["punch"]>[1] & { idempotency_key: string }
+  ): Promise<Record<string, unknown>> {
+    assertCanUseSelfAttendance(actor);
+    const companyId = this.selfCompanyId(actor);
+    if (!this.store.pgPool) throw conflict("Attendance command service is unavailable.");
+    const occurredAt = input.occurred_at ?? nowIso();
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    return new AttendanceCommandService(this.store).execute({
+      actor, companyId, timeZone, idempotencyKey: input.idempotency_key, command: input,
+      policy: this.attendancePolicy(companyId),
+      isWorkingDay: this.isWorkingDay(companyId, dateInTimeZone(occurredAt, timeZone))
+    });
   }
 
   /** The session preference is the application's canonical company membership/context. */

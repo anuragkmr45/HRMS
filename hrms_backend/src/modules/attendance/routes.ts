@@ -12,6 +12,7 @@ import { AttendanceService } from "./service.js";
 const idParamSchema = z.object({ id: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
+const idempotencyKeySchema = z.string().trim().min(8).max(200);
 
 const attendanceQuerySchema = paginationQuerySchema.extend({
   company_id: z.uuid().optional(),
@@ -47,10 +48,12 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    return new AttendanceService(fastify.store).punch(
-      request.actor,
-      attendancePunchSchema.parse(request.body),
-    );
+    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const service = new AttendanceService(fastify.store);
+    const input = { ...attendancePunchSchema.parse(request.body), idempotency_key: idempotencyKey };
+    return fastify.store.kind === "postgres"
+      ? await service.punchPostgres(request.actor, input)
+      : service.punch(request.actor, input);
   });
 
   fastify.get("/punches/my", async (request) => {

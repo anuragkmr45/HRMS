@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FastifyInstance } from "fastify";
 import { authHeader, loginAs } from "#testing";
+import { buildApp } from "../../../app.js";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
+
+type TestApp = Awaited<ReturnType<typeof buildApp>>;
 
 function localDate(offsetDays = 0, timeZone = "Asia/Kolkata"): string {
   const value = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
@@ -31,7 +33,7 @@ function previousWorkday(): string {
   return localDate(-1);
 }
 
-function ensureActiveCompany(app: FastifyInstance) {
+function ensureActiveCompany(app: TestApp) {
   const existing = app.store.companyProfiles.find((candidate) => candidate.status === "active") ?? app.store.companyProfiles[0];
   if (existing) {
     existing.status = "active";
@@ -69,7 +71,7 @@ function ensureActiveCompany(app: FastifyInstance) {
   return company;
 }
 
-function ensureCompanyContexts(app: FastifyInstance, companyId: string) {
+function ensureCompanyContexts(app: TestApp, companyId: string) {
   const now = new Date().toISOString();
   for (const user of app.store.users) {
     if (!app.store.userSessionPreferences.some((preference) => preference.user_id === user.id)) {
@@ -83,7 +85,7 @@ function ensureCompanyContexts(app: FastifyInstance, companyId: string) {
 }
 
 describe("attendance", () => {
-  let app: FastifyInstance;
+  let app: TestApp;
 
   beforeEach(async () => {
     app = await buildRealApp();
