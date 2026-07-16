@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import type { AttendancePunchEventType, UUID } from "#shared";
+import type { AttendanceOutboxEventContract } from "./events.js";
 import type {
   AttendanceCommandState,
   AttendanceDecisionReasonCode,
@@ -907,11 +908,16 @@ export class AttendanceCommandTransactionRepository {
     );
   }
 
-  async insertOutboxEvent(commandId: UUID, payload: Record<string, unknown>) {
+  async insertOutboxEvent(event: AttendanceOutboxEventContract) {
     return this.query(
       `INSERT INTO platform.outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-       VALUES ('attendance',$1,'attendance.punched',$2::jsonb,$3)`,
-      [commandId, JSON.stringify(payload), `attendance.command:${commandId}`],
+       VALUES ('attendance',$1,$2,$3::jsonb,$4)`,
+      [
+        event.aggregateId,
+        event.eventType,
+        JSON.stringify(event.payload),
+        event.idempotencyKey,
+      ],
     );
   }
 }

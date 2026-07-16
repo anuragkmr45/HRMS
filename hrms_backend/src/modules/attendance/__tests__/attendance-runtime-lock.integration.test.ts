@@ -129,7 +129,7 @@ describe("PostgreSQL attendance runtime lock", () => {
         (SELECT current_session_id FROM attendance.employee_command_states WHERE company_id = $1 AND employee_user_id = $2) AS current_session_id,
         (SELECT state FROM attendance.employee_command_states WHERE company_id = $1 AND employee_user_id = $2) AS state,
         (SELECT count(*) FROM attendance.punch_events WHERE company_id = $1 AND employee_user_id = $2 AND event_type = 'check_in' AND deleted_at IS NULL) AS check_ins,
-        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance' AND payload ->> 'employee_user_id' = $2::text AND payload ->> 'event_type' = 'check_in') AS outbox_events,
+        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance' AND payload ->> 'subject_employee_user_id' = $2::text AND payload ->> 'punch_type' = 'check_in') AS outbox_events,
         (SELECT count(*) FROM attendance.command_executions WHERE company_id = $1 AND employee_user_id = $2 AND idempotency_key IN ($3, $4)) AS command_count`,
       [companyId, employee.user.id, firstKey, secondKey],
     );

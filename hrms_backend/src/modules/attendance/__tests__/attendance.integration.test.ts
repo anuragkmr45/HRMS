@@ -817,7 +817,7 @@ describe("attendance", () => {
     expect(
       app.store.outbox.some(
         (event) =>
-          event.event_type === "attendance.export_requested" &&
+          event.event_type === "attendance.export.requested" &&
           event.aggregate_id === exportJob.json().job_id,
       ),
     ).toBe(true);

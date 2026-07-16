@@ -31,7 +31,13 @@ import {
 } from "../../platform/generated-exports.js";
 import { isWorkingDate } from "../../platform/work-schedule.js";
 import { CoreService } from "../core/service.js";
-import { appendAttendanceOutboxEvent, attendanceEvents } from "./events.js";
+import {
+  appendAttendanceOutboxEvent,
+  buildExportRequestedEvent,
+  buildPunchRecordedEvent,
+  buildRegularizationDecisionEvent,
+  buildRegularizationSubmittedEvent,
+} from "./events.js";
 import {
   assertCanDecideRegularization,
   assertCanSeeAttendanceUser,
@@ -424,20 +430,21 @@ export class AttendanceService {
       timeZone,
       occurredAt,
     );
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: punch.id,
-      companyId,
-      eventType: attendanceEvents.Punched,
-      payload: {
-        punch_id: punch.id,
-        employee_user_id: actor.id,
-        event_type: punch.event_type,
-        occurred_at: punch.occurred_at,
-        work_date: workDate,
-        day_status: day.status,
-      },
-      idempotencyKey: `attendance.punched:${punch.id}`,
-    });
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildPunchRecordedEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: actor.id,
+        punchEventId: punch.id,
+        punchType: punch.event_type,
+        occurredAt: punch.occurred_at,
+        workDate,
+        workMode: punch.work_mode,
+        sourceChannel: punch.source,
+        dayStatus: day.status,
+      }),
+    );
     const nextAvailability = this.punchAvailability(
       companyId,
       actor.id,
@@ -717,19 +724,19 @@ export class AttendanceService {
     );
     day.regularization_status = AttendanceRegularizationStatuses.Pending;
     day.updated_at = nowIso();
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: request.id,
-      companyId,
-      eventType: attendanceEvents.RegularizationSubmitted,
-      payload: {
-        request_id: request.id,
-        employee_user_id: actor.id,
-        approver_user_id: request.current_approver_user_id,
-        work_date: request.work_date,
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildRegularizationSubmittedEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: actor.id,
+        regularizationRequestId: request.id,
+        assignedApproverUserId: request.current_approver_user_id,
+        workDate: request.work_date,
         status: request.status,
-      },
-      idempotencyKey: `attendance.regularization.submitted:${request.id}`,
-    });
+        version: request.version,
+      }),
+    );
     return this.presentRegularization(request);
   }
 
@@ -969,21 +976,21 @@ export class AttendanceService {
     }
     day.updated_at = nowIso();
     day.version += 1;
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: request.id,
-      companyId,
-      eventType: this.eventForDecision(input.decision),
-      payload: {
-        request_id: request.id,
-        actor_user_id: actor.id,
-        employee_user_id: request.employee_user_id,
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildRegularizationDecisionEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: request.employee_user_id,
+        regularizationRequestId: request.id,
+        workDate: request.work_date,
         decision: input.decision,
-        previous_status: previousStatus,
-        next_status: nextStatus,
+        previousStatus,
+        nextStatus,
         version: request.version,
-      },
-      idempotencyKey: `attendance.regularization.${input.decision}:${request.id}:${request.version}`,
-    });
+        decidedAt: request.decided_at!,
+      }),
+    );
     return {
       ...this.presentRegularization(request),
       previous_status: previousStatus,
@@ -1026,27 +1033,16 @@ export class AttendanceService {
       filters,
       filePrefix: "attendance-export",
     });
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: jobId,
-      companyId,
-      eventType: attendanceEvents.ExportRequested,
-      payload: {
-        job_id: jobId,
-        requested_by_user_id: actor.id,
-        filters,
-        columns,
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildExportRequestedEvent({
+        companyId,
+        actorUserId: actor.id,
+        exportJobId: jobId,
         format,
         status: generated.status,
-        adapter: generated.adapter,
-        download_document_id: generated.download_document_id,
-        download_url: generated.download_url,
-        file_name: generated.file_name,
-        row_count: generated.row_count,
-        size_bytes: generated.size_bytes,
-        generated_at: generated.generated_at,
-      },
-      idempotencyKey: `attendance.export.requested:${jobId}`,
-    });
+      }),
+    );
     return {
       job_id: jobId,
       status: generated.status,
@@ -2425,15 +2421,6 @@ export class AttendanceService {
       : "No attendance for this day";
   }
 
-  private eventForDecision(decision: "approve" | "reject" | "return") {
-    if (decision === "approve") {
-      return attendanceEvents.RegularizationApproved;
-    }
-    if (decision === "reject") {
-      return attendanceEvents.RegularizationRejected;
-    }
-    return attendanceEvents.RegularizationReturned;
-  }
 }
 
 function datesInclusive(from: string, to: string): string[] {

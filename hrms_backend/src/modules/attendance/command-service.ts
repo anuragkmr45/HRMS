@@ -9,6 +9,7 @@ import {
   type PlatformIdempotencyKeyRecord,
   type AttendanceSessionRecord,
 } from "./command-repository.js";
+import { buildPunchRecordedEvent } from "./events.js";
 import { decideAttendanceTransition } from "./session-transition.js";
 
 export interface AttendanceCommandInput {
@@ -290,18 +291,26 @@ export class AttendanceCommandService {
             input.policy.graceMinutes,
             input.timeZone,
           );
-          await tx.insertOutboxEvent(command.id, {
-            company_id: input.companyId,
-            command_id: command.id,
-            decision_id: decision.id,
-            session_id: session.id,
-            punch_id: punch.id,
-            employee_user_id: input.actor.id,
-            event_type: input.command.event_type,
-            occurred_at: occurredAt,
-            work_date: session.work_date,
-            day_status: (day as { status?: unknown }).status ?? null,
-          });
+          await tx.insertOutboxEvent(
+            buildPunchRecordedEvent({
+              companyId: input.companyId,
+              actorUserId: input.actor.id,
+              subjectEmployeeUserId: input.actor.id,
+              commandId: command.id,
+              decisionId: decision.id,
+              sessionId: session.id,
+              punchEventId: punch.id,
+              punchType: input.command.event_type,
+              occurredAt,
+              workDate: session.work_date,
+              workMode: input.command.work_mode,
+              sourceChannel: input.command.source,
+              dayStatus:
+                typeof (day as { status?: unknown }).status === "string"
+                  ? (day as { status: string }).status
+                  : null,
+            }),
+          );
           const response = {
             allowed: true,
             command_id: command.id,

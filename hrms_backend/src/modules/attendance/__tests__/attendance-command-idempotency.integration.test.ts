@@ -86,7 +86,12 @@ describe("PostgreSQL attendance command idempotency", () => {
       event_type: "check_in",
       work_mode: "office",
       source: "web",
-      metadata: { device: { os: "android", version: 1 } },
+      metadata: {
+        device: { os: "android", attestation: "private-attestation" },
+        latitude: 12.971599,
+        longitude: 77.594566,
+        coordinates: [77.594566, 12.971599],
+      },
     };
 
     const first = await app.inject({
@@ -103,7 +108,12 @@ describe("PostgreSQL attendance command idempotency", () => {
       headers,
       payload: {
         ...payload,
-        metadata: { device: { version: 1, os: "android" } },
+        metadata: {
+          coordinates: [77.594566, 12.971599],
+          longitude: 77.594566,
+          latitude: 12.971599,
+          device: { attestation: "private-attestation", os: "android" },
+        },
       },
     });
     expect(replay.statusCode).toBe(200);
@@ -129,8 +139,13 @@ describe("PostgreSQL attendance command idempotency", () => {
         (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = $2) AS decisions,
         (SELECT count(*) FROM attendance.sessions WHERE id = $3) AS sessions,
         (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = $2) AS punches,
-        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id = $2) AS outbox_events`,
-      [idempotencyKey, first.json().command_id, first.json().session_id],
+        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id = $4) AS outbox_events`,
+      [
+        idempotencyKey,
+        first.json().command_id,
+        first.json().session_id,
+        first.json().punch_id,
+      ],
     );
     expect(counts.rows[0]).toEqual({
       platform_keys: "1",
@@ -140,6 +155,80 @@ describe("PostgreSQL attendance command idempotency", () => {
       punches: "1",
       outbox_events: "1",
     });
+
+    const outbox = await app.store.pgPool!.query<{
+      aggregate_id: string;
+      event_type: string;
+      payload: Record<string, unknown>;
+    }>(
+      `SELECT aggregate_id, event_type, payload
+       FROM platform.outbox_events
+       WHERE aggregate_id = $1`,
+      [first.json().punch_id],
+    );
+    expect(outbox.rows[0]).toMatchObject({
+      aggregate_id: first.json().punch_id,
+      event_type: "attendance.punch.recorded",
+      payload: {
+        schema_version: 1,
+        company_id: first.json().punch.company_id,
+        actor_user_id: employee.user.id,
+        subject_employee_user_id: employee.user.id,
+        command_id: first.json().command_id,
+        decision_id: first.json().decision_id,
+        session_id: first.json().session_id,
+        punch_event_id: first.json().punch_id,
+        punch_type: "check_in",
+      },
+    });
+    const persistedPayload = outbox.rows[0]?.payload;
+    expect(Object.keys(persistedPayload ?? {}).sort()).toEqual(
+      [
+        "schema_version",
+        "company_id",
+        "actor_user_id",
+        "subject_employee_user_id",
+        "command_id",
+        "decision_id",
+        "session_id",
+        "punch_event_id",
+        "punch_type",
+        "occurred_at",
+        "work_date",
+        "work_mode",
+        "source_channel",
+        "day_status",
+      ].sort(),
+    );
+    for (const excludedField of [
+      "latitude",
+      "longitude",
+      "lat",
+      "lng",
+      "coordinates",
+      "geometry",
+      "geography",
+      "accuracy",
+      "distance",
+      "boundary",
+      "raw_payload",
+      "metadata",
+      "request_snapshot",
+      "response_snapshot",
+      "device",
+      "attestation",
+      "ip_address",
+      "user_agent",
+      "token",
+      "authorization",
+      "headers",
+      "idempotency_key",
+      "request_hash",
+      "reason",
+      "remarks",
+    ]) {
+      expect(persistedPayload).not.toHaveProperty(excludedField);
+    }
 
     const changed = await app.inject({
       method: "POST",
@@ -190,20 +279,76 @@ describe("PostgreSQL attendance command idempotency", () => {
       commands: string;
       decisions: string;
       platform_keys: string;
+      punch_events: string;
+      outbox_events: string;
     }>(
       `SELECT
         (SELECT count(*) FROM attendance.command_executions WHERE idempotency_key = $1) AS commands,
         (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = (
           SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
         )) AS decisions,
-        (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1 AND status = 'completed' AND response_status = 409) AS platform_keys`,
+        (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1 AND status = 'completed' AND response_status = 409) AS platform_keys,
+        (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = (
+          SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
+        )) AS punch_events,
+        (SELECT count(*) FROM platform.outbox_events WHERE event_type = 'attendance.punch.recorded') AS outbox_events`,
       [headers["idempotency-key"]],
     );
     expect(counts.rows[0]).toEqual({
       commands: "1",
       decisions: "1",
       platform_keys: "1",
+      punch_events: "0",
+      outbox_events: "0",
     });
+  });
+
+  it("rolls back the punch and outbox event when transactional outbox insertion fails", async () => {
+    const pool = app.store.pgPool!;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION platform.fail_attendance_outbox_test_insert()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'attendance outbox test failure';
+      END;
+      $$;
+      CREATE TRIGGER attendance_outbox_test_failure_trg
+      BEFORE INSERT ON platform.outbox_events
+      FOR EACH ROW
+      WHEN (NEW.aggregate_type = 'attendance')
+      EXECUTE FUNCTION platform.fail_attendance_outbox_test_insert();
+    `);
+    try {
+      const employee = await loginAs(app, "E1");
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/attendance/punches",
+        headers: {
+          ...authHeader(employee.token),
+          "idempotency-key": "attendance-idempotency-rollback-001",
+        },
+        payload: {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+        },
+      });
+      expect(response.statusCode).toBe(500);
+      const counts = await pool.query<{ punches: string; outbox: string }>(
+        `SELECT
+          (SELECT count(*) FROM attendance.punch_events) AS punches,
+          (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox`,
+      );
+      expect(counts.rows[0]).toEqual({ punches: "0", outbox: "0" });
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS attendance_outbox_test_failure_trg ON platform.outbox_events;
+        DROP FUNCTION IF EXISTS platform.fail_attendance_outbox_test_insert();
+      `);
+    }
   });
 
   it("isolates the same textual key by actor", async () => {
@@ -315,6 +460,14 @@ describe("PostgreSQL attendance command idempotency", () => {
     expect(sameResults[0].json().command_id).toBe(
       sameResults[1].json().command_id,
     );
+    const replayOutbox = await app.store.pgPool!.query<{ count: string }>(
+      `SELECT count(*)
+       FROM platform.outbox_events
+       WHERE aggregate_id = $1
+         AND event_type = 'attendance.punch.recorded'`,
+      [sameResults[0].json().punch_id],
+    );
+    expect(replayOutbox.rows[0]?.count).toBe("1");
 
     const changedKey = "attendance-idempotency-concurrent-changed-001";
     const changedHeaders = {

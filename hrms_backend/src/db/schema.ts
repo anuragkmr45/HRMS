@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   numeric,
+  primaryKey,
   pgSchema,
   text,
   timestamp,
@@ -447,11 +448,15 @@ export const adminSecuritySettings = platform.table(
   (table) => [uniqueIndex("platform_admin_security_settings_key_uq").on(table.settingsKey)]
 );
 
-export const processedEvents = platform.table("processed_events", {
-  consumerName: text("consumer_name").notNull(),
-  eventId: uuid("event_id").notNull(),
-  processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
-});
+export const processedEvents = platform.table(
+  "processed_events",
+  {
+    consumerName: text("consumer_name").notNull(),
+    eventId: uuid("event_id").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [primaryKey({ columns: [table.consumerName, table.eventId] })]
+);
 
 export const attendancePunchEvents = attendance.table(
   "punch_events",

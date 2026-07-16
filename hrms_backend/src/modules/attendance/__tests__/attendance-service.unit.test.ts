@@ -140,14 +140,17 @@ describe("AttendanceService.punch", () => {
     const event = store.outbox[0]!;
 
     expect(event.aggregate_type).toBe("attendance");
-    expect(event.event_type).toBe("attendance.punched");
+    expect(event.event_type).toBe("attendance.punch.recorded");
     expect(event.status).toBe("pending");
     expect(event.retry_count).toBe(0);
-    expect(event.idempotency_key).toContain("attendance.punched:");
+    expect(event.idempotency_key).toContain("attendance.punch.recorded:");
 
     expect(event.payload).toMatchObject({
-      employee_user_id: employee().id,
-      event_type: "check_in",
+      schema_version: 1,
+      actor_user_id: employee().id,
+      subject_employee_user_id: employee().id,
+      punch_event_id: event.aggregate_id,
+      punch_type: "check_in",
       work_date: "2026-07-08",
     });
   });
@@ -839,7 +842,7 @@ describe("AttendanceService.punch", () => {
 
       expect(store.outbox[0]).toMatchObject({
         aggregate_type: "attendance",
-        event_type: "attendance.regularization_submitted",
+        event_type: "attendance.regularization.submitted",
       });
     });
 
@@ -1305,7 +1308,7 @@ describe("AttendanceService.punch", () => {
 
       expect(store.outbox[0]).toMatchObject({
         aggregate_type: "attendance",
-        event_type: "attendance.export_requested",
+        event_type: "attendance.export.requested",
       });
     });
 

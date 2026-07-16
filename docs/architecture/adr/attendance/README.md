@@ -50,6 +50,7 @@ The current Attendance implementation has the following blockers:
 | ADR-02 | DB-first command path | `02-db-first-attendance-command-path.md` |
 | ADR-03 | Manual-vs-geo semantics | `03-manual-vs-geo-attendance-semantics.md` |
 | ADR-04 | Mobile-ready contract direction | `04-mobile-ready-attendance-contract.md` |
+| ADR-05 | Attendance outbox event contract | `05-attendance-outbox-event-contract.md` |
 
 ## Architecture Direction Summary
 
