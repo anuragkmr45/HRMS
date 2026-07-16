@@ -3,6 +3,35 @@ import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
+const originalDatabaseUrl = process.env.DATABASE_URL;
+
+async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
+  const pool = app.store.pgPool;
+
+  if (!pool) {
+    throw new Error("PostgreSQL pool is unavailable.");
+  }
+
+  await pool.query(`
+    TRUNCATE TABLE
+      attendance.punch_events,
+      attendance.command_decisions,
+      attendance.command_executions,
+      attendance.employee_command_states,
+      attendance.sessions
+    RESTART IDENTITY CASCADE
+  `);
+
+  await pool.query(`
+    DELETE FROM platform.outbox_events
+    WHERE aggregate_type = 'attendance'
+  `);
+
+  await pool.query(`
+    DELETE FROM platform.idempotency_keys
+    WHERE scope LIKE 'attendance.punch:%'
+  `);
+}
 
 describe("PostgreSQL attendance command idempotency", () => {
   let app: TestApp;
@@ -10,10 +39,17 @@ describe("PostgreSQL attendance command idempotency", () => {
   beforeEach(async () => {
     app = await buildRealApp();
     await app.ready();
+
+    await clearAttendanceRuntimeFixtures(app);
+
     const policy = app.store.adminPolicies.find(
       (candidate) => candidate.policy_key === "attendance",
     );
-    if (!policy) throw new Error("Attendance policy fixture is unavailable.");
+
+    if (!policy) {
+      throw new Error("Attendance policy fixture is unavailable.");
+    }
+
     policy.config = {
       ...policy.config,
       fullDayPunchWindow: true,
@@ -22,7 +58,21 @@ describe("PostgreSQL attendance command idempotency", () => {
   });
 
   afterEach(async () => {
-    await app?.close();
+    try {
+      if (app) {
+        await clearAttendanceRuntimeFixtures(app);
+      }
+    } finally {
+      try {
+        await app?.close();
+      } finally {
+        if (originalDatabaseUrl === undefined) {
+          delete process.env.DATABASE_URL;
+        } else {
+          process.env.DATABASE_URL = originalDatabaseUrl;
+        }
+      }
+    }
   });
 
   it("replays one completed command and rejects a changed request", async () => {
