@@ -478,6 +478,7 @@ export const ErrorCodes = {
   RequiredDocumentsMissing: "REQUIRED_DOCUMENTS_MISSING",
   IdempotencyConflict: "IDEMPOTENCY_CONFLICT",
   ValidationFailed: "VALIDATION_FAILED",
+  CompanyContextRequired: "COMPANY_CONTEXT_REQUIRED",
   TooManyRequests: "TOO_MANY_REQUESTS"
 } as const;
 
