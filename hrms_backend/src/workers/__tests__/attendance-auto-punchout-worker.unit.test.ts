@@ -35,6 +35,11 @@ function storeWithAutoPunchOut(autoPunchOutTime = "18:30", autoPunchOutEnabled =
   if (!store.companyProfiles.some((candidate) => candidate.id === company.id)) {
     store.companyProfiles.push(company);
   }
+  const now = new Date().toISOString();
+  store.userSessionPreferences.push(...store.users.map((user) => ({
+    id: randomUUID(), user_id: user.id, active_role: user.roles[0]!, company_id: company.id, landing_page: "/dashboard",
+    locale: "en-IN", timezone: user.timezone ?? company.timezone, created_at: now, updated_at: now, version: 1
+  })));
   company.working_week = "Mon-Sun";
   company.timezone = "Asia/Kolkata";
   const policy = store.adminPolicies.find((candidate) => candidate.policy_key === "attendance");
@@ -47,6 +52,7 @@ function storeWithAutoPunchOut(autoPunchOutTime = "18:30", autoPunchOutEnabled =
     autoPunchOutEnabled,
     autoPunchOutTime
   };
+  policy.company_id = company.id;
   return store;
 }
 
