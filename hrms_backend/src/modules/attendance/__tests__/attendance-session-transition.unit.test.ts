@@ -32,7 +32,7 @@ describe("attendance session transitions", () => {
       state: AttendanceCommandStates.Working,
       command: AttendancePunchEventTypes.CheckOut,
       action: AttendanceTransitionActions.CloseSession,
-      nextState: AttendanceCommandStates.NotCheckedIn,
+      nextState: AttendanceCommandStates.Completed,
     },
   ] as const;
 
@@ -92,6 +92,11 @@ describe("attendance session transitions", () => {
       state: AttendanceCommandStates.OnBreak,
       command: AttendancePunchEventTypes.CheckOut,
       reason: AttendanceDecisionReasonCodes.OpenBreakMustEnd,
+    },
+    {
+      state: AttendanceCommandStates.Completed,
+      command: AttendancePunchEventTypes.CheckIn,
+      reason: AttendanceDecisionReasonCodes.AttendanceCycleCompleted,
     },
   ] as const;
 

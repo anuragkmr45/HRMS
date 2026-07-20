@@ -5,6 +5,7 @@ export const AttendanceCommandStates = {
   NotCheckedIn: "not_checked_in",
   Working: "working",
   OnBreak: "on_break",
+  Completed: "completed",
 } as const;
 
 export type AttendanceCommandState =
@@ -27,6 +28,8 @@ export const AttendanceDecisionReasonCodes = {
   BreakAlreadyStarted: "break_already_started",
   NoOpenBreak: "no_open_break",
   OpenBreakMustEnd: "open_break_must_end",
+  AttendanceCycleCompleted: "attendance_cycle_completed",
+  SessionOwnershipInvalid: "session_ownership_invalid",
 } as const;
 
 export type AttendanceDecisionReasonCode =
@@ -70,6 +73,13 @@ export function decideAttendanceTransition(
 
     case AttendanceCommandStates.OnBreak:
       return decideWhenOnBreak(commandType);
+
+    case AttendanceCommandStates.Completed:
+      return denied(
+        AttendanceCommandStates.Completed,
+        AttendanceDecisionReasonCodes.AttendanceCycleCompleted,
+        "The attendance cycle is already completed.",
+      );
 
     default:
       return assertNever(currentState);
@@ -141,7 +151,7 @@ function decideWhenWorking(
     case AttendancePunchEventTypes.CheckOut:
       return allowed(
         AttendanceCommandStates.Working,
-        AttendanceCommandStates.NotCheckedIn,
+        AttendanceCommandStates.Completed,
         AttendanceTransitionActions.CloseSession,
       );
 

@@ -319,7 +319,12 @@ function migrationSql(): string {
 export async function resetPostgresDatabase(databaseUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
+  let schemaLockAcquired = false;
   try {
+    await client.query(
+      "SELECT pg_advisory_lock(hashtext('hrms_postgres_schema_reset'))",
+    );
+    schemaLockAcquired = true;
     await client.query(migrationSql());
     await client.query("BEGIN");
     await client.query(`TRUNCATE ${resetTables.join(", ")} RESTART IDENTITY`);
@@ -328,6 +333,11 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
+    if (schemaLockAcquired) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext('hrms_postgres_schema_reset'))")
+        .catch(() => undefined);
+    }
     client.release();
     await pool.end();
   }

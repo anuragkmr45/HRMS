@@ -135,6 +135,7 @@ export interface AttendanceSessionRecord {
   status: AttendanceSessionStatus;
   checked_in_at: string;
   closed_at: string | null;
+  /** Compatibility projection only; break_segments is authoritative. */
   active_break_started_at: string | null;
   last_transition_at: string;
   work_mode: "office" | "remote" | "wfh" | "field";
@@ -144,6 +145,16 @@ export interface AttendanceSessionRecord {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+export interface AttendanceBreakSegmentRecord {
+  id: UUID;
+  company_id: UUID;
+  session_id: UUID;
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CreateAttendanceSessionInput {
@@ -705,7 +716,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,
@@ -728,6 +738,58 @@ export class AttendanceCommandTransactionRepository {
     return result.rows[0] ?? null;
   }
 
+  async findActiveBreakForUpdate(
+    companyId: UUID,
+    sessionId: UUID,
+  ): Promise<AttendanceBreakSegmentRecord | null> {
+    const result = await this.client.query<AttendanceBreakSegmentRecord>(
+      `SELECT id, company_id, session_id, started_at, ended_at, created_at, updated_at
+        FROM attendance.break_segments
+        WHERE company_id = $1 AND session_id = $2 AND ended_at IS NULL
+        FOR UPDATE`,
+      [companyId, sessionId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findCompletedSessionForWorkDateForUpdate(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+  ): Promise<AttendanceSessionRecord | null> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `SELECT id, company_id, employee_user_id, work_date, status, checked_in_at,
+          closed_at, active_break_started_at, last_transition_at, work_mode,
+          source, metadata, version, created_at, updated_at, deleted_at
+        FROM attendance.sessions
+        WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3
+          AND closed_at IS NOT NULL AND deleted_at IS NULL
+        ORDER BY closed_at DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [companyId, employeeUserId, workDate],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findSessionForUpdate(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    sessionId: UUID;
+  }): Promise<AttendanceSessionRecord | null> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `SELECT id, company_id, employee_user_id, work_date, status, checked_in_at,
+          closed_at, active_break_started_at, last_transition_at, work_mode,
+          source, metadata, version, created_at, updated_at, deleted_at
+        FROM attendance.sessions
+        WHERE id = $1 AND company_id = $2 AND employee_user_id = $3
+          AND deleted_at IS NULL
+        FOR UPDATE`,
+      [input.sessionId, input.companyId, input.employeeUserId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async createSession(
     input: CreateAttendanceSessionInput,
   ): Promise<AttendanceSessionRecord> {
@@ -739,7 +801,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,
@@ -755,7 +816,6 @@ export class AttendanceCommandTransactionRepository {
       $3,
       'working',
       $4,
-      NULL,
       NULL,
       $4,
       $5,
@@ -774,7 +834,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,
@@ -810,10 +869,15 @@ export class AttendanceCommandTransactionRepository {
     expectedVersion: number;
     occurredAt: string;
   }): Promise<AttendanceSessionRecord> {
+    await this.client.query(
+      `INSERT INTO attendance.break_segments (
+        company_id, session_id, started_at, ended_at, created_at, updated_at
+      ) VALUES ($1, $2, $3, NULL, now(), now())`,
+      [input.companyId, input.sessionId, input.occurredAt],
+    );
     const result = await this.client.query<AttendanceSessionRecord>(
       `UPDATE attendance.sessions
     SET status = 'on_break',
-        active_break_started_at = $5,
         last_transition_at = $5,
         version = version + 1,
         updated_at = now()
@@ -830,7 +894,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,
@@ -864,16 +927,25 @@ export class AttendanceCommandTransactionRepository {
     expectedVersion: number;
     occurredAt: string;
   }): Promise<AttendanceSessionRecord> {
+    const breakResult = await this.client.query<AttendanceBreakSegmentRecord>(
+      `UPDATE attendance.break_segments
+        SET ended_at = $3, updated_at = now()
+        WHERE company_id = $1 AND session_id = $2 AND ended_at IS NULL
+          AND started_at <= $3::timestamptz
+        RETURNING id, company_id, session_id, started_at, ended_at, created_at, updated_at`,
+      [input.companyId, input.sessionId, input.occurredAt],
+    );
+    if (!breakResult.rows[0]) {
+      throw new Error("Attendance break segment could not be closed.");
+    }
     const result = await this.client.query<AttendanceSessionRecord>(
       `UPDATE attendance.sessions
     SET status = 'working',
-        active_break_started_at = NULL,
         last_transition_at = $5,
         version = version + 1,
         updated_at = now()
     WHERE id = $1 AND company_id = $2 AND employee_user_id = $3 AND version = $4
       AND status = 'on_break'
-      AND active_break_started_at IS NOT NULL
       AND closed_at IS NULL
       AND deleted_at IS NULL
       AND $5::timestamptz >= last_transition_at
@@ -885,7 +957,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,
@@ -925,14 +996,12 @@ export class AttendanceCommandTransactionRepository {
       `UPDATE attendance.sessions
     SET status = 'closed',
         closed_at = $5,
-        active_break_started_at = NULL,
         last_transition_at = $5,
         version = version + 1,
         updated_at = now()
     WHERE id = $1 AND company_id = $2 AND employee_user_id = $3 AND version = $4
       AND status = 'working'
       AND closed_at IS NULL
-      AND active_break_started_at IS NULL
       AND deleted_at IS NULL
       AND $5::timestamptz >= last_transition_at
     RETURNING
@@ -943,7 +1012,6 @@ export class AttendanceCommandTransactionRepository {
       status,
       checked_in_at,
       closed_at,
-      active_break_started_at,
       last_transition_at,
       work_mode,
       source,

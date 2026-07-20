@@ -163,7 +163,7 @@ export class AttendanceCommandService {
             payload: evidencePayload,
             payloadHash: evidencePayloadHash,
           });
-          const state = await tx.ensureAndLockEmployeeState(
+          let state = await tx.ensureAndLockEmployeeState(
             input.companyId,
             input.actor.id,
           );
@@ -171,6 +171,62 @@ export class AttendanceCommandService {
             input.companyId,
             input.actor.id,
           );
+          const activeBreak = open
+            ? await tx.findActiveBreakForUpdate(input.companyId, open.id)
+            : null;
+          const completed = open
+            ? null
+            : await tx.findCompletedSessionForWorkDateForUpdate(
+                input.companyId,
+                input.actor.id,
+                workDate,
+              );
+          const derived = deriveAttendanceRuntimeState(open, activeBreak, completed);
+          const priorCompletedSession =
+            state.state === "completed" && state.current_session_id
+              ? await tx.findSessionForUpdate({
+                  companyId: input.companyId,
+                  employeeUserId: input.actor.id,
+                  sessionId: state.current_session_id,
+                })
+              : null;
+          if (
+            // Sprint 10 persisted NOT_STARTED after checkout. A current-cycle
+            // completed session is authoritative during the rollout to the
+            // COMPLETED runtime state, so repair that known legacy shape.
+            state.state === "not_checked_in" &&
+            state.current_session_id === null &&
+            completed
+          ) {
+            state = await tx.updateEmployeeState({
+              companyId: input.companyId,
+              employeeUserId: input.actor.id,
+              state: derived.state,
+              currentSessionId: derived.sessionId,
+            });
+          } else if (
+            state.state === "completed" &&
+            !completed &&
+            !open &&
+            priorCompletedSession?.closed_at &&
+            priorCompletedSession.work_date !== workDate
+          ) {
+            // A completed runtime row from an earlier attendance cycle is
+            // intentionally reloaded to NOT_STARTED for this cycle.
+            state = await tx.updateEmployeeState({
+              companyId: input.companyId,
+              employeeUserId: input.actor.id,
+              state: derived.state,
+              currentSessionId: derived.sessionId,
+            });
+          } else if (
+            state.state !== derived.state ||
+            state.current_session_id !== derived.sessionId
+          ) {
+            throw conflict(
+              "Attendance session state is inconsistent; retry the command.",
+            );
+          }
           const stateDecision = decideAttendanceTransition(
             state.state,
             input.command.event_type,
@@ -272,14 +328,6 @@ export class AttendanceCommandService {
             });
             return { response, responseStatus: 409 };
           }
-          if (
-            (state.current_session_id &&
-              open?.id !== state.current_session_id) ||
-            (state.state === "not_checked_in" && open)
-          )
-            throw conflict(
-              "Attendance session state is inconsistent; retry the command.",
-            );
           const decision = await tx.createDecision({
             commandExecutionId: command.id,
             companyId: input.companyId,
@@ -311,10 +359,8 @@ export class AttendanceCommandService {
               stateDecision.action,
             );
           } catch (error) {
-            if (isAttendanceSessionSingleOpenViolation(error))
-              throw conflict(
-                "The employee already has an open attendance session.",
-              );
+            const mapped = attendanceTransitionConflict(error);
+            if (mapped) throw mapped;
             throw error;
           }
           await tx.updateEmployeeState({
@@ -573,7 +619,11 @@ export class AttendanceCommandService {
   }
 }
 
-type PostgresConstraintError = { code?: unknown; constraint?: unknown };
+type PostgresConstraintError = {
+  code?: unknown;
+  constraint?: unknown;
+  message?: unknown;
+};
 
 function isUniqueViolation(error: unknown): error is PostgresConstraintError {
   return (
@@ -593,6 +643,45 @@ export function isAttendanceSessionSingleOpenViolation(
   );
 }
 
+export function attendanceTransitionConflict(error: unknown) {
+  if (isAttendanceSessionSingleOpenViolation(error)) {
+    return conflict("The employee already has an open attendance session.", {
+      reason_code: "already_checked_in",
+    });
+  }
+  if (!isPostgresConstraintError(error)) return null;
+
+  const constraint = typeof error.constraint === "string" ? error.constraint : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  if (constraint === "attendance_break_segments_single_active_idx") {
+    return conflict("An attendance break is already open.", {
+      reason_code: "break_already_started",
+    });
+  }
+  if (constraint === "attendance_break_segments_session_company_fk") {
+    return conflict("Attendance break session ownership is invalid.", {
+      reason_code: "session_ownership_invalid",
+    });
+  }
+  if (message.includes("attendance break segment requires an open session")) {
+    return conflict("An attendance session must be open before starting a break.", {
+      reason_code: "no_open_session",
+    });
+  }
+  if (message.includes("completed attendance session cannot retain an active break")) {
+    return conflict("The open attendance break must be ended before checking out.", {
+      reason_code: "open_break_must_end",
+    });
+  }
+  return null;
+}
+
+function isPostgresConstraintError(
+  error: unknown,
+): error is PostgresConstraintError {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
 function isAttendanceIdempotencyUniqueViolation(error: unknown): boolean {
   return (
     isUniqueViolation(error) &&
@@ -610,7 +699,26 @@ function allowedActions(state: string): AttendancePunchEventType[] {
           AttendancePunchEventTypes.BreakStart,
           AttendancePunchEventTypes.CheckOut,
         ]
-      : [AttendancePunchEventTypes.BreakEnd];
+      : state === "on_break"
+        ? [AttendancePunchEventTypes.BreakEnd]
+        : [];
+}
+
+function deriveAttendanceRuntimeState(
+  open: AttendanceSessionRecord | null,
+  activeBreak: { session_id: UUID } | null,
+  completed: AttendanceSessionRecord | null,
+): {
+  state: "not_checked_in" | "working" | "on_break" | "completed";
+  sessionId: UUID | null;
+} {
+  if (open) {
+    return activeBreak
+      ? { state: "on_break", sessionId: open.id }
+      : { state: "working", sessionId: open.id };
+  }
+  if (completed) return { state: "completed", sessionId: completed.id };
+  return { state: "not_checked_in", sessionId: null };
 }
 type CommandPolicy = {
   fullDayPunchWindow: boolean;

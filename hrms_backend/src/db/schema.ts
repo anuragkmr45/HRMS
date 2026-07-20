@@ -478,6 +478,64 @@ export const attendancePunchEvents = attendance.table(
   ]
 );
 
+export const attendanceSessions = attendance.table(
+  "sessions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    status: text("status").notNull(),
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    lastTransitionAt: timestamp("last_transition_at", { withTimezone: true }).notNull(),
+    workMode: text("work_mode").notNull(),
+    source: text("source").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    version,
+    createdAt,
+    updatedAt,
+    deletedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_sessions_id_company_uq").on(table.id, table.companyId),
+    uniqueIndex("attendance_sessions_single_open_idx").on(table.companyId, table.employeeUserId).where(sql`${table.closedAt} IS NULL AND ${table.deletedAt} IS NULL`),
+    index("attendance_sessions_employee_history_idx").on(table.companyId, table.employeeUserId, table.checkedInAt),
+    index("attendance_sessions_work_date_idx").on(table.companyId, table.workDate, table.employeeUserId)
+  ]
+);
+
+export const attendanceBreakSegments = attendance.table(
+  "break_segments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    sessionId: uuid("session_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_break_segments_single_active_idx").on(table.companyId, table.sessionId).where(sql`${table.endedAt} IS NULL`),
+    index("attendance_break_segments_session_history_idx").on(table.companyId, table.sessionId, table.startedAt)
+  ]
+);
+
+export const attendanceEmployeeCommandStates = attendance.table(
+  "employee_command_states",
+  {
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    state: text("state").notNull().default("not_checked_in"),
+    currentSessionId: uuid("current_session_id"),
+    version,
+    createdAt,
+    updatedAt
+  },
+  (table) => [primaryKey({ columns: [table.companyId, table.employeeUserId] })]
+);
+
 export const attendanceDailyRecords = attendance.table(
   "daily_records",
   {

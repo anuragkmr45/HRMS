@@ -22,6 +22,7 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
       attendance.command_decisions,
       attendance.command_executions,
       attendance.employee_command_states,
+      attendance.break_segments,
       attendance.sessions
     RESTART IDENTITY CASCADE
   `);

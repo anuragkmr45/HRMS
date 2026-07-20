@@ -20,6 +20,13 @@ function companyIdFor(app: TestApp, employeeUserId: string): string {
   return companyId;
 }
 
+function attendanceTimeZoneFor(app: TestApp, employeeUserId: string): string {
+  const user = app.store.users.find((candidate) => candidate.id === employeeUserId);
+  const companyId = companyIdFor(app, employeeUserId);
+  const company = app.store.companyProfiles.find((candidate) => candidate.id === companyId);
+  return user?.timezone ?? company?.timezone ?? "Asia/Kolkata";
+}
+
 async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
   const pool = app.store.pgPool;
   if (!pool) {
@@ -36,6 +43,7 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
       attendance.command_decisions,
       attendance.command_executions,
       attendance.employee_command_states,
+      attendance.break_segments,
       attendance.sessions
     RESTART IDENTITY CASCADE
   `);
@@ -222,6 +230,282 @@ describe("PostgreSQL attendance runtime lock", () => {
       [employee.user.id],
     );
     expect(count.rows[0]?.check_outs).toBe("1");
+  });
+
+  it("persists one break segment and completes the runtime state after checkout", async () => {
+    const employee = await loginAs(app, "E1");
+    const headers = (idempotencyKey: string) => ({
+      ...authHeader(employee.token),
+      "idempotency-key": idempotencyKey,
+    });
+    const punch = async (
+      event_type: "check_in" | "break_start" | "break_end" | "check_out",
+      key: string,
+    ) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/attendance/punches",
+        headers: headers(key),
+        payload: { ...punchPayload, event_type },
+      });
+
+    expect((await punch("check_in", "attendance-break-chain-in-001")).statusCode).toBe(200);
+    const breakStart = await punch("break_start", "attendance-break-chain-start-001");
+    expect(breakStart.statusCode).toBe(200);
+    expect((await punch("break_end", "attendance-break-chain-end-001")).statusCode).toBe(200);
+    expect((await punch("check_out", "attendance-break-chain-out-001")).statusCode).toBe(200);
+    const repeatedCheckIn = await punch("check_in", "attendance-break-chain-repeat-in-001");
+    expect(repeatedCheckIn.statusCode).toBe(409);
+    expect(repeatedCheckIn.json()).toMatchObject({
+      details: { reason_code: "attendance_cycle_completed" },
+    });
+
+    const state = await app.store.pgPool!.query<{
+      state: string;
+      current_session_id: string;
+      closed_at: Date | null;
+      active_breaks: string;
+      break_segments: string;
+    }>(
+      `SELECT runtime.state, runtime.current_session_id, session.closed_at,
+          (SELECT count(*) FROM attendance.break_segments break_segment
+            WHERE break_segment.company_id = session.company_id
+              AND break_segment.session_id = session.id
+              AND break_segment.ended_at IS NULL) AS active_breaks,
+          (SELECT count(*) FROM attendance.break_segments break_segment
+            WHERE break_segment.company_id = session.company_id
+              AND break_segment.session_id = session.id) AS break_segments
+        FROM attendance.employee_command_states runtime
+        JOIN attendance.sessions session ON session.id = runtime.current_session_id
+        WHERE runtime.employee_user_id = $1`,
+      [employee.user.id],
+    );
+    expect(state.rows[0]).toMatchObject({
+      state: "completed",
+      active_breaks: "0",
+      break_segments: "1",
+    });
+    expect(state.rows[0]?.closed_at).toBeInstanceOf(Date);
+  });
+
+  it("serializes concurrent break starts to one active break", async () => {
+    const employee = await loginAs(app, "E1");
+    const checkIn = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": "attendance-break-race-in-001" },
+      payload: punchPayload,
+    });
+    expect(checkIn.statusCode).toBe(200);
+
+    const results = await Promise.all(["001", "002"].map((suffix) => app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": `attendance-break-race-start-${suffix}` },
+      payload: { ...punchPayload, event_type: "break_start" },
+    })));
+    expect(results.map((result) => result.statusCode).sort()).toEqual([200, 409]);
+
+    const activeBreaks = await app.store.pgPool!.query<{ count: string }>(
+      `SELECT count(*) FROM attendance.break_segments
+        WHERE session_id = $1 AND ended_at IS NULL`,
+      [checkIn.json().session_id],
+    );
+    expect(activeBreaks.rows[0]?.count).toBe("1");
+  });
+
+  it("serializes concurrent break ends to one conditional break closure", async () => {
+    const employee = await loginAs(app, "E1");
+    const send = (event_type: "check_in" | "break_start" | "break_end", key: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/attendance/punches",
+        headers: { ...authHeader(employee.token), "idempotency-key": key },
+        payload: { ...punchPayload, event_type },
+      });
+    const checkIn = await send("check_in", "attendance-break-end-race-in-001");
+    expect(checkIn.statusCode).toBe(200);
+    expect((await send("break_start", "attendance-break-end-race-start-001")).statusCode).toBe(200);
+
+    const results = await Promise.all(["001", "002"].map((suffix) =>
+      send("break_end", `attendance-break-end-race-end-${suffix}`),
+    ));
+    expect(results.map((result) => result.statusCode).sort()).toEqual([200, 409]);
+    const persisted = await app.store.pgPool!.query<{
+      active_breaks: string;
+      state: string;
+    }>(
+      `SELECT
+          (SELECT count(*) FROM attendance.break_segments
+            WHERE session_id = $1 AND ended_at IS NULL) AS active_breaks,
+          (SELECT state FROM attendance.employee_command_states
+            WHERE employee_user_id = $2) AS state`,
+      [checkIn.json().session_id, employee.user.id],
+    );
+    expect(persisted.rows[0]).toEqual({ active_breaks: "0", state: "working" });
+  });
+
+  it("leaves no invalid session or break when break start races checkout", async () => {
+    const employee = await loginAs(app, "E1");
+    const checkIn = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": "attendance-start-checkout-race-in-001" },
+      payload: punchPayload,
+    });
+    expect(checkIn.statusCode).toBe(200);
+    const results = await Promise.all([
+      app.inject({
+        method: "POST", url: "/api/v1/attendance/punches",
+        headers: { ...authHeader(employee.token), "idempotency-key": "attendance-start-checkout-race-start-001" },
+        payload: { ...punchPayload, event_type: "break_start" },
+      }),
+      app.inject({
+        method: "POST", url: "/api/v1/attendance/punches",
+        headers: { ...authHeader(employee.token), "idempotency-key": "attendance-start-checkout-race-out-001" },
+        payload: { ...punchPayload, event_type: "check_out" },
+      }),
+    ]);
+    expect(results.map((result) => result.statusCode).sort()).toEqual([200, 409]);
+    const persisted = await app.store.pgPool!.query<{ closed_at: Date | null; active_breaks: string; state: string }>(
+      `SELECT session.closed_at,
+          (SELECT count(*) FROM attendance.break_segments
+            WHERE session_id = session.id AND ended_at IS NULL) AS active_breaks,
+          runtime.state
+        FROM attendance.sessions session
+        JOIN attendance.employee_command_states runtime ON runtime.current_session_id = session.id
+        WHERE session.id = $1`,
+      [checkIn.json().session_id],
+    );
+    expect(persisted.rows[0]?.active_breaks).toBe(
+      persisted.rows[0]?.closed_at ? "0" : "1",
+    );
+    expect(persisted.rows[0]?.state).toBe(
+      persisted.rows[0]?.closed_at ? "completed" : "on_break",
+    );
+  });
+
+  it("allows only valid serialization outcomes when break end races checkout", async () => {
+    const employee = await loginAs(app, "E1");
+    const send = (event_type: "check_in" | "break_start" | "break_end" | "check_out", key: string) =>
+      app.inject({
+        method: "POST", url: "/api/v1/attendance/punches",
+        headers: { ...authHeader(employee.token), "idempotency-key": key },
+        payload: { ...punchPayload, event_type },
+      });
+    const checkIn = await send("check_in", "attendance-end-checkout-race-in-001");
+    expect(checkIn.statusCode).toBe(200);
+    expect((await send("break_start", "attendance-end-checkout-race-start-001")).statusCode).toBe(200);
+    const results = await Promise.all([
+      send("break_end", "attendance-end-checkout-race-end-001"),
+      send("check_out", "attendance-end-checkout-race-out-001"),
+    ]);
+    expect(results.some((result) => result.statusCode === 200)).toBe(true);
+    expect(results.every((result) => [200, 409].includes(result.statusCode))).toBe(true);
+    const persisted = await app.store.pgPool!.query<{ closed_at: Date | null; active_breaks: string; state: string }>(
+      `SELECT session.closed_at,
+          (SELECT count(*) FROM attendance.break_segments
+            WHERE session_id = session.id AND ended_at IS NULL) AS active_breaks,
+          runtime.state
+        FROM attendance.sessions session
+        JOIN attendance.employee_command_states runtime ON runtime.current_session_id = session.id
+        WHERE session.id = $1`,
+      [checkIn.json().session_id],
+    );
+    expect(persisted.rows[0]).toMatchObject({ active_breaks: "0" });
+    expect(["working", "completed"]).toContain(persisted.rows[0]?.state);
+  });
+
+  it("reconciles a legacy NOT_STARTED runtime row to the completed current cycle", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = companyIdFor(app, employee.user.id);
+    const pool = app.store.pgPool!;
+    const timeZone = attendanceTimeZoneFor(app, employee.user.id);
+    const fixture = await pool.query<{ id: string }>(
+      `INSERT INTO attendance.sessions (
+        company_id, employee_user_id, work_date, status, checked_in_at,
+        closed_at, active_break_started_at, last_transition_at, work_mode,
+        source, metadata, version, created_at, updated_at, deleted_at
+      ) VALUES (
+        $1, $2, (transaction_timestamp() AT TIME ZONE $3)::date,
+        'closed', transaction_timestamp() - interval '2 hours',
+        transaction_timestamp() - interval '1 hour', NULL,
+        transaction_timestamp() - interval '1 hour', 'office', 'web',
+        '{}'::jsonb, 1, now(), now(), NULL
+      ) RETURNING id`,
+      [companyId, employee.user.id, timeZone],
+    );
+    const sessionId = fixture.rows[0]?.id;
+    if (!sessionId) throw new Error("Completed session fixture was not created.");
+    await pool.query(
+      `INSERT INTO attendance.employee_command_states (
+        company_id, employee_user_id, state, current_session_id, version, created_at, updated_at
+      ) VALUES ($1, $2, 'not_checked_in', NULL, 1, now(), now())`,
+      [companyId, employee.user.id],
+    );
+
+    const result = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": "attendance-legacy-completed-001" },
+      payload: punchPayload,
+    });
+    expect(result.statusCode).toBe(409);
+    expect(result.json()).toMatchObject({
+      details: { reason_code: "attendance_cycle_completed" },
+    });
+    const runtime = await pool.query<{ state: string; current_session_id: string }>(
+      `SELECT state, current_session_id FROM attendance.employee_command_states
+        WHERE company_id = $1 AND employee_user_id = $2`,
+      [companyId, employee.user.id],
+    );
+    expect(runtime.rows[0]).toEqual({ state: "completed", current_session_id: sessionId });
+  });
+
+  it("allows a new check-in after the completed attendance cycle rolls over", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = companyIdFor(app, employee.user.id);
+    const pool = app.store.pgPool!;
+    const timeZone = attendanceTimeZoneFor(app, employee.user.id);
+    const fixture = await pool.query<{ id: string }>(
+      `INSERT INTO attendance.sessions (
+        company_id, employee_user_id, work_date, status, checked_in_at,
+        closed_at, active_break_started_at, last_transition_at, work_mode,
+        source, metadata, version, created_at, updated_at, deleted_at
+      ) VALUES (
+        $1, $2, ((transaction_timestamp() AT TIME ZONE $3)::date - 1),
+        'closed', transaction_timestamp() - interval '26 hours',
+        transaction_timestamp() - interval '25 hours', NULL,
+        transaction_timestamp() - interval '25 hours', 'office', 'web',
+        '{}'::jsonb, 1, now(), now(), NULL
+      ) RETURNING id`,
+      [companyId, employee.user.id, timeZone],
+    );
+    const previousSessionId = fixture.rows[0]?.id;
+    if (!previousSessionId) throw new Error("Previous-cycle session fixture was not created.");
+    await pool.query(
+      `INSERT INTO attendance.employee_command_states (
+        company_id, employee_user_id, state, current_session_id, version, created_at, updated_at
+      ) VALUES ($1, $2, 'completed', $3, 1, now(), now())`,
+      [companyId, employee.user.id, previousSessionId],
+    );
+
+    const result = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": "attendance-cycle-rollover-001" },
+      payload: punchPayload,
+    });
+    expect(result.statusCode).toBe(200);
+    const runtime = await pool.query<{ state: string; current_session_id: string }>(
+      `SELECT state, current_session_id FROM attendance.employee_command_states
+        WHERE company_id = $1 AND employee_user_id = $2`,
+      [companyId, employee.user.id],
+    );
+    expect(runtime.rows[0]).toEqual({
+      state: "working",
+      current_session_id: result.json().session_id,
+    });
   });
 
   it("enforces the single-open-session index when the runtime lock is bypassed", async () => {
