@@ -420,9 +420,10 @@ export class LeaveWfhService {
     };
   }
 
-  listHolidays(_actor: AuthUser, query: LeaveWfhQuery) {
+  listHolidays(actor: AuthUser, query: LeaveWfhQuery) {
+    const companyId = this.requireCompanyId(actor.id);
     const year = query.year ?? currentYear();
-    const holidays = this.repository.listHolidays(year).map((holiday) => this.presentHoliday(holiday));
+    const holidays = this.repository.listHolidays(companyId, year).map((holiday) => this.presentHoliday(holiday));
     return {
       holidays,
       calendar_metadata: {
@@ -435,7 +436,9 @@ export class LeaveWfhService {
 
   upsertHoliday(actor: AuthUser, id: UUID, input: HolidayUpsertInput) {
     assertCanMutateHolidays(actor);
+    const companyId = this.requireCompanyId(actor.id);
     const holiday = this.repository.upsertHoliday(id, {
+      company_id: companyId,
       name: input.name.trim(),
       holiday_date: input.date,
       region: input.region.trim(),
@@ -662,8 +665,10 @@ export class LeaveWfhService {
     note: string,
     workMode: "wfh" | null = null
   ): void {
+    const companyId = this.requireCompanyId(employeeUserId);
     for (const workDate of workingDatesInclusive(dateFrom, dateTo, this.workingWeek(), this.holidayDates())) {
       this.attendance.upsertDayRecord({
+        company_id: companyId,
         employee_user_id: employeeUserId,
         work_date: workDate,
         status,
@@ -687,6 +692,14 @@ export class LeaveWfhService {
       throw notFound("User not found", { id: userId });
     }
     return user;
+  }
+
+  private requireCompanyId(userId: UUID): UUID {
+    const companyId = this.store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id;
+    if (!companyId) {
+      throw badRequest("A company context is required for holiday or attendance status access.", { user_id: userId });
+    }
+    return companyId;
   }
 
   private requireActiveEmployee(userId: UUID): CoreUser {

@@ -6,30 +6,54 @@ import type {
   AttendanceRegularizationRequest,
   AuthUser,
   CoreUser,
-  UUID
+  UUID,
 } from "#shared";
 import {
   AttendanceDayStatuses,
   AttendancePunchEventTypes,
   AttendanceRegularizationStatuses,
+  ErrorCodes,
   EmploymentStatuses,
-  Roles
+  Roles,
 } from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import { nowIso } from "../../platform/data-store.js";
-import { badRequest, conflict, forbidden, missingRemarks, notFound } from "../../platform/errors.js";
-import { createGeneratedExportDocument, type GeneratedExportFormat } from "../../platform/generated-exports.js";
+import {
+  assertUserInCompanyMembershipContext,
+  resolveActiveCompanyMembershipContext,
+  type ActiveCompanyMembershipContext,
+} from "../../platform/company-membership-context.js";
+import {
+  AppError,
+  badRequest,
+  companyContextRequired,
+  conflict,
+  forbidden,
+  missingRemarks,
+  notFound,
+} from "../../platform/errors.js";
+import {
+  createGeneratedExportDocument,
+  type GeneratedExportFormat,
+} from "../../platform/generated-exports.js";
 import { isWorkingDate } from "../../platform/work-schedule.js";
 import { CoreService } from "../core/service.js";
-import { appendAttendanceOutboxEvent, attendanceEvents } from "./events.js";
+import {
+  appendAttendanceOutboxEvent,
+  buildExportRequestedEvent,
+  buildPunchRecordedEvent,
+  buildRegularizationDecisionEvent,
+  buildRegularizationSubmittedEvent,
+} from "./events.js";
 import {
   assertCanDecideRegularization,
   assertCanSeeAttendanceUser,
   assertCanUseSelfAttendance,
   canSeeAllAttendance,
-  canSeeAttendanceUser
+  canSeeAttendanceUser,
 } from "./policy.js";
 import { AttendanceRepository } from "./repository.js";
+import { AttendanceCommandService } from "./command-service.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -39,6 +63,7 @@ export interface AttendancePageQuery {
   date_from?: string;
   date_to?: string;
   month?: string;
+  company_id?: UUID | null;
   user_id?: UUID;
   department_id?: UUID;
   status?: string;
@@ -46,14 +71,27 @@ export interface AttendancePageQuery {
 }
 
 export interface AttendanceExportInput {
-  filters?: Record<string, unknown>;
+  company_id?: UUID | null;
+  filters?: {
+    user_id?: UUID;
+    employee_user_id?: UUID;
+    department_id?: UUID;
+    status?: string;
+    date_from?: string;
+    date_to?: string;
+  };
   columns?: string[];
   format?: "csv" | "xlsx" | "json";
 }
 
 function page<T>(items: T[], pageNumber: number, pageSize: number) {
   const start = (pageNumber - 1) * pageSize;
-  return { items: items.slice(start, start + pageSize), page: pageNumber, page_size: pageSize, total: items.length };
+  return {
+    items: items.slice(start, start + pageSize),
+    page: pageNumber,
+    page_size: pageSize,
+    total: items.length,
+  };
 }
 
 function todayDate(timeZone = "UTC"): string {
@@ -66,7 +104,7 @@ function dateInTimeZone(value: string, timeZone: string): string {
       timeZone,
       year: "numeric",
       month: "2-digit",
-      day: "2-digit"
+      day: "2-digit",
     }).formatToParts(new Date(value));
     const map = new Map(parts.map((part) => [part.type, part.value]));
     const year = map.get("year");
@@ -81,38 +119,65 @@ function dateInTimeZone(value: string, timeZone: string): string {
   return value.slice(0, 10);
 }
 
-function monthRange(monthInput?: string, timeZone = "UTC"): { month: string; from: string; to: string } {
-  const month = monthInput && /^\d{4}-\d{2}$/u.test(monthInput) ? monthInput : todayDate(timeZone).slice(0, 7);
+function monthRange(
+  monthInput?: string,
+  timeZone = "UTC",
+): { month: string; from: string; to: string } {
+  const month =
+    monthInput && /^\d{4}-\d{2}$/u.test(monthInput)
+      ? monthInput
+      : todayDate(timeZone).slice(0, 7);
   const [yearText, monthText] = month.split("-");
   const year = Number(yearText);
   const monthNumber = Number(monthText);
   const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
-  return { month, from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}` };
+  return {
+    month,
+    from: `${month}-01`,
+    to: `${month}-${String(lastDay).padStart(2, "0")}`,
+  };
 }
 
-function dateRange(query: AttendancePageQuery, timeZone = "UTC"): { from: string; to: string } {
+function dateRange(
+  query: AttendancePageQuery,
+  timeZone = "UTC",
+): { from: string; to: string } {
   if (query.month) {
     const range = monthRange(query.month, timeZone);
     return { from: range.from, to: range.to };
   }
   return {
     from: query.date_from ?? todayDate(timeZone).slice(0, 7) + "-01",
-    to: query.date_to ?? todayDate(timeZone)
+    to: query.date_to ?? todayDate(timeZone),
   };
 }
 
 function minutesBetween(start: string, end: string): number {
-  return Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 60_000));
+  return Math.max(
+    0,
+    Math.round((Date.parse(end) - Date.parse(start)) / 60_000),
+  );
 }
 
 function clockIso(workDate: string, hour: number, minute: number): string {
   return `${workDate}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00.000Z`;
 }
 
-function zonedClockIso(workDate: string, hour: number, minute: number, timeZone: string): string {
+function zonedClockIso(
+  workDate: string,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): string {
   const [yearText, monthText, dayText] = workDate.split("-");
   const utcGuess = new Date(
-    Date.UTC(Number(yearText), Number(monthText) - 1, Number(dayText), hour, minute)
+    Date.UTC(
+      Number(yearText),
+      Number(monthText) - 1,
+      Number(dayText),
+      hour,
+      minute,
+    ),
   );
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -123,7 +188,7 @@ function zonedClockIso(workDate: string, hour: number, minute: number, timeZone:
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
-      hourCycle: "h23"
+      hourCycle: "h23",
     }).formatToParts(utcGuess);
     const map = new Map(parts.map((part) => [part.type, part.value]));
     const renderedAsUtc = Date.UTC(
@@ -132,7 +197,7 @@ function zonedClockIso(workDate: string, hour: number, minute: number, timeZone:
       Number(map.get("day")),
       Number(map.get("hour")),
       Number(map.get("minute")),
-      Number(map.get("second"))
+      Number(map.get("second")),
     );
     const desiredUtc = Date.UTC(
       Number(yearText),
@@ -140,9 +205,11 @@ function zonedClockIso(workDate: string, hour: number, minute: number, timeZone:
       Number(dayText),
       hour,
       minute,
-      0
+      0,
     );
-    return new Date(utcGuess.getTime() - (renderedAsUtc - desiredUtc)).toISOString();
+    return new Date(
+      utcGuess.getTime() - (renderedAsUtc - desiredUtc),
+    ).toISOString();
   } catch {
     return clockIso(workDate, hour, minute);
   }
@@ -158,20 +225,40 @@ function addDays(date: string, days: number): string {
   return value.toISOString().slice(0, 10);
 }
 
-function numberConfig(config: Record<string, unknown>, key: string, fallback: number): number {
+function numberConfig(
+  config: Record<string, unknown>,
+  key: string,
+  fallback: number,
+): number {
   const value = config[key];
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function booleanConfig(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
+function booleanConfig(
+  config: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+): boolean {
   const value = config[key];
   return typeof value === "boolean" ? value : fallback;
 }
 
-function timeConfig(config: Record<string, unknown>, key: string, fallback: string): string {
+function timeConfig(
+  config: Record<string, unknown>,
+  key: string,
+  fallback: string,
+): string {
   const value = config[key];
-  return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/u.test(value.trim()) ? value.trim() : fallback;
+  return typeof value === "string" &&
+    /^([01]\d|2[0-3]):[0-5]\d$/u.test(value.trim())
+    ? value.trim()
+    : fallback;
 }
 
 function minutesOfDay(clock: string): number {
@@ -213,17 +300,20 @@ function timeText(value: string | null, timeZone: string): string | null {
       timeZone,
       hour: "2-digit",
       minute: "2-digit",
-      hourCycle: "h23"
+      hourCycle: "h23",
     }).format(new Date(value));
   } catch {
     return value.slice(11, 16);
   }
 }
 
-function userLabel(user: CoreUser | undefined): { employee_code: string; full_name: string } {
+function userLabel(user: CoreUser | undefined): {
+  employee_code: string;
+  full_name: string;
+} {
   return {
     employee_code: user?.employee_code ?? "UNKNOWN",
-    full_name: user?.full_name ?? "Unknown employee"
+    full_name: user?.full_name ?? "Unknown employee",
   };
 }
 
@@ -242,6 +332,7 @@ interface AttendancePunchPolicy {
   autoPunchOutEnabled: boolean;
   autoPunchOutTime: string;
   allowOffDayPunches: boolean;
+  policyVersion: string;
 }
 
 interface PunchAvailability {
@@ -255,6 +346,7 @@ interface PunchAvailability {
 }
 
 export interface AttendanceAutoPunchOutClosure {
+  company_id: UUID;
   employee_user_id: UUID;
   work_date: string;
   first_check_in_id: UUID;
@@ -291,83 +383,158 @@ export class AttendanceService {
       work_mode: "office" | "remote" | "wfh" | "field";
       source: "web" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
-    }
+      idempotency_key?: string;
+    },
   ) {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.punch",
+    );
     assertCanUseSelfAttendance(actor);
+    const companyId = context.companyId;
     const occurredAt = input.occurred_at ?? nowIso();
-    const timeZone = this.timezoneForUser(actor.id);
-    this.autoPunchOutExpiredSessions(actor.id, timeZone, occurredAt);
-    const workDate = this.workDateForPunch(actor.id, input.event_type, occurredAt, timeZone);
-    const availability = this.punchAvailability(actor.id, workDate, timeZone, occurredAt);
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    this.autoPunchOutExpiredSessions(companyId, actor.id, timeZone, occurredAt);
+    const workDate = this.workDateForPunch(
+      companyId,
+      actor.id,
+      input.event_type,
+      occurredAt,
+      timeZone,
+    );
+    const availability = this.punchAvailability(
+      companyId,
+      actor.id,
+      workDate,
+      timeZone,
+      occurredAt,
+    );
     if (!availability.next_allowed_actions.includes(input.event_type)) {
-      const policyReason = availability.blocked_action_reasons[input.event_type];
-      if (availability.sequence_allowed_actions.includes(input.event_type) && policyReason) {
+      const policyReason =
+        availability.blocked_action_reasons[input.event_type];
+      if (
+        availability.sequence_allowed_actions.includes(input.event_type) &&
+        policyReason
+      ) {
         throw badRequest(policyReason, {
           next_allowed_actions: availability.next_allowed_actions,
           requested_action: input.event_type,
-          punch_policy: this.presentPunchPolicy(availability)
+          punch_policy: this.presentPunchPolicy(availability),
         });
       }
       throw conflict("Attendance punch is duplicate or out of sequence.", {
         next_allowed_actions: availability.next_allowed_actions,
-        requested_action: input.event_type
+        requested_action: input.event_type,
       });
     }
     const punch = this.repository.addPunch({
+      company_id: companyId,
       employee_user_id: actor.id,
       event_type: input.event_type,
       occurred_at: occurredAt,
       work_mode: input.work_mode,
       source: input.source,
-      metadata: input.metadata
+      metadata: input.metadata,
     });
-    const day = this.recomputeDay(actor.id, workDate, timeZone, occurredAt);
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: punch.id,
-      eventType: attendanceEvents.Punched,
-      payload: {
-        punch_id: punch.id,
-        employee_user_id: actor.id,
-        event_type: punch.event_type,
-        occurred_at: punch.occurred_at,
-        work_date: workDate,
-        day_status: day.status
-      },
-      idempotencyKey: `attendance.punched:${punch.id}`
-    });
-    const nextAvailability = this.punchAvailability(actor.id, workDate, timeZone, occurredAt);
+    const day = this.recomputeDay(
+      companyId,
+      actor.id,
+      workDate,
+      timeZone,
+      occurredAt,
+    );
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildPunchRecordedEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: actor.id,
+        punchEventId: punch.id,
+        punchType: punch.event_type,
+        occurredAt: punch.occurred_at,
+        workDate,
+        workMode: punch.work_mode,
+        sourceChannel: punch.source,
+        dayStatus: day.status,
+      }),
+    );
+    const nextAvailability = this.punchAvailability(
+      companyId,
+      actor.id,
+      workDate,
+      timeZone,
+      occurredAt,
+    );
     return {
       punch_id: punch.id,
       punch,
       day_status: this.presentDay(day, timeZone),
       next_allowed_actions: nextAvailability.next_allowed_actions,
       next_allowed_action: nextAvailability.next_allowed_actions[0] ?? null,
-      punch_policy: this.presentPunchPolicy(nextAvailability)
+      punch_policy: this.presentPunchPolicy(nextAvailability),
     };
   }
 
   listMyPunches(actor: AuthUser, query: AttendancePageQuery) {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.list_my_punches",
+      query.company_id,
+    );
     assertCanUseSelfAttendance(actor);
-    const timeZone = this.timezoneForUser(actor.id);
-    this.autoPunchOutExpiredSessions(actor.id, timeZone);
+    const companyId = context.companyId;
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    this.autoPunchOutExpiredSessions(companyId, actor.id, timeZone);
     const range = dateRange(query, timeZone);
-    const punches = this.repository.listPunches(actor.id, range.from, range.to, timeZone).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
-    return page(punches.map((punch) => this.presentPunch(punch, timeZone)), query.page, query.page_size);
+    const punches = this.repository
+      .listPunches(companyId, actor.id, range.from, range.to, timeZone)
+      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+    return page(
+      punches.map((punch) => this.presentPunch(punch, timeZone)),
+      query.page,
+      query.page_size,
+    );
   }
 
   mySummary(actor: AuthUser, query: AttendancePageQuery) {
-    assertCanUseSelfAttendance(actor);
-    const timeZone = this.timezoneForUser(actor.id);
-    const range = dateRange(query, timeZone);
-    const today = this.resolveDay(actor.id, todayDate(timeZone), timeZone);
-    const availabilityWorkDate = this.openSessionWorkDate(actor.id, nowIso(), timeZone) ?? today.work_date;
-    const todayPunchAvailability = this.punchAvailability(actor.id, availabilityWorkDate, timeZone);
-    const records = this.recordsForUsers(new Set([actor.id]), range.from, range.to).map((record) =>
-      record.employee_user_id === actor.id && record.work_date === today.work_date ? today : record
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.my_summary",
+      query.company_id,
     );
-    const weekRecords = this.weekRecords(actor.id, timeZone);
-    const weeklyBalance = this.weeklyBalance(weekRecords);
-    const targetWorkMinutes = this.targetWorkMinutes();
+    assertCanUseSelfAttendance(actor);
+    const companyId = context.companyId;
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    const range = dateRange(query, timeZone);
+    const today = this.resolveDay(
+      companyId,
+      actor.id,
+      todayDate(timeZone),
+      timeZone,
+    );
+    const availabilityWorkDate =
+      this.openSessionWorkDate(companyId, actor.id, nowIso(), timeZone) ??
+      today.work_date;
+    const todayPunchAvailability = this.punchAvailability(
+      companyId,
+      actor.id,
+      availabilityWorkDate,
+      timeZone,
+    );
+    const records = this.recordsForUsers(
+      companyId,
+      new Set([actor.id]),
+      range.from,
+      range.to,
+    ).map((record) =>
+      record.employee_user_id === actor.id &&
+      record.work_date === today.work_date
+        ? today
+        : record,
+    );
+    const weekRecords = this.weekRecords(companyId, actor.id, timeZone);
+    const weeklyBalance = this.weeklyBalance(companyId, weekRecords);
+    const targetWorkMinutes = this.targetWorkMinutes(companyId);
     const exceptionHistory = records
       .filter((record) => record.exception_type || record.regularization_status)
       .sort((a, b) => b.work_date.localeCompare(a.work_date))
@@ -375,7 +542,7 @@ export class AttendanceService {
       .map((record) => ({
         date: record.work_date,
         reason: this.exceptionDetail(record),
-        status: record.regularization_status ?? record.status
+        status: record.regularization_status ?? record.status,
       }));
     return {
       generated_at: nowIso(),
@@ -385,99 +552,191 @@ export class AttendanceService {
         target_work_minutes: targetWorkMinutes,
         target_hours: minutesToHours(targetWorkMinutes),
         next_allowed_actions: todayPunchAvailability.next_allowed_actions,
-        next_allowed_action: todayPunchAvailability.next_allowed_actions[0] ?? null,
-        punch_policy: this.presentPunchPolicy(todayPunchAvailability)
+        next_allowed_action:
+          todayPunchAvailability.next_allowed_actions[0] ?? null,
+        punch_policy: this.presentPunchPolicy(todayPunchAvailability),
       },
       summary: {
         ...this.daySummary(records),
         target_work_minutes: targetWorkMinutes,
         target_hours: minutesToHours(targetWorkMinutes),
-        weekly_balance: weeklyBalance
+        weekly_balance: weeklyBalance,
       },
-      week_records: weekRecords.map((record) => this.presentDay(record, timeZone)),
+      week_records: weekRecords.map((record) =>
+        this.presentDay(record, timeZone),
+      ),
       weekly_balance: weeklyBalance,
-      exception_history: exceptionHistory
+      exception_history: exceptionHistory,
     };
   }
 
   teamSummary(actor: AuthUser, query: AttendancePageQuery) {
-    const date = query.date_from ?? todayDate(this.timezoneForUser(actor.id));
-    const visibleUsers = this.visibleUsers(actor, query.department_id);
-    const activeUsers = visibleUsers.filter((user) => user.employment_status === EmploymentStatuses.Active);
-    const records = activeUsers.map((user) => this.resolveDay(user.id, date, this.timezoneForUser(user.id)));
-    const exceptions = this.exceptions(actor, { ...query, page: 1, page_size: 8, date_from: date, date_to: date }).items;
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.team_summary",
+      query.company_id,
+    ).companyId;
+    const date =
+      query.date_from ?? todayDate(this.timezoneForUser(actor.id, companyId));
+    const visibleUsers = this.visibleUsers(
+      actor,
+      companyId,
+      query.department_id,
+    );
+    const activeUsers = visibleUsers.filter(
+      (user) => user.employment_status === EmploymentStatuses.Active,
+    );
+    const records = activeUsers.map((user) =>
+      this.resolveDay(
+        companyId,
+        user.id,
+        date,
+        this.timezoneForUser(user.id, companyId),
+      ),
+    );
+    const exceptions = this.exceptionsForCompany(
+      actor,
+      {
+        ...query,
+        page: 1,
+        page_size: 8,
+        date_from: date,
+        date_to: date,
+      },
+      companyId,
+    ).items;
     return {
       generated_at: nowIso(),
       date,
       totals: this.teamTotals(records, activeUsers.length),
       department_summary: this.departmentSummary(records, activeUsers),
-      exceptions
+      exceptions,
     };
   }
 
   monthlyCalendar(actor: AuthUser, query: AttendancePageQuery) {
-    const user = query.user_id ? this.requireUser(query.user_id) : this.requireUser(actor.id);
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.monthly_calendar",
+      query.company_id,
+    );
+    const user = query.user_id
+      ? this.requireUser(query.user_id)
+      : this.requireUser(actor.id);
+    const companyId = context.companyId;
     if (user.id === actor.id) {
       assertCanUseSelfAttendance(actor);
     }
     assertCanSeeAttendanceUser(actor, user);
-    const timeZone = this.timezoneForUser(user.id);
+    this.assertTargetUserInCompany(user.id, companyId, {
+      operation: "attendance.monthly_calendar.target_employee",
+      requireActiveEmployment: false,
+    });
+    const timeZone = this.timezoneForUser(user.id, companyId);
     const range = monthRange(query.month, timeZone);
     const days = new Date(`${range.to}T00:00:00.000Z`).getUTCDate();
     const calendarDays = Array.from({ length: days }, (_, index) => {
       const date = `${range.month}-${String(index + 1).padStart(2, "0")}`;
-      return this.presentDay(this.resolveDay(user.id, date, timeZone), timeZone);
+      return this.presentDay(
+        this.resolveDay(companyId, user.id, date, timeZone),
+        timeZone,
+      );
     });
     return {
       generated_at: nowIso(),
       month: range.month,
       user: userLabel(user),
       calendar_days: calendarDays,
-      summary: this.daySummary(calendarDays)
+      summary: this.daySummary(calendarDays),
     };
   }
 
   dailyCalendar(actor: AuthUser, query: AttendancePageQuery) {
-    const date = query.date ?? query.date_from ?? todayDate(this.timezoneForUser(actor.id));
-    const users = query.user_id ? [this.requireUser(query.user_id)] : this.visibleUsers(actor, query.department_id);
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.daily_calendar",
+      query.company_id,
+    ).companyId;
+    const date =
+      query.date ??
+      query.date_from ??
+      todayDate(this.timezoneForUser(actor.id, companyId));
+    const users = query.user_id
+      ? [this.requireUser(query.user_id)]
+      : this.visibleUsers(actor, companyId, query.department_id);
     for (const user of users) {
       assertCanSeeAttendanceUser(actor, user);
+      this.assertTargetUserInCompany(user.id, companyId, {
+        operation: "attendance.daily_calendar.target_employee",
+        requireActiveEmployment: false,
+      });
     }
-    const activeUsers = users.filter((user) => user.employment_status === EmploymentStatuses.Active);
+    const activeUsers = users.filter(
+      (user) => user.employment_status === EmploymentStatuses.Active,
+    );
     const userIds = new Set(activeUsers.map((user) => user.id));
-    const records = activeUsers.map((user) => this.resolveDay(user.id, date, this.timezoneForUser(user.id)));
+    const records = activeUsers.map((user) =>
+      this.resolveDay(
+        companyId,
+        user.id,
+        date,
+        this.timezoneForUser(user.id, companyId),
+      ),
+    );
     const regularizations = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds,
       dateFrom: date,
-      dateTo: date
+      dateTo: date,
     });
-    const regularizationByUser = new Map(regularizations.map((request) => [request.employee_user_id, request]));
+    const regularizationByUser = new Map(
+      regularizations.map((request) => [request.employee_user_id, request]),
+    );
     const items = records
       .map((record) => {
-        const user = activeUsers.find((candidate) => candidate.id === record.employee_user_id);
+        const user = activeUsers.find(
+          (candidate) => candidate.id === record.employee_user_id,
+        );
         const request = regularizationByUser.get(record.employee_user_id);
-        const timeZone = this.timezoneForUser(record.employee_user_id);
+        const timeZone = this.timezoneForUser(
+          record.employee_user_id,
+          companyId,
+        );
         return {
           ...this.presentDay(record, timeZone),
           employee: userLabel(user),
           regularization: request ? this.presentRegularization(request) : null,
-          regularization_pending: request?.status === AttendanceRegularizationStatuses.Pending,
+          regularization_pending:
+            request?.status === AttendanceRegularizationStatuses.Pending,
           can_decide_regularization: Boolean(
             request &&
             request.status === AttendanceRegularizationStatuses.Pending &&
             actor.id !== request.employee_user_id &&
-            (canSeeAllAttendance(actor) || request.current_approver_user_id === actor.id)
-          )
+            (canSeeAllAttendance(actor) ||
+              request.current_approver_user_id === actor.id),
+          ),
         };
       })
-      .sort((a, b) => a.employee.employee_code.localeCompare(b.employee.employee_code));
+      .sort((a, b) =>
+        a.employee.employee_code.localeCompare(b.employee.employee_code),
+      );
     return {
       ...page(items, query.page, query.page_size),
       generated_at: nowIso(),
       date,
       summary: this.daySummary(records),
-      exceptions: this.exceptions(actor, { ...query, page: 1, page_size: 20, date_from: date, date_to: date }).items,
-      totals: this.teamTotals(records, activeUsers.length)
+      exceptions: this.exceptionsForCompany(
+        actor,
+        {
+          ...query,
+          page: 1,
+          page_size: 20,
+          date_from: date,
+          date_to: date,
+        },
+        companyId,
+      ).items,
+      totals: this.teamTotals(records, activeUsers.length),
     };
   }
 
@@ -486,128 +745,274 @@ export class AttendanceService {
     input: {
       work_date: string;
       reason: string;
-      requested_punches: Array<{ event_type: AttendancePunchEventType; occurred_at: string }>;
-    }
+      requested_punches: Array<{
+        event_type: AttendancePunchEventType;
+        occurred_at: string;
+      }>;
+    },
   ) {
-    const approver = this.core.resolveImmediateManager(actor.id) ?? this.adminFallback();
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.create_regularization",
+    ).companyId;
+    const manager = this.core.resolveImmediateManager(actor.id);
+    const approver =
+      manager && this.isUserInCompany(manager.id, companyId)
+        ? manager
+        : this.adminFallback(companyId);
     const request = this.repository.addRegularization({
+      company_id: companyId,
       employee_user_id: actor.id,
       work_date: input.work_date,
       reason: input.reason.trim(),
       requested_punches: input.requested_punches,
       status: AttendanceRegularizationStatuses.Pending,
-      current_approver_user_id: approver?.id ?? null
+      current_approver_user_id: approver?.id ?? null,
     });
-    const day = this.resolveDay(actor.id, input.work_date, this.timezoneForUser(actor.id));
+    const day = this.resolveDay(
+      companyId,
+      actor.id,
+      input.work_date,
+      this.timezoneForUser(actor.id, companyId),
+    );
     day.regularization_status = AttendanceRegularizationStatuses.Pending;
     day.updated_at = nowIso();
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: request.id,
-      eventType: attendanceEvents.RegularizationSubmitted,
-      payload: {
-        request_id: request.id,
-        employee_user_id: actor.id,
-        approver_user_id: request.current_approver_user_id,
-        work_date: request.work_date,
-        status: request.status
-      },
-      idempotencyKey: `attendance.regularization.submitted:${request.id}`
-    });
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildRegularizationSubmittedEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: actor.id,
+        regularizationRequestId: request.id,
+        assignedApproverUserId: request.current_approver_user_id,
+        workDate: request.work_date,
+        status: request.status,
+        version: request.version,
+      }),
+    );
     return this.presentRegularization(request);
   }
 
   myRegularizations(actor: AuthUser, query: AttendancePageQuery) {
-    const range = dateRange(query, this.timezoneForUser(actor.id));
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.my_regularizations",
+      query.company_id,
+    ).companyId;
+    const range = dateRange(query, this.timezoneForUser(actor.id, companyId));
     const requests = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds: new Set([actor.id]),
       status: query.status,
       dateFrom: range.from,
-      dateTo: range.to
+      dateTo: range.to,
     });
-    return page(requests.map((request) => this.presentRegularization(request)), query.page, query.page_size);
+    return page(
+      requests.map((request) => this.presentRegularization(request)),
+      query.page,
+      query.page_size,
+    );
   }
 
   managerRegularizationQueue(actor: AuthUser, query: AttendancePageQuery) {
-    if (!canSeeAllAttendance(actor) && !this.hasVisibleSubordinates(actor)) {
-      throw forbidden("Only managers, HR, Admin, or Auditor users can read attendance regularization queues.");
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.manager_regularization_queue",
+      query.company_id,
+    ).companyId;
+    if (
+      !canSeeAllAttendance(actor) &&
+      !this.hasVisibleSubordinates(actor, companyId)
+    ) {
+      throw forbidden(
+        "Only managers, HR, Admin, or Auditor users can read attendance regularization queues.",
+      );
     }
-    const range = dateRange(query, this.timezoneForUser(actor.id));
-    const visibleUsers = this.visibleUsers(actor, query.department_id).filter((user) => user.id !== actor.id);
+    const range = dateRange(query, this.timezoneForUser(actor.id, companyId));
+    const visibleUsers = this.visibleUsers(
+      actor,
+      companyId,
+      query.department_id,
+    ).filter((user) => user.id !== actor.id);
     const visibleUserIds = new Set(visibleUsers.map((user) => user.id));
     const scoped = this.repository
-      .listRegularizations({ userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
-      .filter((request) => canSeeAllAttendance(actor) || request.current_approver_user_id === actor.id);
+      .listRegularizations({
+        companyIds: new Set([companyId]),
+        userIds: visibleUserIds,
+        dateFrom: range.from,
+        dateTo: range.to,
+      })
+      .filter(
+        (request) =>
+          canSeeAllAttendance(actor) ||
+          request.current_approver_user_id === actor.id,
+      );
     const status = query.status ?? AttendanceRegularizationStatuses.Pending;
-    const filtered = scoped.filter((request) => !status || request.status === status);
+    const filtered = scoped.filter(
+      (request) => !status || request.status === status,
+    );
     return {
-      ...page(filtered.map((request) => this.presentRegularization(request)), query.page, query.page_size),
-      queue_counts: this.regularizationQueueCounts(scoped)
+      ...page(
+        filtered.map((request) => this.presentRegularization(request)),
+        query.page,
+        query.page_size,
+      ),
+      queue_counts: this.regularizationQueueCounts(scoped),
     };
   }
 
   exceptions(actor: AuthUser, query: AttendancePageQuery) {
-    const actorTimeZone = this.timezoneForUser(actor.id);
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.exceptions",
+      query.company_id,
+    ).companyId;
+    return this.exceptionsForCompany(actor, query, companyId);
+  }
+
+  private exceptionsForCompany(
+    actor: AuthUser,
+    query: AttendancePageQuery,
+    companyId: UUID,
+  ) {
+    const actorTimeZone = this.timezoneForUser(actor.id, companyId);
     const range = {
       from: query.date_from ?? todayDate(actorTimeZone).slice(0, 7) + "-01",
-      to: query.date_to ?? todayDate(actorTimeZone)
+      to: query.date_to ?? todayDate(actorTimeZone),
     };
-    const visibleUsers = this.visibleUsers(actor, query.department_id);
+    const visibleUsers = this.visibleUsers(
+      actor,
+      companyId,
+      query.department_id,
+    );
     const visibleUserIds = new Set(visibleUsers.map((user) => user.id));
     const regularizations = this.repository.listRegularizations({
+      companyIds: new Set([companyId]),
       userIds: visibleUserIds,
       status: AttendanceRegularizationStatuses.Pending,
       dateFrom: range.from,
-      dateTo: range.to
+      dateTo: range.to,
     });
     const regularizationByUserDate = new Map(
-      regularizations.map((request) => [`${request.employee_user_id}:${request.work_date}`, request])
+      regularizations.map((request) => [
+        `${request.employee_user_id}:${request.work_date}`,
+        request,
+      ]),
     );
     for (const user of visibleUsers) {
-      const timeZone = this.timezoneForUser(user.id);
+      const timeZone = this.timezoneForUser(user.id, companyId);
       for (const date of datesInclusive(range.from, range.to)) {
-        this.resolveDay(user.id, date, timeZone);
+        this.resolveDay(companyId, user.id, date, timeZone);
       }
     }
     const dayExceptions = this.repository
-      .listDayRecords({ userIds: visibleUserIds, dateFrom: range.from, dateTo: range.to })
-      .filter((record) => record.exception_type || record.regularization_status === AttendanceRegularizationStatuses.Pending)
-      .map((record) => this.presentException(record, regularizationByUserDate.get(`${record.employee_user_id}:${record.work_date}`), actor));
+      .listDayRecords({
+        companyIds: new Set([companyId]),
+        userIds: visibleUserIds,
+        dateFrom: range.from,
+        dateTo: range.to,
+      })
+      .filter(
+        (record) =>
+          record.exception_type ||
+          record.regularization_status ===
+            AttendanceRegularizationStatuses.Pending,
+      )
+      .map((record) =>
+        this.presentException(
+          record,
+          regularizationByUserDate.get(
+            `${record.employee_user_id}:${record.work_date}`,
+          ),
+          actor,
+        ),
+      );
     const requestExceptions = regularizations
-      .filter((request) => !dayExceptions.some((exception) => exception.request_id === request.id))
-      .map((request) => this.presentException(this.resolveDay(request.employee_user_id, request.work_date), request, actor));
+      .filter(
+        (request) =>
+          !dayExceptions.some(
+            (exception) => exception.request_id === request.id,
+          ),
+      )
+      .map((request) =>
+        this.presentException(
+          this.resolveDay(
+            companyId,
+            request.employee_user_id,
+            request.work_date,
+          ),
+          request,
+          actor,
+        ),
+      );
     const items = [...dayExceptions, ...requestExceptions]
-      .filter((exception) => !query.exception_type || exception.exception_type === query.exception_type)
+      .filter(
+        (exception) =>
+          !query.exception_type ||
+          exception.exception_type === query.exception_type,
+      )
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const result = page(items, query.page, query.page_size);
     return {
       ...result,
       totals: {
         late: items.filter((item) => item.exception_type === "late").length,
-        missing_punch: items.filter((item) => item.exception_type === "missing_punch").length,
+        missing_punch: items.filter(
+          (item) => item.exception_type === "missing_punch",
+        ).length,
         absent: items.filter((item) => item.exception_type === "absent").length,
-        correction: items.filter((item) => item.exception_type === "correction").length
-      }
+        correction: items.filter((item) => item.exception_type === "correction")
+          .length,
+      },
     };
   }
 
-  decideRegularization(actor: AuthUser, id: UUID, input: { decision: "approve" | "reject" | "return"; remarks?: string; expected_version: number }) {
-    const current = this.repository.findRegularization(id);
+  decideRegularization(
+    actor: AuthUser,
+    id: UUID,
+    input: {
+      decision: "approve" | "reject" | "return";
+      remarks?: string;
+      expected_version: number;
+    },
+  ) {
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.decide_regularization",
+    ).companyId;
+    const current = this.repository.findRegularization(
+      id,
+      new Set([companyId]),
+    );
+    this.assertTargetUserInCompany(current.employee_user_id, companyId, {
+      operation: "attendance.decide_regularization.target_employee",
+      requireActiveEmployment: false,
+    });
     if (current.version !== input.expected_version) {
-      throw conflict("Attendance regularization request was modified by another actor.", {
-        aggregate: "attendance_regularization",
-        id
-      });
+      throw conflict(
+        "Attendance regularization request was modified by another actor.",
+        {
+          aggregate: "attendance_regularization",
+          id,
+        },
+      );
     }
     assertCanDecideRegularization(actor, current);
-    if (["reject", "return"].includes(input.decision) && !input.remarks?.trim()) {
+    if (
+      ["reject", "return"].includes(input.decision) &&
+      !input.remarks?.trim()
+    ) {
       throw missingRemarks(input.decision);
     }
     const previousStatus = current.status;
     if (previousStatus !== AttendanceRegularizationStatuses.Pending) {
-      throw conflict("Only pending attendance regularization requests can be decided.", {
-        request_id: id,
-        status: previousStatus
-      });
+      throw conflict(
+        "Only pending attendance regularization requests can be decided.",
+        {
+          request_id: id,
+          status: previousStatus,
+        },
+      );
     }
     const nextStatus =
       input.decision === "approve"
@@ -615,60 +1020,107 @@ export class AttendanceService {
         : input.decision === "reject"
           ? AttendanceRegularizationStatuses.Rejected
           : AttendanceRegularizationStatuses.Returned;
-    const request = this.repository.updateRegularizationVersioned(id, input.expected_version, (candidate) => {
-      candidate.status = nextStatus;
-      candidate.current_approver_user_id = null;
-      candidate.decision_remarks = input.remarks?.trim() ?? null;
-      candidate.decided_by_user_id = actor.id;
-      candidate.decided_at = nowIso();
-    });
+    const request = this.repository.updateRegularizationVersioned(
+      id,
+      new Set([companyId]),
+      input.expected_version,
+      (candidate) => {
+        candidate.status = nextStatus;
+        candidate.current_approver_user_id = null;
+        candidate.decision_remarks = input.remarks?.trim() ?? null;
+        candidate.decided_by_user_id = actor.id;
+        candidate.decided_at = nowIso();
+      },
+    );
     if (input.decision === "approve" && request.requested_punches.length > 0) {
       this.applyApprovedPunches(request, actor.id);
     }
-    const requestTimeZone = this.timezoneForUser(request.employee_user_id);
-    const day = this.resolveDay(request.employee_user_id, request.work_date, requestTimeZone);
+    const requestTimeZone = this.timezoneForUser(
+      request.employee_user_id,
+      companyId,
+    );
+    const day = this.resolveDay(
+      companyId,
+      request.employee_user_id,
+      request.work_date,
+      requestTimeZone,
+    );
     day.regularization_status = nextStatus;
-    if (nextStatus === AttendanceRegularizationStatuses.Approved && day.exception_type) {
+    if (
+      nextStatus === AttendanceRegularizationStatuses.Approved &&
+      day.exception_type
+    ) {
       day.exception_type = null;
-      day.status = day.work_mode === "wfh" ? AttendanceDayStatuses.Wfh : AttendanceDayStatuses.Present;
+      day.status =
+        day.work_mode === "wfh"
+          ? AttendanceDayStatuses.Wfh
+          : AttendanceDayStatuses.Present;
       day.note = "Regularized";
     }
     day.updated_at = nowIso();
     day.version += 1;
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: request.id,
-      eventType: this.eventForDecision(input.decision),
-      payload: {
-        request_id: request.id,
-        actor_user_id: actor.id,
-        employee_user_id: request.employee_user_id,
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildRegularizationDecisionEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId: request.employee_user_id,
+        regularizationRequestId: request.id,
+        workDate: request.work_date,
         decision: input.decision,
-        previous_status: previousStatus,
-        next_status: nextStatus,
-        version: request.version
-      },
-      idempotencyKey: `attendance.regularization.${input.decision}:${request.id}:${request.version}`
-    });
+        previousStatus,
+        nextStatus,
+        version: request.version,
+        decidedAt: request.decided_at!,
+      }),
+    );
     return {
       ...this.presentRegularization(request),
       previous_status: previousStatus,
       next_status: nextStatus,
-      day_status: this.presentDay(day, requestTimeZone)
+      day_status: this.presentDay(day, requestTimeZone),
     };
   }
 
   async createExportJob(actor: AuthUser, input: AttendanceExportInput) {
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.create_export",
+      input.company_id,
+    ).companyId;
     if (!canSeeAllAttendance(actor)) {
-      throw forbidden("Only HR, Admin, or Auditor users can export attendance data.");
+      throw forbidden(
+        "Only HR, Admin, or Auditor users can export attendance data.",
+      );
+    }
+    for (const userId of [
+      input.filters?.user_id,
+      input.filters?.employee_user_id,
+    ]) {
+      if (userId) {
+        const user = this.requireUser(userId);
+        this.assertTargetUserInCompany(user.id, companyId, {
+          operation: "attendance.create_export.target_employee",
+          requireActiveEmployment: false,
+        });
+      }
     }
     const jobId = randomUUID();
     const format = input.format ?? "csv";
     const columns = input.columns?.length
       ? input.columns
-      : ["employee_code", "employee", "date", "status", "in_time", "out_time", "hours"];
+      : [
+          "employee_code",
+          "employee",
+          "date",
+          "status",
+          "in_time",
+          "out_time",
+          "hours",
+        ];
     const filters = input.filters ?? {};
     const createdAt = nowIso();
-    const rows = this.exportRows(filters);
+    const rows = this.exportRows(companyId, filters);
     const generated = await createGeneratedExportDocument(this.store, {
       actor,
       businessObjectType: "attendance_export",
@@ -678,33 +1130,23 @@ export class AttendanceService {
       rows,
       columns,
       filters,
-      filePrefix: "attendance-export"
+      filePrefix: "attendance-export",
     });
-    appendAttendanceOutboxEvent(this.store, {
-      aggregateId: jobId,
-      eventType: attendanceEvents.ExportRequested,
-      payload: {
-        job_id: jobId,
-        requested_by_user_id: actor.id,
-        filters,
-        columns,
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildExportRequestedEvent({
+        companyId,
+        actorUserId: actor.id,
+        exportJobId: jobId,
         format,
         status: generated.status,
-        adapter: generated.adapter,
-        download_document_id: generated.download_document_id,
-        download_url: generated.download_url,
-        file_name: generated.file_name,
-        row_count: generated.row_count,
-        size_bytes: generated.size_bytes,
-        generated_at: generated.generated_at
-      },
-      idempotencyKey: `attendance.export.requested:${jobId}`
-    });
+      }),
+    );
     return {
       job_id: jobId,
       status: generated.status,
       format,
-      filters,
+      filters: { ...filters, company_id: companyId },
       columns,
       requested_by_user_id: actor.id,
       created_at: createdAt,
@@ -714,27 +1156,64 @@ export class AttendanceService {
       file_name: generated.file_name,
       row_count: generated.row_count,
       size_bytes: generated.size_bytes,
-      generated_at: generated.generated_at
+      generated_at: generated.generated_at,
     };
   }
 
-  private exportRows(filters: Record<string, unknown>): Array<Record<string, unknown>> {
+  private exportRows(
+    companyId: UUID,
+    filters: NonNullable<AttendanceExportInput["filters"]>,
+  ): Array<Record<string, unknown>> {
     return this.store.attendanceDayRecords
-      .filter((record) => !record.deleted_at)
-      .filter((record) => !textFilter(filters.user_id) || record.employee_user_id === textFilter(filters.user_id))
-      .filter((record) => !textFilter(filters.employee_user_id) || record.employee_user_id === textFilter(filters.employee_user_id))
-      .filter((record) => !textFilter(filters.status) || record.status === textFilter(filters.status))
-      .filter((record) => !textFilter(filters.date_from) || record.work_date >= textFilter(filters.date_from)!)
-      .filter((record) => !textFilter(filters.date_to) || record.work_date <= textFilter(filters.date_to)!)
+      .filter((record) => record.company_id === companyId && !record.deleted_at)
+      .filter(
+        (record) =>
+          !textFilter(filters.user_id) ||
+          record.employee_user_id === textFilter(filters.user_id),
+      )
+      .filter(
+        (record) =>
+          !textFilter(filters.employee_user_id) ||
+          record.employee_user_id === textFilter(filters.employee_user_id),
+      )
+      .filter(
+        (record) =>
+          !textFilter(filters.status) ||
+          record.status === textFilter(filters.status),
+      )
+      .filter(
+        (record) =>
+          !textFilter(filters.date_from) ||
+          record.work_date >= textFilter(filters.date_from)!,
+      )
+      .filter(
+        (record) =>
+          !textFilter(filters.date_to) ||
+          record.work_date <= textFilter(filters.date_to)!,
+      )
       .filter((record) => {
-        const user = this.store.users.find((candidate) => candidate.id === record.employee_user_id);
-        return !textFilter(filters.department_id) || user?.department_id === textFilter(filters.department_id);
+        const user = this.store.users.find(
+          (candidate) => candidate.id === record.employee_user_id,
+        );
+        return (
+          !textFilter(filters.department_id) ||
+          user?.department_id === textFilter(filters.department_id)
+        );
       })
       .sort((left, right) => right.work_date.localeCompare(left.work_date))
       .map((record) => {
-        const user = this.store.users.find((candidate) => candidate.id === record.employee_user_id);
-        const department = user ? this.store.departments.find((candidate) => candidate.id === user.department_id) : null;
-        const timeZone = this.timezoneForUser(record.employee_user_id);
+        const user = this.store.users.find(
+          (candidate) => candidate.id === record.employee_user_id,
+        );
+        const department = user
+          ? this.store.departments.find(
+              (candidate) => candidate.id === user.department_id,
+            )
+          : null;
+        const timeZone = this.timezoneForUser(
+          record.employee_user_id,
+          companyId,
+        );
         return {
           id: record.id,
           employee_user_id: record.employee_user_id,
@@ -751,19 +1230,29 @@ export class AttendanceService {
           early_out_minutes: record.early_out_minutes,
           work_mode: record.work_mode ?? "",
           exception_type: record.exception_type ?? "",
-          note: record.note ?? ""
+          note: record.note ?? "",
         };
       });
   }
 
-  private nextAllowedActions(punches: AttendancePunch[]): AttendancePunchEventType[] {
-    const active = punches.filter((punch) => !punch.deleted_at).sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  private nextAllowedActions(
+    punches: AttendancePunch[],
+  ): AttendancePunchEventType[] {
+    const active = punches
+      .filter((punch) => !punch.deleted_at)
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     const last = active.at(-1);
     if (!last) {
       return [AttendancePunchEventTypes.CheckIn];
     }
-    if (last.event_type === AttendancePunchEventTypes.CheckIn || last.event_type === AttendancePunchEventTypes.BreakEnd) {
-      return [AttendancePunchEventTypes.BreakStart, AttendancePunchEventTypes.CheckOut];
+    if (
+      last.event_type === AttendancePunchEventTypes.CheckIn ||
+      last.event_type === AttendancePunchEventTypes.BreakEnd
+    ) {
+      return [
+        AttendancePunchEventTypes.BreakStart,
+        AttendancePunchEventTypes.CheckOut,
+      ];
     }
     if (last.event_type === AttendancePunchEventTypes.BreakStart) {
       return [AttendancePunchEventTypes.BreakEnd];
@@ -772,25 +1261,34 @@ export class AttendanceService {
   }
 
   private punchAvailability(
+    companyId: UUID,
     employeeUserId: UUID,
     workDate: string,
-    timeZone = this.timezoneForUser(employeeUserId),
-    occurredAt = nowIso()
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
+    occurredAt = nowIso(),
   ): PunchAvailability {
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
+    const punches = this.punchesForWorkDate(
+      companyId,
+      employeeUserId,
+      workDate,
+      timeZone,
+    );
     const sequenceAllowedActions = this.nextAllowedActions(punches);
-    const policy = this.attendancePolicy();
+    const policy = this.attendancePolicy(companyId);
     const activePunches = punches.filter((punch) => !punch.deleted_at);
-    const localTime = timeText(occurredAt, timeZone) ?? occurredAt.slice(11, 16);
-    const isCompanyWorkingDay = this.isWorkingDay(workDate);
-    const blockedActionReasons: Partial<Record<AttendancePunchEventType, string>> = {};
+    const localTime =
+      timeText(occurredAt, timeZone) ?? occurredAt.slice(11, 16);
+    const isCompanyWorkingDay = this.isWorkingDay(companyId, workDate);
+    const blockedActionReasons: Partial<
+      Record<AttendancePunchEventType, string>
+    > = {};
     const nextAllowedActions: AttendancePunchEventType[] = [];
 
     for (const action of sequenceAllowedActions) {
       const blockedReason = this.punchActionBlockedReason(action, policy, {
         activePunches: activePunches.length,
         isCompanyWorkingDay,
-        localTime
+        localTime,
       });
       if (blockedReason) {
         blockedActionReasons[action] = blockedReason;
@@ -804,35 +1302,77 @@ export class AttendanceService {
       sequence_allowed_actions: sequenceAllowedActions,
       next_allowed_actions: nextAllowedActions,
       blocked_action_reasons: blockedActionReasons,
-      blocked_reason: nextAllowedActions.length === 0 ? Object.values(blockedActionReasons)[0] ?? null : null,
+      blocked_reason:
+        nextAllowedActions.length === 0
+          ? (Object.values(blockedActionReasons)[0] ?? null)
+          : null,
       local_time: localTime,
-      is_company_working_day: isCompanyWorkingDay
+      is_company_working_day: isCompanyWorkingDay,
     };
   }
 
   private punchActionBlockedReason(
     action: AttendancePunchEventType,
     policy: AttendancePunchPolicy,
-    context: { activePunches: number; isCompanyWorkingDay: boolean; localTime: string }
+    context: {
+      activePunches: number;
+      isCompanyWorkingDay: boolean;
+      localTime: string;
+    },
   ): string | null {
-    if (action === AttendancePunchEventTypes.CheckIn && !policy.allowOffDayPunches && !context.isCompanyWorkingDay && context.activePunches === 0) {
+    if (
+      action === AttendancePunchEventTypes.CheckIn &&
+      !policy.allowOffDayPunches &&
+      !context.isCompanyWorkingDay &&
+      context.activePunches === 0
+    ) {
       return "Punch-in is not allowed on company off days.";
     }
     if (policy.fullDayPunchWindow) {
       return null;
     }
-    if (action === AttendancePunchEventTypes.CheckIn && !withinClockWindow(context.localTime, policy.punchInStart, policy.punchInEnd)) {
-      return "Punch-in is allowed between " + policy.punchInStart + " and " + policy.punchInEnd + ".";
+    if (
+      action === AttendancePunchEventTypes.CheckIn &&
+      !withinClockWindow(
+        context.localTime,
+        policy.punchInStart,
+        policy.punchInEnd,
+      )
+    ) {
+      return (
+        "Punch-in is allowed between " +
+        policy.punchInStart +
+        " and " +
+        policy.punchInEnd +
+        "."
+      );
     }
-    if (action === AttendancePunchEventTypes.CheckOut && !withinClockWindow(context.localTime, policy.punchOutStart, policy.punchOutEnd)) {
-      return "Punch-out is allowed between " + policy.punchOutStart + " and " + policy.punchOutEnd + ".";
+    if (
+      action === AttendancePunchEventTypes.CheckOut &&
+      !withinClockWindow(
+        context.localTime,
+        policy.punchOutStart,
+        policy.punchOutEnd,
+      )
+    ) {
+      return (
+        "Punch-out is allowed between " +
+        policy.punchOutStart +
+        " and " +
+        policy.punchOutEnd +
+        "."
+      );
     }
     return null;
   }
 
-  private presentPunchPolicy(availability: PunchAvailability): Record<string, unknown> {
+  private presentPunchPolicy(
+    availability: PunchAvailability,
+  ): Record<string, unknown> {
     return {
-      punch_window_mode: availability.policy.fullDayPunchWindow ? "full_day" : "restricted",
+      punch_window_mode: availability.policy.fullDayPunchWindow
+        ? "full_day"
+        : "restricted",
       full_day_punch_window: availability.policy.fullDayPunchWindow,
       punch_in_start: availability.policy.punchInStart,
       punch_in_end: availability.policy.punchInEnd,
@@ -845,7 +1385,7 @@ export class AttendanceService {
       local_time: availability.local_time,
       can_punch_now: availability.next_allowed_actions.length > 0,
       blocked_reason: availability.blocked_reason,
-      blocked_action_reasons: availability.blocked_action_reasons
+      blocked_action_reasons: availability.blocked_action_reasons,
     };
   }
 
@@ -853,7 +1393,7 @@ export class AttendanceService {
     workDate: string,
     firstCheckInAt: string,
     policy: AttendancePunchPolicy,
-    timeZone: string
+    timeZone: string,
   ): string {
     const [hourText, minuteText] = policy.autoPunchOutTime.split(":");
     const hour = Number(hourText);
@@ -866,6 +1406,7 @@ export class AttendanceService {
   }
 
   private addAutoPunchOutIfExpired(input: {
+    companyId: UUID;
     employeeUserId: UUID;
     workDate: string;
     firstCheckIn: AttendancePunch;
@@ -879,42 +1420,52 @@ export class AttendanceService {
       input.workDate,
       input.firstCheckIn.occurred_at,
       input.policy,
-      input.timeZone
+      input.timeZone,
     );
     if (Date.parse(cutoffIso) > Date.parse(input.referenceIso)) {
       return null;
     }
-    const closeAt = Date.parse(input.lastOpenPunch.occurred_at) > Date.parse(cutoffIso)
-      ? input.lastOpenPunch.occurred_at
-      : cutoffIso;
+    const closeAt =
+      Date.parse(input.lastOpenPunch.occurred_at) > Date.parse(cutoffIso)
+        ? input.lastOpenPunch.occurred_at
+        : cutoffIso;
     const metadata = {
       auto_punch_out: true,
       auto_punch_out_time: input.policy.autoPunchOutTime,
       auto_punch_out_reason: "Configured attendance day-end cutoff",
-      auto_punch_out_trigger: input.trigger
+      auto_punch_out_trigger: input.trigger,
     };
     const createdPunches: AttendancePunch[] = [];
 
-    if (input.lastOpenPunch.event_type === AttendancePunchEventTypes.BreakStart) {
-      createdPunches.push(this.repository.addPunch({
+    if (
+      input.lastOpenPunch.event_type === AttendancePunchEventTypes.BreakStart
+    ) {
+      createdPunches.push(
+        this.repository.addPunch({
+          company_id: input.companyId,
+          employee_user_id: input.employeeUserId,
+          event_type: AttendancePunchEventTypes.BreakEnd,
+          occurred_at: closeAt,
+          work_mode: input.lastOpenPunch.work_mode,
+          source: "admin",
+          metadata,
+        }),
+      );
+    }
+
+    createdPunches.push(
+      this.repository.addPunch({
+        company_id: input.companyId,
         employee_user_id: input.employeeUserId,
-        event_type: AttendancePunchEventTypes.BreakEnd,
+        event_type: AttendancePunchEventTypes.CheckOut,
         occurred_at: closeAt,
         work_mode: input.lastOpenPunch.work_mode,
         source: "admin",
-        metadata
-      }));
-    }
-
-    createdPunches.push(this.repository.addPunch({
-      employee_user_id: input.employeeUserId,
-      event_type: AttendancePunchEventTypes.CheckOut,
-      occurred_at: closeAt,
-      work_mode: input.lastOpenPunch.work_mode,
-      source: "admin",
-      metadata
-    }));
+        metadata,
+      }),
+    );
     return {
+      company_id: input.companyId,
       employee_user_id: input.employeeUserId,
       work_date: input.workDate,
       first_check_in_id: input.firstCheckIn.id,
@@ -922,23 +1473,30 @@ export class AttendanceService {
       last_open_punch_id: input.lastOpenPunch.id,
       closed_at: closeAt,
       created_punches: createdPunches,
-      day_record: null
+      day_record: null,
     };
   }
 
   private autoPunchOutExpiredSessions(
+    companyId: UUID,
     employeeUserId: UUID,
     timeZone: string,
     referenceIso = nowIso(),
-    trigger: "api" | "worker" = "api"
+    trigger: "api" | "worker" = "api",
   ): AttendanceAutoPunchOutClosure[] {
     const punches = this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= referenceIso)
+      .filter(
+        (punch) =>
+          punch.company_id === companyId &&
+          punch.employee_user_id === employeeUserId &&
+          !punch.deleted_at &&
+          punch.occurred_at <= referenceIso,
+      )
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     let openWorkDate: string | null = null;
     let firstCheckIn: AttendancePunch | null = null;
     let lastOpenPunch: AttendancePunch | null = null;
-    const policy = this.attendancePolicy();
+    const policy = this.attendancePolicy(companyId);
     const closures: AttendanceAutoPunchOutClosure[] = [];
     if (!policy.autoPunchOutEnabled) {
       return closures;
@@ -948,6 +1506,7 @@ export class AttendanceService {
       if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
         if (openWorkDate && firstCheckIn && lastOpenPunch) {
           const closure = this.addAutoPunchOutIfExpired({
+            companyId,
             employeeUserId,
             workDate: openWorkDate,
             firstCheckIn,
@@ -955,7 +1514,7 @@ export class AttendanceService {
             timeZone,
             referenceIso,
             policy,
-            trigger
+            trigger,
           });
           if (closure) {
             closures.push(closure);
@@ -979,6 +1538,7 @@ export class AttendanceService {
 
     if (openWorkDate && firstCheckIn && lastOpenPunch) {
       const closure = this.addAutoPunchOutIfExpired({
+        companyId,
         employeeUserId,
         workDate: openWorkDate,
         firstCheckIn,
@@ -986,7 +1546,7 @@ export class AttendanceService {
         timeZone,
         referenceIso,
         policy,
-        trigger
+        trigger,
       });
       if (closure) {
         closures.push(closure);
@@ -995,38 +1555,98 @@ export class AttendanceService {
     return closures;
   }
 
-  autoPunchOutExpiredSessionsForAll(input: { referenceIso?: string; batchSize?: number } = {}): AttendanceAutoPunchOutRunResult {
+  autoPunchOutExpiredSessionsForAll(
+    input: {
+      referenceIso?: string;
+      batchSize?: number;
+      companyIds?: ReadonlySet<UUID>;
+    } = {},
+  ): AttendanceAutoPunchOutRunResult {
     const referenceIso = input.referenceIso ?? nowIso();
-    const batchSize = Math.max(1, Math.floor(input.batchSize ?? Number.MAX_SAFE_INTEGER));
-    const candidateUserIds = Array.from(new Set(
-      this.store.attendancePunches
-        .filter((punch) => !punch.deleted_at && punch.occurred_at <= referenceIso)
-        .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
-        .map((punch) => punch.employee_user_id)
-    ));
+    const batchSize = Math.max(
+      1,
+      Math.floor(input.batchSize ?? Number.MAX_SAFE_INTEGER),
+    );
+    const candidateUserCompanyPairs = Array.from(
+      new Map(
+        this.store.attendancePunches
+          .filter(
+            (punch) =>
+              !punch.deleted_at &&
+              punch.occurred_at <= referenceIso &&
+              (!input.companyIds || input.companyIds.has(punch.company_id)),
+          )
+          .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+          .map(
+            (punch) =>
+              [
+                `${punch.company_id}:${punch.employee_user_id}`,
+                {
+                  companyId: punch.company_id,
+                  employeeUserId: punch.employee_user_id,
+                },
+              ] as const,
+          ),
+      ).values(),
+    );
     const closures: AttendanceAutoPunchOutClosure[] = [];
     let scannedUsers = 0;
     let dayRecordsRecomputed = 0;
 
-    for (const employeeUserId of candidateUserIds) {
+    for (const { companyId, employeeUserId } of candidateUserCompanyPairs) {
       if (scannedUsers >= batchSize) {
         break;
       }
-      const user = this.store.users.find((candidate) => candidate.id === employeeUserId && !candidate.deleted_at);
+      const user = this.store.users.find(
+        (candidate) => candidate.id === employeeUserId && !candidate.deleted_at,
+      );
       if (!user || user.employment_status !== EmploymentStatuses.Active) {
         continue;
       }
       scannedUsers += 1;
-      const timeZone = this.timezoneForUser(employeeUserId);
-      const userClosures = this.autoPunchOutExpiredSessions(employeeUserId, timeZone, referenceIso, "worker");
-      const affectedWorkDates = new Set(userClosures.map((closure) => closure.work_date));
+      const timeZone = this.company(companyId).timezone;
+      const userClosures = this.autoPunchOutExpiredSessions(
+        companyId,
+        employeeUserId,
+        timeZone,
+        referenceIso,
+        "worker",
+      );
+      const affectedWorkDates = new Set(
+        userClosures.map((closure) => closure.work_date),
+      );
       for (const workDate of affectedWorkDates) {
-        const dayRecord = this.recomputeDay(employeeUserId, workDate, timeZone, referenceIso);
+        const dayRecord = this.recomputeDay(
+          companyId,
+          employeeUserId,
+          workDate,
+          timeZone,
+          referenceIso,
+        );
         dayRecordsRecomputed += 1;
         for (const closure of userClosures) {
           if (closure.work_date === workDate) {
             closure.day_record = dayRecord;
           }
+        }
+      }
+      for (const closure of userClosures) {
+        for (const punch of closure.created_punches) {
+          appendAttendanceOutboxEvent(
+            this.store,
+            buildPunchRecordedEvent({
+              companyId,
+              actorUserId: employeeUserId,
+              subjectEmployeeUserId: employeeUserId,
+              punchEventId: punch.id,
+              punchType: punch.event_type,
+              occurredAt: punch.occurred_at,
+              workDate: closure.work_date,
+              workMode: punch.work_mode,
+              sourceChannel: punch.source,
+              dayStatus: closure.day_record?.status ?? null,
+            }),
+          );
         }
       }
       closures.push(...userClosures);
@@ -1036,58 +1656,109 @@ export class AttendanceService {
       reference_iso: referenceIso,
       scanned_users: scannedUsers,
       closed_sessions: closures.length,
-      punches_created: closures.reduce((total, closure) => total + closure.created_punches.length, 0),
+      punches_created: closures.reduce(
+        (total, closure) => total + closure.created_punches.length,
+        0,
+      ),
       day_records_recomputed: dayRecordsRecomputed,
-      closures
+      closures,
     };
   }
 
   private recomputeDay(
+    companyId: UUID,
     employeeUserId: UUID,
     workDate: string,
-    timeZone = this.timezoneForUser(employeeUserId),
-    referenceIso = nowIso()
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
+    referenceIso = nowIso(),
   ): AttendanceDayRecord {
-    this.autoPunchOutExpiredSessions(employeeUserId, timeZone, referenceIso);
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
-    const checkIns = punches.filter((punch) => punch.event_type === AttendancePunchEventTypes.CheckIn);
-    const checkOuts = punches.filter((punch) => punch.event_type === AttendancePunchEventTypes.CheckOut);
+    this.autoPunchOutExpiredSessions(
+      companyId,
+      employeeUserId,
+      timeZone,
+      referenceIso,
+    );
+    const punches = this.punchesForWorkDate(
+      companyId,
+      employeeUserId,
+      workDate,
+      timeZone,
+    );
+    const checkIns = punches.filter(
+      (punch) => punch.event_type === AttendancePunchEventTypes.CheckIn,
+    );
+    const checkOuts = punches.filter(
+      (punch) => punch.event_type === AttendancePunchEventTypes.CheckOut,
+    );
     const firstCheckIn = checkIns[0]?.occurred_at ?? null;
     const lastCheckOut = checkOuts.at(-1)?.occurred_at ?? null;
-    const workMode = punches.find((punch) => punch.work_mode)?.work_mode ?? null;
+    const workMode =
+      punches.find((punch) => punch.work_mode)?.work_mode ?? null;
     const localToday = todayDate(timeZone);
     const isPast = workDate < localToday;
     const isFuture = workDate > localToday;
-    const policy = this.attendancePolicy();
-    const holiday = this.holidayForDate(workDate);
-    const workingDay = this.isWorkingDay(workDate);
+    const policy = this.attendancePolicy(companyId);
+    const holiday = this.holidayForDate(companyId, workDate);
+    const workingDay = this.isWorkingDay(companyId, workDate);
     const shiftStart = zonedClockIso(workDate, 9, 30, timeZone);
-    const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes());
-    const rawLateMinutes = firstCheckIn ? Math.max(0, minutesBetween(shiftStart, firstCheckIn)) : 0;
-    const lateMinutes = rawLateMinutes > policy.graceMinutes ? rawLateMinutes : 0;
-    const earlyOutMinutes = lastCheckOut && isPast ? Math.max(0, minutesBetween(lastCheckOut, shiftEnd)) : 0;
-    const workEnd = lastCheckOut ?? (workDate === localToday ? nowIso() : firstCheckIn);
-    const breakMinutes = this.breakMinutesUntil(punches, workDate === localToday ? workEnd : null);
-    const totalMinutes = firstCheckIn && workEnd ? Math.max(0, minutesBetween(firstCheckIn, workEnd) - breakMinutes) : 0;
+    const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes(companyId));
+    const rawLateMinutes = firstCheckIn
+      ? Math.max(0, minutesBetween(shiftStart, firstCheckIn))
+      : 0;
+    const lateMinutes =
+      rawLateMinutes > policy.graceMinutes ? rawLateMinutes : 0;
+    const earlyOutMinutes =
+      lastCheckOut && isPast
+        ? Math.max(0, minutesBetween(lastCheckOut, shiftEnd))
+        : 0;
+    const workEnd =
+      lastCheckOut ?? (workDate === localToday ? nowIso() : firstCheckIn);
+    const breakMinutes = this.breakMinutesUntil(
+      punches,
+      workDate === localToday ? workEnd : null,
+    );
+    const totalMinutes =
+      firstCheckIn && workEnd
+        ? Math.max(0, minutesBetween(firstCheckIn, workEnd) - breakMinutes)
+        : 0;
     const autoAbsentAt = addMinutes(shiftStart, policy.autoMarkAbsentMinutes);
-    const canMarkAbsentToday = workDate === localToday && Date.parse(nowIso()) >= Date.parse(autoAbsentAt);
+    const canMarkAbsentToday =
+      workDate === localToday &&
+      Date.parse(nowIso()) >= Date.parse(autoAbsentAt);
     const missingPunch = Boolean(firstCheckIn && !lastCheckOut && isPast);
-    const absent = !firstCheckIn && workingDay && !holiday && (isPast || canMarkAbsentToday);
-    const exceptionType = absent ? "absent" : missingPunch ? "missing_punch" : lateMinutes > 0 ? "late" : earlyOutMinutes > 0 ? "early_out" : null;
+    const absent =
+      !firstCheckIn && workingDay && !holiday && (isPast || canMarkAbsentToday);
+    const exceptionType = absent
+      ? "absent"
+      : missingPunch
+        ? "missing_punch"
+        : lateMinutes > 0
+          ? "late"
+          : earlyOutMinutes > 0
+            ? "early_out"
+            : null;
     const status =
-      holiday && punches.length === 0 ? AttendanceDayStatuses.Holiday
-        : !workingDay && punches.length === 0 ? AttendanceDayStatuses.Weekend
-          : isFuture ? AttendanceDayStatuses.Future
-            : absent ? AttendanceDayStatuses.Absent
-              : workMode === "wfh" ? AttendanceDayStatuses.Wfh
-                : lateMinutes > 0 ? AttendanceDayStatuses.Late
+      holiday && punches.length === 0
+        ? AttendanceDayStatuses.Holiday
+        : !workingDay && punches.length === 0
+          ? AttendanceDayStatuses.Weekend
+          : isFuture
+            ? AttendanceDayStatuses.Future
+            : absent
+              ? AttendanceDayStatuses.Absent
+              : workMode === "wfh"
+                ? AttendanceDayStatuses.Wfh
+                : lateMinutes > 0
+                  ? AttendanceDayStatuses.Late
                   : AttendanceDayStatuses.Present;
-    const passiveNote = holiday && punches.length === 0
-      ? `Holiday: ${holiday.name}`
-      : !workingDay && punches.length === 0
-        ? "Company non-working day"
-        : null;
+    const passiveNote =
+      holiday && punches.length === 0
+        ? `Holiday: ${holiday.name}`
+        : !workingDay && punches.length === 0
+          ? "Company non-working day"
+          : null;
     return this.repository.upsertDayRecord({
+      company_id: companyId,
       employee_user_id: employeeUserId,
       work_date: workDate,
       status,
@@ -1098,20 +1769,35 @@ export class AttendanceService {
       late_minutes: lateMinutes,
       early_out_minutes: earlyOutMinutes,
       work_mode: workMode,
-      note: exceptionType ? this.exceptionDetail({ exception_type: exceptionType, late_minutes: lateMinutes, early_out_minutes: earlyOutMinutes, work_minutes: totalMinutes } as AttendanceDayRecord) : passiveNote,
+      note: exceptionType
+        ? this.exceptionDetail({
+            exception_type: exceptionType,
+            late_minutes: lateMinutes,
+            early_out_minutes: earlyOutMinutes,
+            work_minutes: totalMinutes,
+          } as AttendanceDayRecord)
+        : passiveNote,
       exception_type: exceptionType,
-      regularization_status: this.repository.dayRecord(employeeUserId, workDate)?.regularization_status ?? null
+      regularization_status:
+        this.repository.dayRecord(companyId, employeeUserId, workDate)
+          ?.regularization_status ?? null,
     });
   }
 
-  private breakMinutesUntil(punches: AttendancePunch[], openBreakEndAt: string | null): number {
+  private breakMinutesUntil(
+    punches: AttendancePunch[],
+    openBreakEndAt: string | null,
+  ): number {
     let total = 0;
     let breakStartedAt: string | null = null;
     for (const punch of punches) {
       if (punch.event_type === AttendancePunchEventTypes.BreakStart) {
         breakStartedAt = punch.occurred_at;
       }
-      if (punch.event_type === AttendancePunchEventTypes.BreakEnd && breakStartedAt) {
+      if (
+        punch.event_type === AttendancePunchEventTypes.BreakEnd &&
+        breakStartedAt
+      ) {
         total += minutesBetween(breakStartedAt, punch.occurred_at);
         breakStartedAt = null;
       }
@@ -1122,43 +1808,76 @@ export class AttendanceService {
     return total;
   }
 
-  private resolveDay(employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord {
-    const existing = this.repository.dayRecord(employeeUserId, workDate);
-    const punches = this.punchesForWorkDate(employeeUserId, workDate, timeZone);
-    if (existing && punches.length === 0 && this.shouldPreserveManualDay(existing)) {
+  private resolveDay(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
+  ): AttendanceDayRecord {
+    const existing = this.repository.dayRecord(
+      companyId,
+      employeeUserId,
+      workDate,
+    );
+    const punches = this.punchesForWorkDate(
+      companyId,
+      employeeUserId,
+      workDate,
+      timeZone,
+    );
+    if (
+      existing &&
+      punches.length === 0 &&
+      this.shouldPreserveManualDay(existing)
+    ) {
       return existing;
     }
     if (punches.length > 0 || workDate <= todayDate(timeZone)) {
-      return this.recomputeDay(employeeUserId, workDate, timeZone);
+      return this.recomputeDay(companyId, employeeUserId, workDate, timeZone);
     }
-    return this.getOrSynthesizeDay(employeeUserId, workDate, timeZone);
+    return this.getOrSynthesizeDay(
+      companyId,
+      employeeUserId,
+      workDate,
+      timeZone,
+    );
   }
 
   private shouldPreserveManualDay(record: AttendanceDayRecord): boolean {
     return (
       record.status === AttendanceDayStatuses.Leave ||
       record.status === AttendanceDayStatuses.Wfh ||
-      (record.status === AttendanceDayStatuses.Holiday && Boolean(this.holidayForDate(record.work_date))) ||
+      (record.status === AttendanceDayStatuses.Holiday &&
+        Boolean(this.holidayForDate(record.company_id, record.work_date))) ||
       record.regularization_status === AttendanceRegularizationStatuses.Approved
     );
   }
 
-  private getOrSynthesizeDay(employeeUserId: UUID, workDate: string, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord {
-    const existing = this.repository.dayRecord(employeeUserId, workDate);
+  private getOrSynthesizeDay(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
+  ): AttendanceDayRecord {
+    const existing = this.repository.dayRecord(
+      companyId,
+      employeeUserId,
+      workDate,
+    );
     if (existing) {
       return existing;
     }
-    const holiday = this.holidayForDate(workDate);
-    const workingDay = this.isWorkingDay(workDate);
-    const status =
-      holiday
-        ? AttendanceDayStatuses.Holiday
-        : !workingDay
-          ? AttendanceDayStatuses.Weekend
-          : workDate > todayDate(timeZone)
-            ? AttendanceDayStatuses.Future
-            : AttendanceDayStatuses.Absent;
+    const holiday = this.holidayForDate(companyId, workDate);
+    const workingDay = this.isWorkingDay(companyId, workDate);
+    const status = holiday
+      ? AttendanceDayStatuses.Holiday
+      : !workingDay
+        ? AttendanceDayStatuses.Weekend
+        : workDate > todayDate(timeZone)
+          ? AttendanceDayStatuses.Future
+          : AttendanceDayStatuses.Absent;
     return this.repository.upsertDayRecord({
+      company_id: companyId,
       employee_user_id: employeeUserId,
       work_date: workDate,
       status,
@@ -1169,19 +1888,24 @@ export class AttendanceService {
       late_minutes: 0,
       early_out_minutes: 0,
       work_mode: null,
-      note: status === AttendanceDayStatuses.Absent
-        ? "No punch-in recorded"
-        : status === AttendanceDayStatuses.Holiday
-          ? `Holiday: ${holiday?.name ?? "Company holiday"}`
-          : status === AttendanceDayStatuses.Weekend
-            ? "Company non-working day"
-            : null,
+      note:
+        status === AttendanceDayStatuses.Absent
+          ? "No punch-in recorded"
+          : status === AttendanceDayStatuses.Holiday
+            ? `Holiday: ${holiday?.name ?? "Company holiday"}`
+            : status === AttendanceDayStatuses.Weekend
+              ? "Company non-working day"
+              : null,
       exception_type: status === AttendanceDayStatuses.Absent ? "absent" : null,
-      regularization_status: null
+      regularization_status: null,
     });
   }
 
-  private weekRecords(employeeUserId: UUID, timeZone = this.timezoneForUser(employeeUserId)): AttendanceDayRecord[] {
+  private weekRecords(
+    companyId: UUID,
+    employeeUserId: UUID,
+    timeZone = this.timezoneForUser(employeeUserId, companyId),
+  ): AttendanceDayRecord[] {
     const localToday = todayDate(timeZone);
     const today = new Date(`${localToday}T00:00:00.000Z`);
     const start = new Date(today);
@@ -1191,20 +1915,31 @@ export class AttendanceService {
       const date = new Date(start);
       date.setUTCDate(start.getUTCDate() + index);
       const workDate = date.toISOString().slice(0, 10);
-      return this.resolveDay(employeeUserId, workDate, timeZone);
+      return this.resolveDay(companyId, employeeUserId, workDate, timeZone);
     });
   }
 
-  private punchesForWorkDate(employeeUserId: UUID, workDate: string, timeZone: string): AttendancePunch[] {
+  private punchesForWorkDate(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+    timeZone: string,
+  ): AttendancePunch[] {
     let openWorkDate: string | null = null;
     return this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at)
+      .filter(
+        (punch) =>
+          punch.company_id === companyId &&
+          punch.employee_user_id === employeeUserId &&
+          !punch.deleted_at,
+      )
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
       .filter((punch) => {
         if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
           openWorkDate = dateInTimeZone(punch.occurred_at, timeZone);
         }
-        const assignedWorkDate = openWorkDate ?? dateInTimeZone(punch.occurred_at, timeZone);
+        const assignedWorkDate =
+          openWorkDate ?? dateInTimeZone(punch.occurred_at, timeZone);
         const include = assignedWorkDate === workDate;
         if (punch.event_type === AttendancePunchEventTypes.CheckOut) {
           openWorkDate = null;
@@ -1214,21 +1949,40 @@ export class AttendanceService {
   }
 
   private workDateForPunch(
+    companyId: UUID,
     employeeUserId: UUID,
     eventType: AttendancePunchEventType,
     occurredAt: string,
-    timeZone: string
+    timeZone: string,
   ): string {
     if (eventType === AttendancePunchEventTypes.CheckIn) {
       return dateInTimeZone(occurredAt, timeZone);
     }
-    return this.openSessionWorkDate(employeeUserId, occurredAt, timeZone) ?? dateInTimeZone(occurredAt, timeZone);
+    return (
+      this.openSessionWorkDate(
+        companyId,
+        employeeUserId,
+        occurredAt,
+        timeZone,
+      ) ?? dateInTimeZone(occurredAt, timeZone)
+    );
   }
 
-  private openSessionWorkDate(employeeUserId: UUID, occurredAt: string, timeZone: string): string | null {
+  private openSessionWorkDate(
+    companyId: UUID,
+    employeeUserId: UUID,
+    occurredAt: string,
+    timeZone: string,
+  ): string | null {
     let openWorkDate: string | null = null;
     const punches = this.store.attendancePunches
-      .filter((punch) => punch.employee_user_id === employeeUserId && !punch.deleted_at && punch.occurred_at <= occurredAt)
+      .filter(
+        (punch) =>
+          punch.company_id === companyId &&
+          punch.employee_user_id === employeeUserId &&
+          !punch.deleted_at &&
+          punch.occurred_at <= occurredAt,
+      )
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     for (const punch of punches) {
       if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
@@ -1241,17 +1995,47 @@ export class AttendanceService {
     return openWorkDate;
   }
 
-  private weeklyBalance(records: AttendanceDayRecord[]): Record<string, unknown> {
-    const elapsedRecords = records.filter((record) => record.work_date <= todayDate(this.timezoneForUser(record.employee_user_id)));
-    const target = this.targetWorkMinutes();
-    const weekdayRecords = elapsedRecords.filter((record) => this.isWorkingDay(record.work_date) && !this.holidayForDate(record.work_date));
-    const offDayRecords = elapsedRecords.filter((record) => !this.isWorkingDay(record.work_date) || Boolean(this.holidayForDate(record.work_date)));
+  private weeklyBalance(
+    companyId: UUID,
+    records: AttendanceDayRecord[],
+  ): Record<string, unknown> {
+    const elapsedRecords = records.filter(
+      (record) =>
+        record.work_date <=
+        todayDate(this.timezoneForUser(record.employee_user_id, companyId)),
+    );
+    const target = this.targetWorkMinutes(companyId);
+    const weekdayRecords = elapsedRecords.filter(
+      (record) =>
+        this.isWorkingDay(companyId, record.work_date) &&
+        !this.holidayForDate(companyId, record.work_date),
+    );
+    const offDayRecords = elapsedRecords.filter(
+      (record) =>
+        !this.isWorkingDay(companyId, record.work_date) ||
+        Boolean(this.holidayForDate(companyId, record.work_date)),
+    );
     const requiredWeekdayMinutes = weekdayRecords.length * target;
-    const weekdayWorkedMinutes = weekdayRecords.reduce((total, record) => total + record.work_minutes, 0);
-    const offDayWorkedMinutes = offDayRecords.reduce((total, record) => total + record.work_minutes, 0);
-    const weekdayShortageMinutes = Math.max(0, requiredWeekdayMinutes - weekdayWorkedMinutes);
-    const compensatedMinutes = Math.min(weekdayShortageMinutes, offDayWorkedMinutes);
-    const overtimeMinutes = Math.max(0, offDayWorkedMinutes - compensatedMinutes);
+    const weekdayWorkedMinutes = weekdayRecords.reduce(
+      (total, record) => total + record.work_minutes,
+      0,
+    );
+    const offDayWorkedMinutes = offDayRecords.reduce(
+      (total, record) => total + record.work_minutes,
+      0,
+    );
+    const weekdayShortageMinutes = Math.max(
+      0,
+      requiredWeekdayMinutes - weekdayWorkedMinutes,
+    );
+    const compensatedMinutes = Math.min(
+      weekdayShortageMinutes,
+      offDayWorkedMinutes,
+    );
+    const overtimeMinutes = Math.max(
+      0,
+      offDayWorkedMinutes - compensatedMinutes,
+    );
     return {
       required_weekly_minutes: requiredWeekdayMinutes,
       required_weekly_hours: minutesToHours(requiredWeekdayMinutes),
@@ -1264,17 +2048,103 @@ export class AttendanceService {
       compensated_minutes: compensatedMinutes,
       compensated_hours: minutesToHours(compensatedMinutes),
       overtime_minutes: overtimeMinutes,
-      overtime_hours: minutesToHours(overtimeMinutes)
+      overtime_hours: minutesToHours(overtimeMinutes),
     };
   }
 
-  private activeCompany() {
-    return this.store.companyProfiles.find((candidate) => candidate.status === "active") ?? this.store.companyProfiles[0];
+  async punchPostgres(
+    actor: AuthUser,
+    input: Parameters<AttendanceService["punch"]>[1] & {
+      idempotency_key: string;
+    },
+  ): Promise<Record<string, unknown>> {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.punch_postgres",
+    );
+    assertCanUseSelfAttendance(actor);
+    const companyId = context.companyId;
+    if (!this.store.pgPool)
+      throw conflict("Attendance command service is unavailable.");
+    const timeZone = this.timezoneForUser(actor.id, companyId);
+    return new AttendanceCommandService(this.store).execute({
+      actor,
+      companyId,
+      timeZone,
+      idempotencyKey: input.idempotency_key,
+      command: input,
+      policy: this.attendancePolicy(companyId),
+      isWorkingDayFor: (workDate) => this.isWorkingDay(companyId, workDate),
+    });
   }
 
-  private attendancePolicy(): AttendancePunchPolicy {
+  private resolveAttendanceCompanyContext(
+    actor: AuthUser,
+    operation: string,
+    requestedCompanyId?: UUID | null,
+  ): ActiveCompanyMembershipContext {
+    return resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      requestedCompanyId,
+      operation,
+      requireActiveEmployment: true,
+    });
+  }
+
+  private company(companyId: UUID) {
+    const company = this.store.companyProfiles.find(
+      (candidate) =>
+        candidate.id === companyId && candidate.status === "active",
+    );
+    if (!company) {
+      throw companyContextRequired({
+        company_id: companyId,
+        operation: "attendance_company",
+      });
+    }
+    return company;
+  }
+
+  private assertTargetUserInCompany(
+    userId: UUID,
+    companyId: UUID,
+    input: { operation: string; requireActiveEmployment: boolean },
+  ): void {
+    assertUserInCompanyMembershipContext(this.store, {
+      userId,
+      companyId,
+      operation: input.operation,
+      requireActiveEmployment: input.requireActiveEmployment,
+    });
+  }
+
+  private isUserInCompany(userId: UUID, companyId: UUID): boolean {
+    try {
+      this.assertTargetUserInCompany(userId, companyId, {
+        operation: "attendance.company_target_filter",
+        requireActiveEmployment: false,
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === ErrorCodes.Unauthorized ||
+          error.code === ErrorCodes.Forbidden ||
+          error.code === ErrorCodes.CompanyContextRequired)
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private attendancePolicy(companyId: UUID): AttendancePunchPolicy {
     const policy = this.store.adminPolicies.find(
-      (candidate) => candidate.policy_key === "attendance" && candidate.status === "active" && !candidate.deleted_at
+      (candidate) =>
+        candidate.company_id === companyId &&
+        candidate.policy_key === "attendance" &&
+        candidate.status === "active" &&
+        !candidate.deleted_at,
     );
     const config = policy?.config ?? {};
     return {
@@ -1287,72 +2157,149 @@ export class AttendanceService {
       punchOutEnd: timeConfig(config, "punchOutEnd", "23:59"),
       autoPunchOutEnabled: booleanConfig(config, "autoPunchOutEnabled", true),
       autoPunchOutTime: timeConfig(config, "autoPunchOutTime", "23:59"),
-      allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false)
+      allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false),
+      policyVersion: policy ? String(policy.version) : "built-in-default",
     };
   }
 
-  private isWorkingDay(workDate: string): boolean {
-    return isWorkingDate(workDate, this.activeCompany()?.working_week, this.holidayDates());
-  }
-
-  private holidayForDate(workDate: string) {
-    return this.store.holidays.find((holiday) => holiday.holiday_date === workDate && !holiday.optional && !holiday.deleted_at) ?? null;
-  }
-
-  private holidayDates(): Set<string> {
-    return new Set(
-      this.store.holidays
-        .filter((holiday) => !holiday.optional && !holiday.deleted_at)
-        .map((holiday) => holiday.holiday_date)
+  private isWorkingDay(companyId: UUID, workDate: string): boolean {
+    return isWorkingDate(
+      workDate,
+      this.company(companyId).working_week,
+      this.holidayDates(companyId),
     );
   }
 
-  private targetWorkMinutes(): number {
-    return Math.max(0, Math.round((this.activeCompany()?.work_hours_per_day ?? 8) * 60));
+  private holidayForDate(companyId: UUID, workDate: string) {
+    return (
+      this.store.holidays.find(
+        (holiday) =>
+          holiday.company_id === companyId &&
+          holiday.holiday_date === workDate &&
+          !holiday.optional &&
+          !holiday.deleted_at,
+      ) ?? null
+    );
   }
 
-  private timezoneForUser(userId: UUID): string {
-    const user = this.store.users.find((candidate) => candidate.id === userId && !candidate.deleted_at);
-    const company = this.activeCompany();
+  private holidayDates(companyId: UUID): Set<string> {
+    return new Set(
+      this.store.holidays
+        .filter(
+          (holiday) =>
+            holiday.company_id === companyId &&
+            !holiday.optional &&
+            !holiday.deleted_at,
+        )
+        .map((holiday) => holiday.holiday_date),
+    );
+  }
+
+  private targetWorkMinutes(companyId: UUID): number {
+    return Math.max(
+      0,
+      Math.round(this.company(companyId).work_hours_per_day * 60),
+    );
+  }
+
+  private timezoneForUser(userId: UUID, companyId: UUID): string {
+    const user = this.store.users.find(
+      (candidate) => candidate.id === userId && !candidate.deleted_at,
+    );
+    const company = this.company(companyId);
     return user?.timezone ?? company?.timezone ?? "Asia/Kolkata";
   }
 
-  private recordsForUsers(userIds: Set<UUID>, from: string, to: string): AttendanceDayRecord[] {
+  private recordsForUsers(
+    companyId: UUID,
+    userIds: Set<UUID>,
+    from: string,
+    to: string,
+  ): AttendanceDayRecord[] {
     const output: AttendanceDayRecord[] = [];
     for (const userId of userIds) {
-      const timeZone = this.timezoneForUser(userId);
+      const timeZone = this.timezoneForUser(userId, companyId);
       for (const date of datesInclusive(from, to)) {
-        output.push(this.resolveDay(userId, date, timeZone));
+        output.push(this.resolveDay(companyId, userId, date, timeZone));
       }
     }
     return output.sort((a, b) => a.work_date.localeCompare(b.work_date));
   }
 
-  private daySummary(records: Array<AttendanceDayRecord | { status: string; work_minutes: number; late_minutes?: number; exception_type?: string | null }>) {
+  private daySummary(
+    records: Array<
+      | AttendanceDayRecord
+      | {
+          status: string;
+          work_minutes: number;
+          late_minutes?: number;
+          exception_type?: string | null;
+        }
+    >,
+  ) {
     return {
-      present: records.filter((record) => record.status === AttendanceDayStatuses.Present).length,
-      absent: records.filter((record) => record.status === AttendanceDayStatuses.Absent).length,
-      late: records.filter((record) => record.status === AttendanceDayStatuses.Late).length,
-      wfh: records.filter((record) => record.status === AttendanceDayStatuses.Wfh).length,
-      leave: records.filter((record) => record.status === AttendanceDayStatuses.Leave).length,
-      weekend: records.filter((record) => record.status === AttendanceDayStatuses.Weekend).length,
-      holiday: records.filter((record) => record.status === AttendanceDayStatuses.Holiday).length,
-      future: records.filter((record) => record.status === AttendanceDayStatuses.Future).length,
-      missing_punch: records.filter((record) => record.exception_type === "missing_punch").length,
-      regularized: records.filter((record) => "regularization_status" in record && record.regularization_status === AttendanceRegularizationStatuses.Approved).length,
-      work_minutes: records.reduce((total, record) => total + record.work_minutes, 0)
+      present: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Present,
+      ).length,
+      absent: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Absent,
+      ).length,
+      late: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Late,
+      ).length,
+      wfh: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Wfh,
+      ).length,
+      leave: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Leave,
+      ).length,
+      weekend: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Weekend,
+      ).length,
+      holiday: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Holiday,
+      ).length,
+      future: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Future,
+      ).length,
+      missing_punch: records.filter(
+        (record) => record.exception_type === "missing_punch",
+      ).length,
+      regularized: records.filter(
+        (record) =>
+          "regularization_status" in record &&
+          record.regularization_status ===
+            AttendanceRegularizationStatuses.Approved,
+      ).length,
+      work_minutes: records.reduce(
+        (total, record) => total + record.work_minutes,
+        0,
+      ),
     };
   }
 
   private teamTotals(records: AttendanceDayRecord[], totalEmployees: number) {
     return {
       total: totalEmployees,
-      present: records.filter((record) => record.status === AttendanceDayStatuses.Present || record.status === AttendanceDayStatuses.Late).length,
-      absent: records.filter((record) => record.status === AttendanceDayStatuses.Absent).length,
-      late: records.filter((record) => record.status === AttendanceDayStatuses.Late).length,
-      early_out: records.filter((record) => record.early_out_minutes > 0).length,
-      wfh: records.filter((record) => record.status === AttendanceDayStatuses.Wfh).length,
-      on_leave: records.filter((record) => record.status === AttendanceDayStatuses.Leave).length
+      present: records.filter(
+        (record) =>
+          record.status === AttendanceDayStatuses.Present ||
+          record.status === AttendanceDayStatuses.Late,
+      ).length,
+      absent: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Absent,
+      ).length,
+      late: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Late,
+      ).length,
+      early_out: records.filter((record) => record.early_out_minutes > 0)
+        .length,
+      wfh: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Wfh,
+      ).length,
+      on_leave: records.filter(
+        (record) => record.status === AttendanceDayStatuses.Leave,
+      ).length,
     };
   }
 
@@ -1360,14 +2307,18 @@ export class AttendanceService {
     return this.store.departments
       .filter((department) => !department.deleted_at)
       .map((department) => {
-        const members = users.filter((user) => user.department_id === department.id);
+        const members = users.filter(
+          (user) => user.department_id === department.id,
+        );
         const memberIds = new Set(members.map((user) => user.id));
-        const departmentRecords = records.filter((record) => memberIds.has(record.employee_user_id));
+        const departmentRecords = records.filter((record) =>
+          memberIds.has(record.employee_user_id),
+        );
         const present = departmentRecords.filter(
           (record) =>
             record.status === AttendanceDayStatuses.Present ||
             record.status === AttendanceDayStatuses.Late ||
-            record.status === AttendanceDayStatuses.Wfh
+            record.status === AttendanceDayStatuses.Wfh,
         ).length;
         return {
           department_id: department.id,
@@ -1375,15 +2326,25 @@ export class AttendanceService {
           name: department.name,
           present,
           strength: members.length,
-          attendance_percent: members.length > 0 ? Math.round((present / members.length) * 100) : 0
+          attendance_percent:
+            members.length > 0
+              ? Math.round((present / members.length) * 100)
+              : 0,
         };
       })
       .filter((row) => row.strength > 0);
   }
 
-  private visibleUsers(actor: AuthUser, departmentId?: UUID): CoreUser[] {
+  private visibleUsers(
+    actor: AuthUser,
+    companyId: UUID,
+    departmentId?: UUID,
+  ): CoreUser[] {
     return this.store.users.filter((user) => {
-      if (!visibleUserPredicate(actor, user)) {
+      if (
+        !visibleUserPredicate(actor, user) ||
+        !this.isUserInCompany(user.id, companyId)
+      ) {
         return false;
       }
       if (departmentId && user.department_id !== departmentId) {
@@ -1393,61 +2354,102 @@ export class AttendanceService {
     });
   }
 
-  private hasVisibleSubordinates(actor: AuthUser): boolean {
-    return this.store.users.some(
-      (user) =>
-        user.id !== actor.id &&
-        !user.deleted_at &&
-        user.hierarchy_path.startsWith(`${actor.hierarchy_path}.`)
+  private hasVisibleSubordinates(actor: AuthUser, companyId: UUID): boolean {
+    return this.visibleUsers(actor, companyId).some(
+      (user) => user.id !== actor.id,
     );
   }
 
-  private regularizationQueueCounts(requests: AttendanceRegularizationRequest[]) {
+  private regularizationQueueCounts(
+    requests: AttendanceRegularizationRequest[],
+  ) {
     return {
       total: requests.length,
-      pending: requests.filter((request) => request.status === AttendanceRegularizationStatuses.Pending).length,
-      approved: requests.filter((request) => request.status === AttendanceRegularizationStatuses.Approved).length,
-      returned: requests.filter((request) => request.status === AttendanceRegularizationStatuses.Returned).length,
-      rejected: requests.filter((request) => request.status === AttendanceRegularizationStatuses.Rejected).length
+      pending: requests.filter(
+        (request) =>
+          request.status === AttendanceRegularizationStatuses.Pending,
+      ).length,
+      approved: requests.filter(
+        (request) =>
+          request.status === AttendanceRegularizationStatuses.Approved,
+      ).length,
+      returned: requests.filter(
+        (request) =>
+          request.status === AttendanceRegularizationStatuses.Returned,
+      ).length,
+      rejected: requests.filter(
+        (request) =>
+          request.status === AttendanceRegularizationStatuses.Rejected,
+      ).length,
     };
   }
 
   private requireUser(userId: UUID): CoreUser {
-    const user = this.store.users.find((candidate) => candidate.id === userId && !candidate.deleted_at);
+    const user = this.store.users.find(
+      (candidate) => candidate.id === userId && !candidate.deleted_at,
+    );
     if (!user) {
       throw notFound("User not found", { id: userId });
     }
     return user;
   }
 
-  private adminFallback(): CoreUser | null {
-    return this.store.users.find((user) => user.roles.includes(Roles.Admin) && user.employment_status === EmploymentStatuses.Active && !user.deleted_at) ?? null;
+  private adminFallback(companyId: UUID): CoreUser | null {
+    return (
+      this.store.users.find(
+        (user) =>
+          user.roles.includes(Roles.Admin) &&
+          user.employment_status === EmploymentStatuses.Active &&
+          !user.deleted_at &&
+          this.isUserInCompany(user.id, companyId),
+      ) ?? null
+    );
   }
 
-  private applyApprovedPunches(request: AttendanceRegularizationRequest, actorUserId: UUID): void {
-    const timeZone = this.timezoneForUser(request.employee_user_id);
+  private applyApprovedPunches(
+    request: AttendanceRegularizationRequest,
+    actorUserId: UUID,
+  ): void {
+    const timeZone = this.timezoneForUser(
+      request.employee_user_id,
+      request.company_id,
+    );
     for (const requested of request.requested_punches) {
       const date = dateInTimeZone(requested.occurred_at, timeZone);
-      if (requested.event_type === AttendancePunchEventTypes.CheckIn && date !== request.work_date) {
-        throw badRequest("Requested punch timestamps must fall on the regularization work_date.");
+      if (
+        requested.event_type === AttendancePunchEventTypes.CheckIn &&
+        date !== request.work_date
+      ) {
+        throw badRequest(
+          "Requested punch timestamps must fall on the regularization work_date.",
+        );
       }
       this.repository.addPunch({
+        company_id: request.company_id,
         employee_user_id: request.employee_user_id,
         event_type: requested.event_type,
         occurred_at: requested.occurred_at,
         work_mode: "office",
         source: "admin",
-        metadata: { regularization_request_id: request.id, decided_by_user_id: actorUserId }
+        metadata: {
+          regularization_request_id: request.id,
+          decided_by_user_id: actorUserId,
+        },
       });
     }
-    this.recomputeDay(request.employee_user_id, request.work_date, timeZone);
+    this.recomputeDay(
+      request.company_id,
+      request.employee_user_id,
+      request.work_date,
+      timeZone,
+    );
   }
 
   private presentPunch(punch: AttendancePunch, timeZone: string) {
     return {
       ...punch,
       work_date: dateInTimeZone(punch.occurred_at, timeZone),
-      time: timeText(punch.occurred_at, timeZone)
+      time: timeText(punch.occurred_at, timeZone),
     };
   }
 
@@ -1458,24 +2460,34 @@ export class AttendanceService {
       out_time: timeText(day.last_check_out, timeZone),
       hours: minutesToHours(day.work_minutes),
       break_hours: minutesToHours(day.break_minutes),
-      detail: this.exceptionDetail(day)
+      detail: this.exceptionDetail(day),
     };
   }
 
   private presentRegularization(request: AttendanceRegularizationRequest) {
-    const user = this.store.users.find((candidate) => candidate.id === request.employee_user_id);
+    const user = this.store.users.find(
+      (candidate) => candidate.id === request.employee_user_id,
+    );
     const approver = request.current_approver_user_id
-      ? this.store.users.find((candidate) => candidate.id === request.current_approver_user_id)
+      ? this.store.users.find(
+          (candidate) => candidate.id === request.current_approver_user_id,
+        )
       : undefined;
     return {
       ...request,
       employee: userLabel(user),
-      approver: approver ? userLabel(approver) : null
+      approver: approver ? userLabel(approver) : null,
     };
   }
 
-  private presentException(record: AttendanceDayRecord, request: AttendanceRegularizationRequest | undefined, actor: AuthUser) {
-    const user = this.store.users.find((candidate) => candidate.id === record.employee_user_id);
+  private presentException(
+    record: AttendanceDayRecord,
+    request: AttendanceRegularizationRequest | undefined,
+    actor: AuthUser,
+  ) {
+    const user = this.store.users.find(
+      (candidate) => candidate.id === record.employee_user_id,
+    );
     const exceptionType = request ? "correction" : record.exception_type;
     return {
       id: request?.id ?? record.id,
@@ -1488,13 +2500,31 @@ export class AttendanceService {
       detail: request?.reason ?? this.exceptionDetail(record),
       status: request?.status ?? record.regularization_status ?? "pending",
       expected_version: request?.version ?? record.version,
-      can_decide: Boolean(request && request.status === AttendanceRegularizationStatuses.Pending && actor.id !== request.employee_user_id && (canSeeAllAttendance(actor) || request.current_approver_user_id === actor.id)),
-      record: this.presentDay(record, this.timezoneForUser(record.employee_user_id)),
-      request: request ? this.presentRegularization(request) : null
+      can_decide: Boolean(
+        request &&
+        request.status === AttendanceRegularizationStatuses.Pending &&
+        actor.id !== request.employee_user_id &&
+        (canSeeAllAttendance(actor) ||
+          request.current_approver_user_id === actor.id),
+      ),
+      record: this.presentDay(
+        record,
+        this.timezoneForUser(record.employee_user_id, record.company_id),
+      ),
+      request: request ? this.presentRegularization(request) : null,
     };
   }
 
-  private exceptionDetail(record: Pick<AttendanceDayRecord, "exception_type" | "late_minutes" | "early_out_minutes" | "work_minutes" | "note">): string {
+  private exceptionDetail(
+    record: Pick<
+      AttendanceDayRecord,
+      | "exception_type"
+      | "late_minutes"
+      | "early_out_minutes"
+      | "work_minutes"
+      | "note"
+    >,
+  ): string {
     if (record.exception_type === "late") {
       return `Late by ${minutesToText(record.late_minutes)}`;
     }
@@ -1510,17 +2540,9 @@ export class AttendanceService {
     if (record.exception_type === "absent") {
       return "No punch-in recorded";
     }
-    return record.work_minutes > 0 ? minutesToHours(record.work_minutes) : "No attendance for this day";
-  }
-
-  private eventForDecision(decision: "approve" | "reject" | "return") {
-    if (decision === "approve") {
-      return attendanceEvents.RegularizationApproved;
-    }
-    if (decision === "reject") {
-      return attendanceEvents.RegularizationRejected;
-    }
-    return attendanceEvents.RegularizationReturned;
+    return record.work_minutes > 0
+      ? minutesToHours(record.work_minutes)
+      : "No attendance for this day";
   }
 }
 
