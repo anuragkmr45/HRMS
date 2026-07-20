@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   numeric,
+  primaryKey,
   pgSchema,
   text,
   timestamp,
@@ -202,12 +203,19 @@ export const idempotencyKeys = platform.table(
     requestHash: text("request_hash").notNull(),
     responseHash: text("response_hash"),
     status: text("status").notNull(),
+    resourceType: text("resource_type"),
+    resourceId: uuid("resource_id"),
+    responseStatus: integer("response_status"),
     createdAt,
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true })
   },
   (table) => [
     uniqueIndex("platform_idempotency_scope_actor_uq").on(table.scope, table.idempotencyKey, table.actorUserId),
-    index("platform_idempotency_expires_idx").on(table.expiresAt)
+    index("platform_idempotency_expires_idx").on(table.expiresAt),
+    index("platform_idempotency_resource_idx")
+      .on(table.resourceType, table.resourceId)
+      .where(sql`${table.resourceId} is not null`)
   ]
 );
 
@@ -440,16 +448,21 @@ export const adminSecuritySettings = platform.table(
   (table) => [uniqueIndex("platform_admin_security_settings_key_uq").on(table.settingsKey)]
 );
 
-export const processedEvents = platform.table("processed_events", {
-  consumerName: text("consumer_name").notNull(),
-  eventId: uuid("event_id").notNull(),
-  processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
-});
+export const processedEvents = platform.table(
+  "processed_events",
+  {
+    consumerName: text("consumer_name").notNull(),
+    eventId: uuid("event_id").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [primaryKey({ columns: [table.consumerName, table.eventId] })]
+);
 
 export const attendancePunchEvents = attendance.table(
   "punch_events",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
     eventType: text("event_type").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
@@ -460,15 +473,74 @@ export const attendancePunchEvents = attendance.table(
     deletedAt
   },
   (table) => [
-    index("attendance_punch_employee_occurred_idx").on(table.employeeUserId, table.occurredAt),
+    index("attendance_punch_company_employee_occurred_idx").on(table.companyId, table.employeeUserId, table.occurredAt),
     index("attendance_punch_event_type_idx").on(table.eventType, table.occurredAt)
   ]
+);
+
+export const attendanceSessions = attendance.table(
+  "sessions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    status: text("status").notNull(),
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    lastTransitionAt: timestamp("last_transition_at", { withTimezone: true }).notNull(),
+    workMode: text("work_mode").notNull(),
+    source: text("source").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    version,
+    createdAt,
+    updatedAt,
+    deletedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_sessions_id_company_uq").on(table.id, table.companyId),
+    uniqueIndex("attendance_sessions_single_open_idx").on(table.companyId, table.employeeUserId).where(sql`${table.closedAt} IS NULL AND ${table.deletedAt} IS NULL`),
+    index("attendance_sessions_employee_history_idx").on(table.companyId, table.employeeUserId, table.checkedInAt),
+    index("attendance_sessions_work_date_idx").on(table.companyId, table.workDate, table.employeeUserId)
+  ]
+);
+
+export const attendanceBreakSegments = attendance.table(
+  "break_segments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    sessionId: uuid("session_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_break_segments_single_active_idx").on(table.companyId, table.sessionId).where(sql`${table.endedAt} IS NULL`),
+    index("attendance_break_segments_session_history_idx").on(table.companyId, table.sessionId, table.startedAt)
+  ]
+);
+
+export const attendanceEmployeeCommandStates = attendance.table(
+  "employee_command_states",
+  {
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    state: text("state").notNull().default("not_checked_in"),
+    currentSessionId: uuid("current_session_id"),
+    version,
+    createdAt,
+    updatedAt
+  },
+  (table) => [primaryKey({ columns: [table.companyId, table.employeeUserId] })]
 );
 
 export const attendanceDailyRecords = attendance.table(
   "daily_records",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
     workDate: date("work_date").notNull(),
     status: text("status").notNull(),
@@ -488,7 +560,7 @@ export const attendanceDailyRecords = attendance.table(
     deletedAt
   },
   (table) => [
-    uniqueIndex("attendance_daily_employee_date_uq").on(table.employeeUserId, table.workDate),
+    uniqueIndex("attendance_daily_company_employee_date_uq").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_daily_status_date_idx").on(table.status, table.workDate),
     index("attendance_daily_exception_idx").on(table.exceptionType, table.workDate)
   ]
@@ -498,6 +570,7 @@ export const attendanceRegularizationRequests = attendance.table(
   "regularization_requests",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
     workDate: date("work_date").notNull(),
     reason: text("reason").notNull(),
@@ -513,7 +586,7 @@ export const attendanceRegularizationRequests = attendance.table(
     deletedAt
   },
   (table) => [
-    index("attendance_regularizations_employee_date_idx").on(table.employeeUserId, table.workDate),
+    index("attendance_regularizations_company_employee_date_idx").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_regularizations_queue_idx").on(table.status, table.currentApproverUserId, table.createdAt)
   ]
 );
@@ -583,6 +656,7 @@ export const holidays = leaveWfh.table(
   "holidays",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id"),
     name: text("name").notNull(),
     holidayDate: date("holiday_date").notNull(),
     region: text("region").notNull().default("All"),
@@ -593,8 +667,8 @@ export const holidays = leaveWfh.table(
     deletedAt
   },
   (table) => [
-    uniqueIndex("holidays_region_date_name_uq").on(table.region, table.holidayDate, table.name),
-    index("holidays_date_idx").on(table.holidayDate)
+    uniqueIndex("holidays_company_region_date_name_uq").on(table.companyId, table.region, table.holidayDate, table.name),
+    index("holidays_company_date_idx").on(table.companyId, table.holidayDate)
   ]
 );
 

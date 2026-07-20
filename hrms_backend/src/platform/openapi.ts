@@ -2107,7 +2107,10 @@ const attendancePunchBody = {
   required: ["event_type"],
   properties: {
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
-    occurred_at: dateTime("Punch timestamp"),
+    occurred_at: {
+      ...dateTime("Deprecated for real-time manual attendance. This value is ignored; the server selects the official occurrence time."),
+      deprecated: true
+    },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
     source: { type: "string", enum: ["web", "mobile", "kiosk", "admin"], default: "web", example: "web" },
     metadata: { type: "object", additionalProperties: true }
@@ -4226,8 +4229,24 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
     "Record punch",
-    "Records a check-in, break, resume, or check-out punch for the authenticated employee. Duplicate or out-of-sequence punches return 409 with next allowed actions.",
-    { body: attendancePunchBody, response200: { type: "object", additionalProperties: true } }
+    "Records a check-in, break, resume, or check-out punch for the authenticated employee. This mutation requires an Idempotency-Key: the first execution persists the result, a same-key/same-body retry replays that result without another attendance mutation, and a same-key/different-body retry returns 409. A concurrent in-progress key may return 409; duplicate and out-of-sequence punches also return 409 with next allowed actions.",
+    {
+      headers: {
+        type: "object",
+        required: ["idempotency-key"],
+        properties: {
+          "idempotency-key": {
+            type: "string",
+            minLength: 8,
+            maxLength: 200,
+            description: "Required client-generated key. Reuse only to retry the same validated attendance punch request.",
+            example: "attendance-punch-20260714-0001"
+          }
+        }
+      },
+      body: attendancePunchBody,
+      response200: { type: "object", additionalProperties: true }
+    }
   ),
   "GET /api/v1/attendance/punches/my": operation(
     "Attendance",
