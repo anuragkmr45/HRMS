@@ -79,7 +79,6 @@ export class AttendanceCommandService {
     actor: AuthUser;
     companyId: UUID;
     timeZone: string;
-    receivedAt: string;
     idempotencyKey: string;
     command: AttendanceCommandInput;
     policy: {
@@ -90,23 +89,20 @@ export class AttendanceCommandService {
       punchOutEnd: string;
       allowOffDayPunches: boolean;
       graceMinutes: number;
+      policyVersion: string;
     };
-    isWorkingDay: boolean;
+    isWorkingDayFor: (workDate: string) => boolean;
   }): Promise<Record<string, unknown>> {
     const pool = this.store.pgPool;
     if (!pool)
       throw new Error(
         "PostgreSQL attendance commands require a configured pgPool.",
       );
-    const requestedOccurredAt = input.command.occurred_at ?? null;
-    const occurredAt = input.command.occurred_at ?? input.receivedAt;
-    const workDate = dateInTimeZone(occurredAt, input.timeZone);
     const requestHash = canonicalAttendanceRequestHash({
       company_id: input.companyId,
       actor_user_id: input.actor.id,
       employee_user_id: input.actor.id,
       event_type: input.command.event_type,
-      occurred_at: requestedOccurredAt,
       work_mode: input.command.work_mode,
       source: input.command.source,
       metadata: input.command.metadata,
@@ -130,10 +126,8 @@ export class AttendanceCommandService {
               input.companyId,
             );
           }
-          const state = await tx.ensureAndLockEmployeeState(
-            input.companyId,
-            input.actor.id,
-          );
+          const occurredAt = await tx.getTransactionTimestamp();
+          const workDate = dateInTimeZone(occurredAt, input.timeZone);
           const command = await tx.createCommandExecution({
             companyId: input.companyId,
             actorUserId: input.actor.id,
@@ -144,14 +138,35 @@ export class AttendanceCommandService {
             commandType: input.command.event_type,
             occurredAt,
             requestSnapshot: {
-              occurred_at: requestedOccurredAt,
-              effective_occurred_at: occurredAt,
               work_date: workDate,
               work_mode: input.command.work_mode,
               source: input.command.source,
               metadata: input.command.metadata,
             },
           });
+          const evidencePayload = {
+            schema_version: 1,
+            command_type: input.command.event_type,
+            work_mode: input.command.work_mode,
+            source_channel: input.command.source,
+          };
+          const evidencePayloadHash = canonicalJsonHash(evidencePayload);
+          const evidence = await tx.createAttendanceEvidenceEvent({
+            companyId: input.companyId,
+            employeeUserId: input.actor.id,
+            actorUserId: input.actor.id,
+            commandExecutionId: command.id,
+            eventType: input.command.event_type,
+            source: input.command.source,
+            occurredAt,
+            receivedAt: occurredAt,
+            payload: evidencePayload,
+            payloadHash: evidencePayloadHash,
+          });
+          const state = await tx.ensureAndLockEmployeeState(
+            input.companyId,
+            input.actor.id,
+          );
           const open = await tx.findOpenSessionForUpdate(
             input.companyId,
             input.actor.id,
@@ -165,24 +180,55 @@ export class AttendanceCommandService {
             occurredAt,
             input.timeZone,
             input.policy,
-            input.isWorkingDay,
+            input.isWorkingDayFor(workDate),
             state.state,
           );
-          if (
+          const denied =
             !stateDecision.allowed ||
-            policyReason ||
-            (open?.last_transition_at &&
-              Date.parse(occurredAt) < Date.parse(open.last_transition_at))
-          ) {
-            const reason = !stateDecision.allowed
-              ? stateDecision.reason_detail
-              : (policyReason ??
-                "Client timestamp precedes the previous session transition.");
-            const code = !stateDecision.allowed
-              ? stateDecision.reason_code
-              : policyReason
-                ? "policy_window_rejected"
-                : "invalid_chronology";
+            Boolean(policyReason) ||
+            Boolean(
+              open?.last_transition_at &&
+                Date.parse(occurredAt) < Date.parse(open.last_transition_at),
+            );
+          const reason = !stateDecision.allowed
+            ? (stateDecision.reason_detail ?? "Attendance command was denied.")
+            : (policyReason ??
+              "Attendance timestamp precedes the previous session transition.");
+          const code = !stateDecision.allowed
+            ? (stateDecision.reason_code ?? "invalid_state_transition")
+            : policyReason
+              ? "policy_window_rejected"
+              : "invalid_chronology";
+          const auditDecision = await tx.createAttendanceAuditDecision({
+            companyId: input.companyId,
+            employeeUserId: input.actor.id,
+            attendanceEventId: evidence.id,
+            commandExecutionId: command.id,
+            decisionType: "manual_attendance",
+            outcome: denied ? "failed" : "passed",
+            policyKey: "attendance",
+            policyVersion: input.policy.policyVersion,
+            evaluatedAt: occurredAt,
+            evidenceDigest: evidencePayloadHash,
+            policySnapshot: input.policy,
+            evaluationContext: {
+              command_type: input.command.event_type,
+              previous_state: state.state,
+              open_session_id: open?.id ?? null,
+              occurred_at: occurredAt,
+              work_date: workDate,
+            },
+          });
+          if (denied) {
+            await tx.createAttendanceDecisionReason({
+              attendanceDecisionId: auditDecision.id,
+              companyId: input.companyId,
+              reasonCode: code,
+              category: policyReason ? "policy" : "state",
+              severity: "error",
+              ordinal: 0,
+              details: { reason_detail: reason },
+            });
             const previous = state.state;
             const decision = await tx.createDecision({
               commandExecutionId: command.id,
@@ -196,6 +242,8 @@ export class AttendanceCommandService {
               policySnapshot: input.policy,
               evidenceSnapshot: {
                 state,
+                attendance_event_id: evidence.id,
+                evidence_payload_hash: evidencePayloadHash,
                 open_session_id: open?.id ?? null,
                 occurred_at: occurredAt,
               },
@@ -244,6 +292,8 @@ export class AttendanceCommandService {
             policySnapshot: input.policy,
             evidenceSnapshot: {
               state,
+              attendance_event_id: evidence.id,
+              evidence_payload_hash: evidencePayloadHash,
               open_session_id: open?.id ?? null,
               occurred_at: occurredAt,
             },
@@ -296,6 +346,7 @@ export class AttendanceCommandService {
             input.command.work_mode,
             input.policy.graceMinutes,
             input.timeZone,
+            occurredAt,
           );
           await tx.insertOutboxEvent(
             buildPunchRecordedEvent({
@@ -571,9 +622,11 @@ type CommandPolicy = {
   graceMinutes: number;
 };
 type PunchProjectionRow = {
-  event_type: AttendancePunchEventType;
-  occurred_at: string;
-  work_mode: string;
+  session_id: UUID;
+  checked_in_at: Date;
+  closed_at: Date | null;
+  event_type: AttendancePunchEventType | null;
+  occurred_at: Date | null;
 } & Record<string, unknown>;
 function policyBlocked(
   type: AttendancePunchEventType,
@@ -635,45 +688,88 @@ async function projectDay(
   workDate: string,
   workMode: string,
   grace: number,
-  timeZone: string,
+  _timeZone: string,
+  asOf: string,
 ): Promise<Record<string, unknown>> {
-  const punches = (
+  const asOfDate = new Date(asOf);
+  if (Number.isNaN(asOfDate.getTime())) {
+    throw new Error("Attendance projection received an invalid asOf timestamp.");
+  }
+  const sessionPunches = (
     await tx.query<PunchProjectionRow>(
-      `SELECT event_type, occurred_at, work_mode FROM attendance.punch_events WHERE company_id=$1 AND employee_user_id=$2 AND deleted_at IS NULL AND occurred_at >= $3::date AND occurred_at < ($3::date + interval '2 days') ORDER BY occurred_at`,
+      `SELECT s.id AS session_id, s.checked_in_at, s.closed_at,
+          p.event_type, p.occurred_at
+        FROM attendance.sessions s
+        LEFT JOIN attendance.punch_events p
+          ON p.session_id = s.id
+          AND p.company_id = s.company_id
+          AND p.employee_user_id = s.employee_user_id
+          AND p.deleted_at IS NULL
+        WHERE s.company_id = $1
+          AND s.employee_user_id = $2
+          AND s.work_date = $3::date
+          AND s.deleted_at IS NULL
+        ORDER BY s.checked_in_at, p.occurred_at, p.id`,
       [companyId, employeeId, workDate],
     )
   ).rows;
-  const checkIn =
-    punches.find((p) => p.event_type === "check_in")?.occurred_at ?? null;
-  const checkOut =
-    punches.filter((p) => p.event_type === "check_out").at(-1)?.occurred_at ??
-    null;
-  let breakStart: string | null = null,
-    breaks = 0;
-  for (const p of punches) {
-    if (p.event_type === "break_start") {
-      breakStart = p.occurred_at;
-    } else if (p.event_type === "break_end" && breakStart !== null) {
-      const breakStartedAt = breakStart;
-      breaks += Math.max(
-        0,
-        Math.round(
-          (Date.parse(p.occurred_at) - Date.parse(breakStartedAt)) / 60000,
-        ),
-      );
-      breakStart = null;
+  const sessions = new Map<
+    UUID,
+    {
+      checkedInAt: Date;
+      closedAt: Date | null;
+      punches: PunchProjectionRow[];
     }
+  >();
+  for (const row of sessionPunches) {
+    const session = sessions.get(row.session_id) ?? {
+      checkedInAt: row.checked_in_at,
+      closedAt: row.closed_at,
+      punches: [],
+    };
+    if (row.event_type && row.occurred_at) session.punches.push(row);
+    sessions.set(row.session_id, session);
   }
-  const work = checkIn
-    ? Math.max(
-        0,
-        Math.round(
-          ((checkOut ? Date.parse(checkOut) : Date.now()) -
-            Date.parse(checkIn)) /
-            60000,
-        ) - breaks,
-      )
-    : 0;
+  const orderedSessions = [...sessions.values()].sort(
+    (a, b) => a.checkedInAt.getTime() - b.checkedInAt.getTime(),
+  );
+  const checkIn = orderedSessions[0]?.checkedInAt.toISOString() ?? null;
+  const checkOut =
+    orderedSessions
+      .map((session) => session.closedAt)
+      .filter((value): value is Date => value !== null)
+      .at(-1)
+      ?.toISOString() ?? null;
+  let breaks = 0;
+  let work = 0;
+  for (const session of orderedSessions) {
+    let breakStart: Date | null = null;
+    for (const punch of session.punches) {
+      if (punch.event_type === "break_start" && punch.occurred_at) {
+        breakStart = punch.occurred_at;
+      } else if (
+        punch.event_type === "break_end" &&
+        punch.occurred_at &&
+        breakStart
+      ) {
+        breaks += Math.max(
+          0,
+          Math.round(
+            (punch.occurred_at.getTime() - breakStart.getTime()) / 60000,
+          ),
+        );
+        breakStart = null;
+      }
+    }
+    const sessionEnd = session.closedAt ?? asOfDate;
+    work += Math.max(
+      0,
+      Math.round(
+        (sessionEnd.getTime() - session.checkedInAt.getTime()) / 60000,
+      ),
+    );
+  }
+  work = Math.max(0, work - breaks);
   const status =
     workMode === "wfh"
       ? AttendanceDayStatuses.Wfh

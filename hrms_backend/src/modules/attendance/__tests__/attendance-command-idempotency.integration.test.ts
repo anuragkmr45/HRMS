@@ -14,6 +14,10 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
 
   await pool.query(`
     TRUNCATE TABLE
+      attendance.decision_reasons,
+      attendance.attendance_decisions,
+      attendance.location_evidence,
+      attendance.attendance_events,
       attendance.punch_events,
       attendance.command_decisions,
       attendance.command_executions,
@@ -84,6 +88,7 @@ describe("PostgreSQL attendance command idempotency", () => {
     };
     const payload = {
       event_type: "check_in",
+      occurred_at: "2001-01-01T00:00:00.000Z",
       work_mode: "office",
       source: "web",
       metadata: {
@@ -108,12 +113,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       headers,
       payload: {
         ...payload,
-        metadata: {
-          coordinates: [77.594566, 12.971599],
-          longitude: 77.594566,
-          latitude: 12.971599,
-          device: { attestation: "private-attestation", os: "android" },
-        },
+        occurred_at: "2099-12-31T23:59:59.000Z",
       },
     });
     expect(replay.statusCode).toBe(200);
@@ -129,6 +129,8 @@ describe("PostgreSQL attendance command idempotency", () => {
       platform_keys: string;
       commands: string;
       decisions: string;
+      audit_decisions: string;
+      evidence: string;
       sessions: string;
       punches: string;
       outbox_events: string;
@@ -137,6 +139,8 @@ describe("PostgreSQL attendance command idempotency", () => {
         (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1) AS platform_keys,
         (SELECT count(*) FROM attendance.command_executions WHERE idempotency_key = $1) AS commands,
         (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = $2) AS decisions,
+        (SELECT count(*) FROM attendance.attendance_events WHERE command_execution_id = $2) AS evidence,
+        (SELECT count(*) FROM attendance.attendance_decisions WHERE command_execution_id = $2) AS audit_decisions,
         (SELECT count(*) FROM attendance.sessions WHERE id = $3) AS sessions,
         (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = $2) AS punches,
         (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id = $4) AS outbox_events`,
@@ -151,10 +155,121 @@ describe("PostgreSQL attendance command idempotency", () => {
       platform_keys: "1",
       commands: "1",
       decisions: "1",
+      audit_decisions: "1",
+      evidence: "1",
       sessions: "1",
       punches: "1",
       outbox_events: "1",
     });
+
+    const expectedPolicyVersion = String(
+      app.store.adminPolicies.find(
+        (candidate) =>
+          candidate.company_id === first.json().punch.company_id &&
+          candidate.policy_key === "attendance" &&
+          candidate.status === "active" &&
+          !candidate.deleted_at,
+      )?.version ?? "built-in-default",
+    );
+    const ledger = await app.store.pgPool!.query<{
+      evidence_id: string;
+      evidence_command_id: string;
+      audit_event_id: string;
+      audit_command_id: string;
+      command_decision_command_id: string;
+      policy_version: string;
+      payload: Record<string, unknown>;
+      payload_hash: string;
+      evidence_digest: string;
+      location_rows: string;
+    }>(
+      `SELECT evidence.id AS evidence_id,
+          evidence.command_execution_id AS evidence_command_id,
+          audit.attendance_event_id AS audit_event_id,
+          audit.command_execution_id AS audit_command_id,
+          command_decision.command_execution_id AS command_decision_command_id,
+          audit.policy_version,
+          evidence.payload,
+          evidence.payload_hash,
+          audit.evidence_digest,
+          (SELECT count(*) FROM attendance.location_evidence location
+            WHERE location.attendance_event_id = evidence.id) AS location_rows
+        FROM attendance.attendance_events evidence
+        JOIN attendance.attendance_decisions audit
+          ON audit.command_execution_id = evidence.command_execution_id
+        JOIN attendance.command_decisions command_decision
+          ON command_decision.command_execution_id = evidence.command_execution_id
+        WHERE evidence.command_execution_id = $1`,
+      [first.json().command_id],
+    );
+    expect(ledger.rows).toHaveLength(1);
+    expect(ledger.rows[0]).toMatchObject({
+      evidence_command_id: first.json().command_id,
+      audit_event_id: ledger.rows[0]?.evidence_id,
+      audit_command_id: first.json().command_id,
+      command_decision_command_id: first.json().command_id,
+      policy_version: expectedPolicyVersion,
+      payload_hash: ledger.rows[0]?.evidence_digest,
+      location_rows: "0",
+    });
+    const evidencePayload = ledger.rows[0]?.payload;
+    expect(evidencePayload).toEqual({
+      schema_version: 1,
+      command_type: "check_in",
+      work_mode: "office",
+      source_channel: "web",
+    });
+    for (const excludedField of [
+      "occurred_at",
+      "metadata",
+      "latitude",
+      "longitude",
+      "coordinates",
+      "device",
+      "attestation",
+    ]) {
+      expect(evidencePayload).not.toHaveProperty(excludedField);
+    }
+
+    const timestamps = await app.store.pgPool!.query<{
+      command_at: Date;
+      evidence_at: Date;
+      received_at: Date;
+      evaluated_at: Date;
+      session_at: Date;
+      punch_at: Date;
+    }>(
+      `SELECT command.occurred_at AS command_at,
+          evidence.occurred_at AS evidence_at,
+          evidence.received_at,
+          audit.evaluated_at,
+          session.checked_in_at AS session_at,
+          punch.occurred_at AS punch_at
+        FROM attendance.command_executions command
+        JOIN attendance.attendance_events evidence ON evidence.command_execution_id = command.id
+        JOIN attendance.attendance_decisions audit ON audit.command_execution_id = command.id
+        JOIN attendance.sessions session ON session.id = command.session_id
+        JOIN attendance.punch_events punch ON punch.id = command.punch_event_id
+        WHERE command.id = $1`,
+      [first.json().command_id],
+    );
+    const timestampRow = timestamps.rows[0];
+    expect(timestampRow).toBeDefined();
+    const commandTime = timestampRow!.command_at.toISOString();
+    expect(commandTime).not.toBe(payload.occurred_at);
+    expect([
+      timestampRow!.evidence_at,
+      timestampRow!.received_at,
+      timestampRow!.evaluated_at,
+      timestampRow!.session_at,
+      timestampRow!.punch_at,
+    ].map((value) => value.toISOString())).toEqual([
+      commandTime,
+      commandTime,
+      commandTime,
+      commandTime,
+      commandTime,
+    ]);
 
     const outbox = await app.store.pgPool!.query<{
       aggregate_id: string;
@@ -182,6 +297,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       },
     });
     const persistedPayload = outbox.rows[0]?.payload;
+    expect(persistedPayload?.occurred_at).toBe(commandTime);
     expect(Object.keys(persistedPayload ?? {}).sort()).toEqual(
       [
         "schema_version",
@@ -242,6 +358,162 @@ describe("PostgreSQL attendance command idempotency", () => {
     );
   });
 
+  it("uses the built-in attendance policy when no active policy is persisted", async () => {
+    const policy = app.store.adminPolicies.find(
+      (candidate) => candidate.policy_key === "attendance",
+    );
+    if (!policy) throw new Error("Attendance policy fixture is unavailable.");
+    policy.status = "inactive";
+
+    const employee = await loginAs(app, "E1");
+    const idempotencyKey = "attendance-idempotency-built-in-policy-001";
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: {
+        ...authHeader(employee.token),
+        "idempotency-key": idempotencyKey,
+      },
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+      },
+    });
+    expect(response.statusCode).toBeLessThan(500);
+
+    const audit = await app.store.pgPool!.query<{ policy_version: string }>(
+      `SELECT audit.policy_version
+        FROM attendance.attendance_decisions audit
+        JOIN attendance.command_executions command
+          ON command.id = audit.command_execution_id
+        WHERE command.idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]?.policy_version).toBe("built-in-default");
+  });
+
+  it("projects separate session intervals and their session-owned breaks", async () => {
+    const employee = await loginAs(app, "E1");
+    const pool = app.store.pgPool!;
+    const companyId = app.store.userSessionPreferences.find(
+      (preference) => preference.user_id === employee.user.id,
+    )?.company_id;
+    if (!companyId) throw new Error("Employee company fixture is unavailable.");
+    const timeZone =
+      app.store.users.find((user) => user.id === employee.user.id)?.timezone ??
+      app.store.companyProfiles.find((company) => company.id === companyId)
+        ?.timezone ??
+      "Asia/Kolkata";
+    const clock = await pool.query<{ work_date: string; as_of: Date }>(
+      `SELECT (transaction_timestamp() AT TIME ZONE $1)::date::text AS work_date,
+          transaction_timestamp() AS as_of`,
+      [timeZone],
+    );
+    const workDate = clock.rows[0]?.work_date;
+    const asOf = clock.rows[0]?.as_of;
+    if (!workDate || !asOf) throw new Error("Fixture clock is unavailable.");
+    const firstCheckIn = new Date(asOf.getTime() - 210 * 60_000);
+    const firstCheckOut = new Date(asOf.getTime() - 150 * 60_000);
+    const secondCheckIn = new Date(asOf.getTime() - 90 * 60_000);
+
+    const firstSession = await pool.query<{
+      id: string;
+      checked_in_at: Date;
+    }>(
+      `INSERT INTO attendance.sessions (
+        company_id, employee_user_id, work_date, status, checked_in_at,
+        closed_at, active_break_started_at, last_transition_at, work_mode,
+        source, metadata, version, created_at, updated_at, deleted_at
+      ) VALUES ($1, $2, $3::date, 'closed', $4, $5, NULL, $5, 'office', 'web',
+        '{}'::jsonb, 1, $4, $5, NULL)
+      RETURNING id, checked_in_at`,
+      [companyId, employee.user.id, workDate, firstCheckIn, firstCheckOut],
+    );
+    const secondSession = await pool.query<{ id: string; checked_in_at: Date }>(
+      `INSERT INTO attendance.sessions (
+        company_id, employee_user_id, work_date, status, checked_in_at,
+        closed_at, active_break_started_at, last_transition_at, work_mode,
+        source, metadata, version, created_at, updated_at, deleted_at
+      ) VALUES ($1, $2, $3::date, 'working', $4, NULL, NULL, $4, 'office', 'web',
+        '{}'::jsonb, 1, $4, $4, NULL)
+      RETURNING id, checked_in_at`,
+      [companyId, employee.user.id, workDate, secondCheckIn],
+    );
+    const firstSessionId = firstSession.rows[0]?.id;
+    const secondSessionId = secondSession.rows[0]?.id;
+    const secondSessionCheckIn = secondSession.rows[0]?.checked_in_at;
+    if (!firstSessionId || !secondSessionId || !secondSessionCheckIn) {
+      throw new Error("Fixture sessions were not created.");
+    }
+    await pool.query(
+      `INSERT INTO attendance.employee_command_states (
+        company_id, employee_user_id, state, current_session_id, version,
+        created_at, updated_at
+      ) VALUES ($1, $2, 'working', $3, 1, now(), now())`,
+      [companyId, employee.user.id, secondSessionId],
+    );
+    await pool.query(
+      `INSERT INTO attendance.punch_events (
+        company_id, employee_user_id, event_type, occurred_at, work_mode,
+        source, metadata, session_id, created_at, deleted_at
+      ) VALUES
+        ($1, $2, 'break_start', $3::timestamptz + interval '30 minutes', 'office', 'web', '{}'::jsonb, $4, now(), NULL),
+        ($1, $2, 'break_end', $3::timestamptz + interval '45 minutes', 'office', 'web', '{}'::jsonb, $4, now(), NULL)`,
+      [companyId, employee.user.id, secondSessionCheckIn, secondSessionId],
+    );
+
+    const checkOut = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: {
+        ...authHeader(employee.token),
+        "idempotency-key": "attendance-idempotency-projection-sessions-001",
+      },
+      payload: {
+        event_type: "check_out",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+      },
+    });
+    expect(checkOut.statusCode).toBe(200);
+
+    const projection = await pool.query<{
+      work_date: string;
+      first_check_in: Date;
+      last_check_out: Date;
+      work_minutes: number;
+      break_minutes: number;
+      final_checkout: Date;
+    }>(
+      `SELECT day.work_date::text, day.first_check_in, day.last_check_out,
+          day.work_minutes, day.break_minutes, punch.occurred_at AS final_checkout
+        FROM attendance.daily_records day
+        JOIN attendance.punch_events punch ON punch.id = $3
+        WHERE day.company_id = $1
+          AND day.employee_user_id = $2
+          AND day.work_date = $4::date`,
+      [companyId, employee.user.id, checkOut.json().punch_id, workDate],
+    );
+    const row = projection.rows[0];
+    expect(row).toBeDefined();
+    expect(row).toMatchObject({
+      work_date: workDate,
+      work_minutes: 135,
+      break_minutes: 15,
+    });
+    expect(row!.work_minutes + row!.break_minutes).toBe(150);
+    expect(row!.first_check_in.toISOString()).toBe(
+      firstSession.rows[0]!.checked_in_at.toISOString(),
+    );
+    expect(row!.last_check_out.toISOString()).toBe(
+      row!.final_checkout.toISOString(),
+    );
+  });
+
   it("persists and replays a denied command as HTTP 409", async () => {
     const employee = await loginAs(app, "E1");
     const headers = {
@@ -249,7 +521,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       "idempotency-key": "attendance-idempotency-denied-001",
     };
     const payload = {
-      event_type: "break_end",
+      event_type: "check_out",
       work_mode: "office",
       source: "web",
       metadata: {},
@@ -278,6 +550,9 @@ describe("PostgreSQL attendance command idempotency", () => {
     const counts = await app.store.pgPool!.query<{
       commands: string;
       decisions: string;
+      audit_decisions: string;
+      evidence: string;
+      reasons: string;
       platform_keys: string;
       punch_events: string;
       outbox_events: string;
@@ -287,6 +562,17 @@ describe("PostgreSQL attendance command idempotency", () => {
         (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = (
           SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
         )) AS decisions,
+        (SELECT count(*) FROM attendance.attendance_events WHERE command_execution_id = (
+          SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
+        )) AS evidence,
+        (SELECT count(*) FROM attendance.attendance_decisions WHERE command_execution_id = (
+          SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
+        )) AS audit_decisions,
+        (SELECT count(*) FROM attendance.decision_reasons WHERE attendance_decision_id = (
+          SELECT id FROM attendance.attendance_decisions WHERE command_execution_id = (
+            SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
+          )
+        )) AS reasons,
         (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1 AND status = 'completed' AND response_status = 409) AS platform_keys,
         (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = (
           SELECT id FROM attendance.command_executions WHERE idempotency_key = $1
@@ -297,6 +583,9 @@ describe("PostgreSQL attendance command idempotency", () => {
     expect(counts.rows[0]).toEqual({
       commands: "1",
       decisions: "1",
+      audit_decisions: "1",
+      evidence: "1",
+      reasons: "1",
       platform_keys: "1",
       punch_events: "0",
       outbox_events: "0",
@@ -337,12 +626,36 @@ describe("PostgreSQL attendance command idempotency", () => {
         },
       });
       expect(response.statusCode).toBe(500);
-      const counts = await pool.query<{ punches: string; outbox: string }>(
+      const counts = await pool.query<{
+        commands: string;
+        command_decisions: string;
+        audit_decisions: string;
+        evidence: string;
+        sessions: string;
+        punches: string;
+        outbox: string;
+        completed_keys: string;
+      }>(
         `SELECT
+          (SELECT count(*) FROM attendance.command_executions) AS commands,
+          (SELECT count(*) FROM attendance.command_decisions) AS command_decisions,
+          (SELECT count(*) FROM attendance.attendance_decisions) AS audit_decisions,
+          (SELECT count(*) FROM attendance.attendance_events) AS evidence,
+          (SELECT count(*) FROM attendance.sessions) AS sessions,
           (SELECT count(*) FROM attendance.punch_events) AS punches,
-          (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox`,
+          (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox,
+          (SELECT count(*) FROM platform.idempotency_keys WHERE status = 'completed') AS completed_keys`,
       );
-      expect(counts.rows[0]).toEqual({ punches: "0", outbox: "0" });
+      expect(counts.rows[0]).toEqual({
+        commands: "0",
+        command_decisions: "0",
+        audit_decisions: "0",
+        evidence: "0",
+        sessions: "0",
+        punches: "0",
+        outbox: "0",
+        completed_keys: "0",
+      });
     } finally {
       await pool.query(`
         DROP TRIGGER IF EXISTS attendance_outbox_test_failure_trg ON platform.outbox_events;

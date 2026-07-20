@@ -2107,7 +2107,10 @@ const attendancePunchBody = {
   required: ["event_type"],
   properties: {
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
-    occurred_at: dateTime("Punch timestamp"),
+    occurred_at: {
+      ...dateTime("Deprecated for real-time manual attendance. This value is ignored; the server selects the official occurrence time."),
+      deprecated: true
+    },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
     source: { type: "string", enum: ["web", "mobile", "kiosk", "admin"], default: "web", example: "web" },
     metadata: { type: "object", additionalProperties: true }

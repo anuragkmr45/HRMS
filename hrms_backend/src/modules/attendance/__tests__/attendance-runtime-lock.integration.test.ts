@@ -28,6 +28,10 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
 
   await pool.query(`
     TRUNCATE TABLE
+      attendance.decision_reasons,
+      attendance.attendance_decisions,
+      attendance.location_evidence,
+      attendance.attendance_events,
       attendance.punch_events,
       attendance.command_decisions,
       attendance.command_executions,

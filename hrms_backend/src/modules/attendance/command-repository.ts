@@ -83,6 +83,14 @@ export interface AttendanceCommandDecisionRecord {
   created_at: string;
 }
 
+export interface AttendanceEvidenceEventRecord {
+  id: UUID;
+}
+
+export interface AttendanceAuditDecisionRecord {
+  id: UUID;
+}
+
 export interface CreateAttendanceCommandInput {
   companyId: UUID;
   actorUserId: UUID;
@@ -195,6 +203,17 @@ export class AttendanceCommandTransactionRepository {
     values?: unknown[],
   ) {
     return this.client.query<T>(text, values);
+  }
+
+  async getTransactionTimestamp(): Promise<string> {
+    const result = await this.client.query<{ occurred_at: Date }>(
+      "SELECT transaction_timestamp() AS occurred_at",
+    );
+    const timestamp = result.rows[0]?.occurred_at;
+    if (!timestamp) {
+      throw new Error("PostgreSQL transaction timestamp is unavailable.");
+    }
+    return timestamp.toISOString();
   }
 
   async findPlatformIdempotencyKeyForUpdate(input: {
@@ -518,6 +537,112 @@ export class AttendanceCommandTransactionRepository {
     }
 
     return decision;
+  }
+
+  async createAttendanceEvidenceEvent(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    actorUserId: UUID;
+    commandExecutionId: UUID;
+    eventType: AttendancePunchEventType;
+    source: string;
+    occurredAt: string;
+    receivedAt: string;
+    payload: Record<string, unknown>;
+    payloadHash: string;
+  }): Promise<AttendanceEvidenceEventRecord> {
+    const result = await this.client.query<AttendanceEvidenceEventRecord>(
+      `INSERT INTO attendance.attendance_events (
+          company_id, employee_user_id, actor_user_id, command_execution_id,
+          event_type, source, occurred_at, received_at, schema_version, payload,
+          payload_hash
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10)
+        RETURNING id`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.actorUserId,
+        input.commandExecutionId,
+        input.eventType,
+        input.source,
+        input.occurredAt,
+        input.receivedAt,
+        JSON.stringify(input.payload),
+        input.payloadHash,
+      ],
+    );
+    const event = result.rows[0];
+    if (!event) throw new Error("Attendance evidence event was not created.");
+    return event;
+  }
+
+  async createAttendanceAuditDecision(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    attendanceEventId: UUID;
+    commandExecutionId: UUID;
+    decisionType: string;
+    outcome: "passed" | "failed" | "not_applicable" | "indeterminate";
+    policyKey: string;
+    policyVersion: string;
+    evaluatorVersion?: string | null;
+    evaluatedAt: string;
+    evidenceDigest: string;
+    policySnapshot: Record<string, unknown>;
+    evaluationContext: Record<string, unknown>;
+  }): Promise<AttendanceAuditDecisionRecord> {
+    const result = await this.client.query<AttendanceAuditDecisionRecord>(
+      `INSERT INTO attendance.attendance_decisions (
+          company_id, employee_user_id, attendance_event_id, command_execution_id,
+          decision_type, outcome, policy_key, policy_version, evaluator_version,
+          evaluated_at, evidence_digest, policy_snapshot, evaluation_context
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)
+        RETURNING id`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.attendanceEventId,
+        input.commandExecutionId,
+        input.decisionType,
+        input.outcome,
+        input.policyKey,
+        input.policyVersion,
+        input.evaluatorVersion ?? null,
+        input.evaluatedAt,
+        input.evidenceDigest,
+        JSON.stringify(input.policySnapshot),
+        JSON.stringify(input.evaluationContext),
+      ],
+    );
+    const decision = result.rows[0];
+    if (!decision) throw new Error("Attendance audit decision was not created.");
+    return decision;
+  }
+
+  async createAttendanceDecisionReason(input: {
+    attendanceDecisionId: UUID;
+    companyId: UUID;
+    reasonCode: string;
+    category: string;
+    severity: string;
+    ordinal: number;
+    details: Record<string, unknown>;
+  }): Promise<void> {
+    await this.client.query(
+      `INSERT INTO attendance.decision_reasons (
+          attendance_decision_id, company_id, reason_code, category, severity,
+          ordinal, details
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [
+        input.attendanceDecisionId,
+        input.companyId,
+        input.reasonCode,
+        input.category,
+        input.severity,
+        input.ordinal,
+        JSON.stringify(input.details),
+      ],
+    );
   }
 
   async completeCommand(

@@ -332,6 +332,7 @@ interface AttendancePunchPolicy {
   autoPunchOutEnabled: boolean;
   autoPunchOutTime: string;
   allowOffDayPunches: boolean;
+  policyVersion: string;
 }
 
 interface PunchAvailability {
@@ -2065,21 +2066,15 @@ export class AttendanceService {
     const companyId = context.companyId;
     if (!this.store.pgPool)
       throw conflict("Attendance command service is unavailable.");
-    const receivedAt = nowIso();
-    const occurredAt = input.occurred_at ?? receivedAt;
     const timeZone = this.timezoneForUser(actor.id, companyId);
     return new AttendanceCommandService(this.store).execute({
       actor,
       companyId,
       timeZone,
-      receivedAt,
       idempotencyKey: input.idempotency_key,
       command: input,
       policy: this.attendancePolicy(companyId),
-      isWorkingDay: this.isWorkingDay(
-        companyId,
-        dateInTimeZone(occurredAt, timeZone),
-      ),
+      isWorkingDayFor: (workDate) => this.isWorkingDay(companyId, workDate),
     });
   }
 
@@ -2163,6 +2158,7 @@ export class AttendanceService {
       autoPunchOutEnabled: booleanConfig(config, "autoPunchOutEnabled", true),
       autoPunchOutTime: timeConfig(config, "autoPunchOutTime", "23:59"),
       allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false),
+      policyVersion: policy ? String(policy.version) : "built-in-default",
     };
   }
 
