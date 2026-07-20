@@ -110,6 +110,7 @@ export interface CreateAttendanceDecisionInput {
 
 export interface CompleteAttendanceCommandInput {
   commandExecutionId: UUID;
+  companyId: UUID;
   status: "denied" | "completed";
   sessionId?: UUID | null;
   punchEventId?: UUID | null;
@@ -278,13 +279,16 @@ export class AttendanceCommandTransactionRepository {
 
   async findCommandExecutionById(
     commandExecutionId: UUID,
+    companyId: UUID,
   ): Promise<AttendanceCommandExecutionRecord | null> {
     const result = await this.client.query<AttendanceCommandExecutionRecord>(
       `SELECT id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id, idempotency_key,
           request_hash, command_type, occurred_at, status, session_id,
           punch_event_id, request_snapshot, response_snapshot, completed_at, created_at
-        FROM attendance.command_executions WHERE id = $1`,
-      [commandExecutionId],
+        FROM attendance.command_executions
+        WHERE id = $1
+          AND company_id = $2`,
+      [commandExecutionId, companyId],
     );
     return result.rows[0] ?? null;
   }
@@ -527,6 +531,7 @@ export class AttendanceCommandTransactionRepository {
             response_snapshot = $5::jsonb,
             completed_at = now()
         WHERE id = $1
+          AND company_id = $6
         RETURNING
           id,
           company_id,
@@ -549,6 +554,7 @@ export class AttendanceCommandTransactionRepository {
         input.sessionId ?? null,
         input.punchEventId ?? null,
         JSON.stringify(input.responseSnapshot),
+        input.companyId,
       ],
     );
 

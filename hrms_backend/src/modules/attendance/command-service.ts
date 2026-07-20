@@ -123,7 +123,12 @@ export class AttendanceCommandService {
             requestHash,
           });
           if (platformKey.status === "completed") {
-            return this.replayCompletedCommand(tx, platformKey, requestHash);
+            return this.replayCompletedCommand(
+              tx,
+              platformKey,
+              requestHash,
+              input.companyId,
+            );
           }
           const state = await tx.ensureAndLockEmployeeState(
             input.companyId,
@@ -206,6 +211,7 @@ export class AttendanceCommandService {
             };
             await tx.completeCommand({
               commandExecutionId: command.id,
+              companyId: input.companyId,
               status: "denied",
               responseSnapshot: response,
             });
@@ -334,6 +340,7 @@ export class AttendanceCommandService {
           };
           await tx.completeCommand({
             commandExecutionId: command.id,
+            companyId: input.companyId,
             status: "completed",
             sessionId: session.id,
             punchEventId: punch.id,
@@ -423,6 +430,7 @@ export class AttendanceCommandService {
     tx: AttendanceCommandTransactionRepository,
     key: PlatformIdempotencyKeyRecord,
     requestHash: string,
+    companyId: UUID,
   ): Promise<AttendanceCommandOutcome> {
     if (key.status !== "completed") {
       throw new Error("Completed platform idempotency key is inconsistent.");
@@ -439,7 +447,10 @@ export class AttendanceCommandService {
     ) {
       throw new Error("Completed platform idempotency key is inconsistent.");
     }
-    const command = await tx.findCommandExecutionById(key.resource_id);
+    const command = await tx.findCommandExecutionById(
+      key.resource_id,
+      companyId,
+    );
     if (
       !command?.response_snapshot ||
       command.platform_idempotency_key_id !== key.id
