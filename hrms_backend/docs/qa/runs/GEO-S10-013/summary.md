@@ -34,4 +34,3 @@ Created `hrms-client/docs/attendance/GEO-S10-013-admin-policy-ux-spec.md`.
 - Confirm every current attendance policy field appears in the migration table.
 - Confirm manual-only migration never enables location collection.
 - Confirm this planning task changes no production policy behavior.
-

@@ -30,4 +30,3 @@ The tracker marked this task `Tested successfully`, but no task-specific artifac
 - Validate unique IDs and all tenant/user/policy/shift/site/evidence/precondition references.
 - Run `git diff --check` and ASCII validation.
 - Do not mark v2 scenarios as executed until the versioned API and frontend implementation exist.
-

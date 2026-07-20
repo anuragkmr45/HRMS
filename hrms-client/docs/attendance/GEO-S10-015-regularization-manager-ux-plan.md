@@ -275,4 +275,3 @@ E2E:
 - Decisions use OCC and idempotency, block self-processing, and refresh after conflicts.
 - Exact location evidence remains restricted and lazy-loaded.
 - Routes, data requirements, states, authorization, accessibility, implementation sequence, and tests are defined.
-

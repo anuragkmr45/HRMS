@@ -311,4 +311,3 @@ Allowed event fields are operation, normalized outcome, reason code, fallback av
 - Copy clearly distinguishes recorded from not recorded.
 - Accessibility, responsive layout, privacy, and failure behavior are specified.
 - Copy keys and final enum mapping are normalized in `GEO-S10-020` before implementation.
-

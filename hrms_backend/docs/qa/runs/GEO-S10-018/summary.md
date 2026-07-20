@@ -32,4 +32,3 @@ Created `hrms-client/docs/attendance/GEO-S10-018-api-client-idempotency-plan.md`
 - Confirm punch, regularization, decision, export, and policy publish migration is covered.
 - Confirm same-request replay, changed-request conflict, concurrency, scope, expiry, and redaction tests are specified.
 - Confirm the IETF document is identified as an expired draft, not a standard.
-

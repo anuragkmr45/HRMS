@@ -32,4 +32,3 @@ Created `hrms-client/docs/attendance/GEO-S10-015-regularization-manager-ux-plan.
 - Confirm employee form and manager screen gaps are explicitly mapped.
 - Confirm exact location evidence is restricted and not preloaded.
 - Confirm this planning task changes no runtime workflow.
-

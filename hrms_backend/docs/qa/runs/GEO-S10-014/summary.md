@@ -32,4 +32,3 @@ Created `hrms-client/docs/attendance/GEO-S10-014-manual-frontend-architecture.md
 - Confirm architecture maps check-in, break start, break end, and check-out.
 - Confirm both current employee surfaces are included in migration.
 - Confirm no runtime code changes before DB-first APIs exist.
-

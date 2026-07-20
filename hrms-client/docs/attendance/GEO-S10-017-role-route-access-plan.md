@@ -197,4 +197,3 @@ The server remains authoritative and must:
 - `GEO-S10-011` versioned attendance context contract.
 - `GEO-S10-012` server-driven attendance context UX.
 - `GEO-S10-015` regularization and manager queue UX plan.
-

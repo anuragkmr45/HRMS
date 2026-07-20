@@ -49,4 +49,3 @@ No planned v2 route was added to generated OpenAPI. The backend engineering dire
 - Run `git diff --check`.
 - Review all current attendance route paths against the inventory table.
 - Confirm generated OpenAPI has no unimplemented `/api/v2/attendance` operations.
-

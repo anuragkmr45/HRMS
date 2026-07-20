@@ -370,4 +370,3 @@ The web client migration must:
 - `HRMS_Location_Attendance_Technical_Requirements.docx`
 - `HRMS_Location_Attendance_Feature_Requirements.docx`
 - `HRMS_Attendance_DB_Architecture_Upgrade_Plan.docx`
-

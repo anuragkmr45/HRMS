@@ -339,4 +339,3 @@ Integration/E2E tests:
 - Offline mode is read-only until a later offline contract is implemented.
 - Timers are display-only, timezone-safe, and resource-conscious.
 - Types, component boundaries, migration order, security, accessibility, and tests are implementation-ready.
-

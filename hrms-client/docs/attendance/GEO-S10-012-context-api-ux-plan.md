@@ -258,4 +258,3 @@ E2E tests:
 - Stale/offline/error contexts cannot mutate attendance.
 - Current session, policy hint, permission state, result verdict, and fallback are understandable without exposing coordinates.
 - Cache invalidation, role/company switching, accessibility, telemetry, and tests are specified.
-

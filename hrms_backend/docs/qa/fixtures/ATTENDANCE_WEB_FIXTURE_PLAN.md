@@ -147,4 +147,3 @@ Tests assert the client calls `getCurrentPosition` only after a user action and 
 - Browser tests prove one-shot, user-initiated geolocation and no auto-replay.
 - Test outputs contain no raw coordinates, keys, credentials, or free-form notes.
 - The tracker may remain `Tested successfully` only when linked CI run evidence identifies commit, environment, matrix version, and passing scenario IDs.
-

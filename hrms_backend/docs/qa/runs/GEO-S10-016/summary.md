@@ -36,4 +36,3 @@ Keep API/docs responses at `geolocation=()`. When geo attendance is release-read
 - Confirm the plan distinguishes frontend document and API response headers.
 - Confirm release and rollback gates are explicit.
 - Confirm this planning task changes no runtime header or permission behavior.
-

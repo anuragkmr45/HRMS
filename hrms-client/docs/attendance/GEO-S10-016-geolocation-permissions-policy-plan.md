@@ -249,4 +249,3 @@ No metric or trace includes coordinates, exact accuracy, employee identity plus 
 - [W3C Permissions Policy](https://www.w3.org/TR/permissions-policy-1/)
 - `GEO-S10-011` attendance API contract plan
 - `GEO-S10-012` attendance context UX plan
-

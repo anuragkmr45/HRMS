@@ -34,4 +34,3 @@ Normalize independent day kind, time relation, work mode, presence, punctuality,
 - Confirm every current day, exception, and regularization value has a migration mapping.
 - Confirm employee, manager, and HR/payroll copy is specified.
 - Confirm unknown values and ambiguous `missing_punch` fail safely.
-

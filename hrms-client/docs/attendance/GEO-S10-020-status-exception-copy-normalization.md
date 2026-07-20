@@ -293,4 +293,3 @@ During v1 compatibility, adapters derive target dimensions and include a `mappin
 - Primary display precedence does not hide secondary state.
 - Current v1 values have explicit migration mappings.
 - Ambiguous and unknown values fail safely without misclassifying absence or payroll.
-

@@ -42,4 +42,3 @@ Created `hrms-client/docs/attendance/GEO-S10-012-context-api-ux-plan.md` for the
 - Run `git diff --check`.
 - Confirm the plan references both current employee attendance surfaces.
 - Confirm no production route or UI behavior changed before the backend context endpoint exists.
-

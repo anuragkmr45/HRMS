@@ -75,4 +75,3 @@ Application test suites were not run because this sprint changed no runtime code
 - Review `GEO-S10-021` for integration consistency across all Sprint 10 decisions.
 - Merge the stack in order or merge only the final stacked branch, but do not merge each branch independently into a target that already contains its ancestor commits without checking duplicate PR scope.
 - Update tracker status with branch, commit, artifact, and CI link rather than free-form `Done` or `Tested successfully` claims.
-

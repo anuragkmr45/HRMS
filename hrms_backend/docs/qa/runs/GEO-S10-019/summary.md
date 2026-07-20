@@ -31,4 +31,3 @@ Created `hrms-client/docs/attendance/GEO-S10-019-attendance-state-wireframes-cop
 - Confirm all six employee result states and all manager variants are present.
 - Confirm desktop/mobile and location-permission wireframes are present.
 - Confirm every rejected state distinguishes retryable from deterministic policy blocks.
-
