@@ -1,18 +1,24 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { EmploymentStatuses } from "#shared";
+import { authHeader, loginAs } from "#testing";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../../app.js";
 import { createMemoryDataStore, nowIso } from "../../../platform/data-store.js";
 import type { DataStore } from "../../../platform/data-store.js";
+import { ResendEmailError } from "../../../platform/email/resend-email-provider.js";
 import type { EmailProvider, SendEmailInput, SendEmailResult } from "../../../platform/email/types.js";
 
 class FakeEmailProvider implements EmailProvider {
   readonly sent: SendEmailInput[] = [];
   fail = false;
+  error: Error | null = null;
 
   async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     this.sent.push(input);
+    if (this.error) {
+      throw this.error;
+    }
     if (this.fail) {
       throw new Error("simulated email provider failure");
     }
@@ -29,6 +35,7 @@ describe("auth transactional email delivery", () => {
   beforeEach(async () => {
     originalEnv = { ...process.env };
     process.env.NODE_ENV = "test";
+    process.env.APP_ENV = "local";
     process.env.JWT_ACCESS_SECRET = "test-access-secret-change-me";
     process.env.JWT_REFRESH_SECRET = "test-refresh-secret-change-me";
     process.env.EMAIL_DELIVERY_MODE = "send";
@@ -94,6 +101,54 @@ describe("auth transactional email delivery", () => {
       provider_email_id: "resend_1"
     });
     expect(JSON.stringify(delivery?.metadata)).not.toContain(rawToken);
+  });
+
+  it("uses an active verification template updated through the admin API for the next signup", async () => {
+    const admin = await loginAs(app, "ADM");
+    const update = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/email-templates/verify",
+      headers: authHeader(admin.token),
+      payload: {
+        subject: "{{name}}, verify your {{company}} account",
+        body: "Hello {{name}},\n\nActivate your {{company}} account using {{link}}.\n\nSupport: {{email}}",
+        active: true,
+        expected_version: 1
+      }
+    });
+
+    expect(update.statusCode).toBe(200);
+    expect(update.json().template).toMatchObject({
+      template_key: "verify",
+      status: "active",
+      version: 2
+    });
+
+    const signup = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/signup",
+      payload: {
+        company_name: "Template Delivery HRMS",
+        full_name: "Template Owner",
+        email: "template.owner@example.test",
+        timezone: "Asia/Kolkata"
+      }
+    });
+
+    expect(signup.statusCode).toBe(200);
+    expect(provider.sent).toHaveLength(1);
+    expect(provider.sent[0]).toMatchObject({
+      to: "template.owner@example.test",
+      subject: "Template Owner, verify your Template Delivery HRMS account"
+    });
+    expect(provider.sent[0]!.text).toContain("Activate your Template Delivery HRMS account using https://hrms.example.test/verify-email?token=");
+    expect(provider.sent[0]!.text).toContain("Support: template.owner@example.test");
+    expect(provider.sent[0]!.text).not.toMatch(/\{\{[^}]+\}\}/u);
+    expect(store.emailDeliveries.at(-1)).toMatchObject({
+      template_key: "verify",
+      subject: "Template Owner, verify your Template Delivery HRMS account",
+      status: "sent"
+    });
   });
 
   it("marks users explicitly verified when the app-owned token is consumed", async () => {
@@ -178,6 +233,7 @@ describe("auth transactional email delivery", () => {
   it("keeps production signup responses free of raw dev-only tokens", async () => {
     await app.close();
     process.env.NODE_ENV = "production";
+    process.env.APP_ENV = "production";
     process.env.JWT_ACCESS_SECRET = "prod-test-access-secret-6f8e9b7f3c9a4d2e8f1a0b5c";
     process.env.JWT_REFRESH_SECRET = "prod-test-refresh-secret-8c3f2a1e7d9b4a6f0e5c2b1a";
     process.env.CORS_ALLOWED_ORIGINS = "https://hrms.example.test";
@@ -644,6 +700,39 @@ describe("auth transactional email delivery", () => {
     expect(delivery?.status).toBe("failed");
     expect(delivery?.error_code).toBe("email_delivery_failed");
     expect(signup.body).not.toContain("simulated email provider failure");
+  });
+
+  it("records provider timeouts without failing signup or leaking provider secrets", async () => {
+    const providerSecret = "re_live_timeout_secret_123";
+    provider.error = new ResendEmailError(
+      408,
+      "resend_request_timeout",
+      `Resend request timed out for ${providerSecret}.`
+    );
+
+    const signup = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/signup",
+      payload: {
+        company_name: "Timeout HRMS",
+        full_name: "Timeout User",
+        email: "timeout.user@example.test",
+        timezone: "Asia/Kolkata"
+      }
+    });
+
+    expect(signup.statusCode).toBe(200);
+    expect(signup.json()).toMatchObject({
+      next_step: "verify_email",
+      email_delivery_status: "failed"
+    });
+    expect(signup.body).not.toContain(providerSecret);
+    expect(signup.body).not.toContain("resend_request_timeout");
+    expect(store.emailDeliveries.at(-1)).toMatchObject({
+      status: "failed",
+      error_code: "resend_request_timeout",
+      error_message: "Resend request timed out for [redacted]."
+    });
   });
 });
 
