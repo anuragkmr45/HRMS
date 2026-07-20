@@ -122,6 +122,16 @@ describe("attendance policy", () => {
         ),
       ).toBe(false);
     });
+
+    it("rejects admin even when employee role is also present", () => {
+      expect(
+        canUseSelfAttendance(
+          makeAuthUser({
+            roles: [Roles.Admin, Roles.Employee],
+          }),
+        ),
+      ).toBe(false);
+    });
   });
 
   describe("assertCanUseSelfAttendance", () => {
@@ -134,6 +144,16 @@ describe("attendance policy", () => {
         assertCanUseSelfAttendance(
           makeAuthUser({
             roles: [Roles.Admin],
+          }),
+        ),
+      ).toThrow();
+    });
+
+    it("throws for admin even when employee role is also present", () => {
+      expect(() =>
+        assertCanUseSelfAttendance(
+          makeAuthUser({
+            roles: [Roles.Admin, Roles.Employee],
           }),
         ),
       ).toThrow();
