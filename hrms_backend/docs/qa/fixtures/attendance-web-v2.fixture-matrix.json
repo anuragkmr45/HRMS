@@ -1,0 +1,521 @@
+{
+  "schema_version": "1.0.0",
+  "fixture_id": "attendance-web-v2",
+  "synthetic_data_only": true,
+  "anchor": {
+    "now": "2026-07-20T06:30:00.000Z",
+    "default_timezone": "Asia/Kolkata",
+    "retention_days": 30
+  },
+  "tenants": [
+    {
+      "id": "ten-a",
+      "name": "Synthetic Alpha Pvt Ltd",
+      "timezone": "Asia/Kolkata"
+    },
+    {
+      "id": "ten-b",
+      "name": "Synthetic Beta LLC",
+      "timezone": "America/New_York"
+    }
+  ],
+  "sites": [
+    {
+      "id": "site-a-hq",
+      "tenant_id": "ten-a",
+      "name": "Alpha HQ",
+      "center": { "latitude": 12.900001, "longitude": 77.600001 },
+      "radius_meters": 150
+    },
+    {
+      "id": "site-a-field",
+      "tenant_id": "ten-a",
+      "name": "Alpha Field Office",
+      "center": { "latitude": 12.910001, "longitude": 77.610001 },
+      "radius_meters": 250
+    },
+    {
+      "id": "site-b-hq",
+      "tenant_id": "ten-b",
+      "name": "Beta HQ",
+      "center": { "latitude": 40.700001, "longitude": -74.000001 },
+      "radius_meters": 100
+    }
+  ],
+  "shifts": [
+    {
+      "id": "shift-a-day",
+      "tenant_id": "ten-a",
+      "name": "India day shift",
+      "timezone": "Asia/Kolkata",
+      "start_local": "09:30",
+      "end_local": "18:30",
+      "grace_minutes": 15,
+      "working_days": [1, 2, 3, 4, 5]
+    },
+    {
+      "id": "shift-a-night",
+      "tenant_id": "ten-a",
+      "name": "India overnight shift",
+      "timezone": "Asia/Kolkata",
+      "start_local": "22:00",
+      "end_local": "06:00",
+      "grace_minutes": 10,
+      "working_days": [1, 2, 3, 4, 5]
+    },
+    {
+      "id": "shift-b-day",
+      "tenant_id": "ten-b",
+      "name": "New York day shift",
+      "timezone": "America/New_York",
+      "start_local": "09:00",
+      "end_local": "17:00",
+      "grace_minutes": 10,
+      "working_days": [1, 2, 3, 4, 5]
+    }
+  ],
+  "policies": [
+    {
+      "id": "policy-a-manual",
+      "tenant_id": "ten-a",
+      "mode": "manual_only",
+      "site_ids": [],
+      "fallback": "not_applicable"
+    },
+    {
+      "id": "policy-a-optional",
+      "tenant_id": "ten-a",
+      "mode": "location_optional",
+      "site_ids": ["site-a-hq"],
+      "fallback": "manual_final"
+    },
+    {
+      "id": "policy-a-preferred",
+      "tenant_id": "ten-a",
+      "mode": "location_preferred",
+      "site_ids": ["site-a-hq", "site-a-field"],
+      "fallback": "manual_review"
+    },
+    {
+      "id": "policy-a-required",
+      "tenant_id": "ten-a",
+      "mode": "location_required",
+      "site_ids": ["site-a-hq"],
+      "fallback": "blocked"
+    },
+    {
+      "id": "policy-a-required-fallback",
+      "tenant_id": "ten-a",
+      "mode": "location_required_with_fallback",
+      "site_ids": ["site-a-field"],
+      "fallback": "manual_review"
+    },
+    {
+      "id": "policy-b-required",
+      "tenant_id": "ten-b",
+      "mode": "location_required",
+      "site_ids": ["site-b-hq"],
+      "fallback": "blocked"
+    }
+  ],
+  "users": [
+    {
+      "id": "user-a-admin",
+      "tenant_id": "ten-a",
+      "employee_code": "A-ADM",
+      "role": "Admin",
+      "manager_id": null,
+      "status": "active"
+    },
+    {
+      "id": "user-a-hr",
+      "tenant_id": "ten-a",
+      "employee_code": "A-HR",
+      "role": "HR Manager",
+      "manager_id": "user-a-admin",
+      "status": "active"
+    },
+    {
+      "id": "user-a-auditor",
+      "tenant_id": "ten-a",
+      "employee_code": "A-AUD",
+      "role": "Auditor",
+      "manager_id": "user-a-admin",
+      "status": "active"
+    },
+    {
+      "id": "user-a-manager-1",
+      "tenant_id": "ten-a",
+      "employee_code": "A-M01",
+      "role": "Reviewer",
+      "manager_id": "user-a-admin",
+      "status": "active"
+    },
+    {
+      "id": "user-a-manager-2",
+      "tenant_id": "ten-a",
+      "employee_code": "A-M02",
+      "role": "Reviewer",
+      "manager_id": "user-a-admin",
+      "status": "active"
+    },
+    {
+      "id": "user-a-manual",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E01",
+      "role": "Employee",
+      "manager_id": "user-a-manager-1",
+      "status": "active",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-manual"
+    },
+    {
+      "id": "user-a-optional",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E02",
+      "role": "Employee",
+      "manager_id": "user-a-manager-1",
+      "status": "active",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-optional"
+    },
+    {
+      "id": "user-a-preferred",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E03",
+      "role": "Employee",
+      "manager_id": "user-a-manager-1",
+      "status": "active",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-preferred"
+    },
+    {
+      "id": "user-a-required",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E04",
+      "role": "Employee",
+      "manager_id": "user-a-manager-2",
+      "status": "active",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-required"
+    },
+    {
+      "id": "user-a-fallback",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E05",
+      "role": "Employee",
+      "manager_id": "user-a-manager-2",
+      "status": "active",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-required-fallback"
+    },
+    {
+      "id": "user-a-night",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E06",
+      "role": "Employee",
+      "manager_id": "user-a-manager-2",
+      "status": "active",
+      "shift_id": "shift-a-night",
+      "policy_id": "policy-a-manual"
+    },
+    {
+      "id": "user-a-inactive",
+      "tenant_id": "ten-a",
+      "employee_code": "A-E07",
+      "role": "Employee",
+      "manager_id": "user-a-manager-1",
+      "status": "inactive",
+      "shift_id": "shift-a-day",
+      "policy_id": "policy-a-manual"
+    },
+    {
+      "id": "user-b-admin",
+      "tenant_id": "ten-b",
+      "employee_code": "B-ADM",
+      "role": "Admin",
+      "manager_id": null,
+      "status": "active"
+    },
+    {
+      "id": "user-b-manager",
+      "tenant_id": "ten-b",
+      "employee_code": "B-M01",
+      "role": "Reviewer",
+      "manager_id": "user-b-admin",
+      "status": "active"
+    },
+    {
+      "id": "user-b-required",
+      "tenant_id": "ten-b",
+      "employee_code": "B-E01",
+      "role": "Employee",
+      "manager_id": "user-b-manager",
+      "status": "active",
+      "shift_id": "shift-b-day",
+      "policy_id": "policy-b-required"
+    }
+  ],
+  "evidence_samples": [
+    {
+      "id": "evidence-a-inside",
+      "tenant_id": "ten-a",
+      "latitude": 12.900101,
+      "longitude": 77.600101,
+      "accuracy_meters": 20,
+      "captured_at": "2026-07-20T04:01:00.000Z"
+    },
+    {
+      "id": "evidence-a-outside",
+      "tenant_id": "ten-a",
+      "latitude": 12.950001,
+      "longitude": 77.650001,
+      "accuracy_meters": 15,
+      "captured_at": "2026-07-20T04:01:00.000Z"
+    },
+    {
+      "id": "evidence-a-low-accuracy",
+      "tenant_id": "ten-a",
+      "latitude": 12.900101,
+      "longitude": 77.600101,
+      "accuracy_meters": 900,
+      "captured_at": "2026-07-20T04:01:00.000Z"
+    },
+    {
+      "id": "evidence-a-stale",
+      "tenant_id": "ten-a",
+      "latitude": 12.900101,
+      "longitude": 77.600101,
+      "accuracy_meters": 20,
+      "captured_at": "2026-07-20T03:00:00.000Z"
+    },
+    {
+      "id": "evidence-b-inside",
+      "tenant_id": "ten-b",
+      "latitude": 40.700101,
+      "longitude": -74.000101,
+      "accuracy_meters": 25,
+      "captured_at": "2026-07-20T13:01:00.000Z"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "AWF-001",
+      "category": "context",
+      "actor_id": "user-a-manual",
+      "action": "load_context",
+      "expected": { "mode": "manual_only", "geolocation_called": false, "allowed_actions": ["check_in"] }
+    },
+    {
+      "id": "AWF-002",
+      "category": "manual",
+      "actor_id": "user-a-manual",
+      "action": "check_in",
+      "occurred_at": "2026-07-20T04:00:00.000Z",
+      "expected": { "outcome": "accepted", "presence_status": "working", "punctuality_status": "on_time" }
+    },
+    {
+      "id": "AWF-003",
+      "category": "manual",
+      "actor_id": "user-a-manual",
+      "preconditions": ["AWF-002"],
+      "action": "break_start",
+      "occurred_at": "2026-07-20T07:00:00.000Z",
+      "expected": { "outcome": "accepted", "next_actions": ["break_end"] }
+    },
+    {
+      "id": "AWF-004",
+      "category": "manual",
+      "actor_id": "user-a-manual",
+      "preconditions": ["AWF-003"],
+      "action": "break_end",
+      "occurred_at": "2026-07-20T07:30:00.000Z",
+      "expected": { "outcome": "accepted", "next_actions": ["break_start", "check_out"] }
+    },
+    {
+      "id": "AWF-005",
+      "category": "manual",
+      "actor_id": "user-a-manual",
+      "preconditions": ["AWF-004"],
+      "action": "check_out",
+      "occurred_at": "2026-07-20T13:00:00.000Z",
+      "expected": { "outcome": "accepted", "presence_status": "present" }
+    },
+    {
+      "id": "AWF-006",
+      "category": "sequence_negative",
+      "actor_id": "user-a-manual",
+      "action": "check_out",
+      "expected": { "http_status": 409, "reason_code": "attendance-sequence-invalid", "event_created": false }
+    },
+    {
+      "id": "AWF-007",
+      "category": "idempotency",
+      "actor_id": "user-a-optional",
+      "action": "check_in_twice_same_key",
+      "expected": { "events_created": 1, "second_response_replayed": true }
+    },
+    {
+      "id": "AWF-008",
+      "category": "idempotency_negative",
+      "actor_id": "user-a-optional",
+      "action": "reuse_key_with_changed_body",
+      "expected": { "http_status": 409, "reason_code": "idempotency-key-reused" }
+    },
+    {
+      "id": "AWF-009",
+      "category": "location_optional",
+      "actor_id": "user-a-optional",
+      "action": "check_in_permission_denied",
+      "expected": { "outcome": "accepted", "evidence_status": "not_collected", "review_status": "not_required" }
+    },
+    {
+      "id": "AWF-010",
+      "category": "location_preferred",
+      "actor_id": "user-a-preferred",
+      "action": "check_in_permission_denied",
+      "expected": { "outcome": "review_required", "evidence_status": "unavailable", "review_status": "pending" }
+    },
+    {
+      "id": "AWF-011",
+      "category": "location_required",
+      "actor_id": "user-a-required",
+      "action": "check_in",
+      "evidence_id": "evidence-a-inside",
+      "expected": { "outcome": "accepted", "evidence_status": "verified", "event_created": true }
+    },
+    {
+      "id": "AWF-012",
+      "category": "location_required",
+      "actor_id": "user-a-required",
+      "action": "check_in",
+      "evidence_id": "evidence-a-outside",
+      "expected": { "outcome": "rejected", "evidence_status": "outside_allowed_site", "event_created": false }
+    },
+    {
+      "id": "AWF-013",
+      "category": "location_required",
+      "actor_id": "user-a-required",
+      "action": "check_in",
+      "evidence_id": "evidence-a-low-accuracy",
+      "expected": { "outcome": "rejected", "evidence_status": "low_accuracy", "event_created": false }
+    },
+    {
+      "id": "AWF-014",
+      "category": "location_required",
+      "actor_id": "user-a-required",
+      "action": "check_in",
+      "evidence_id": "evidence-a-stale",
+      "expected": { "outcome": "rejected", "evidence_status": "expired", "event_created": false }
+    },
+    {
+      "id": "AWF-015",
+      "category": "location_fallback",
+      "actor_id": "user-a-fallback",
+      "action": "check_in_location_timeout_then_fallback",
+      "expected": { "outcome": "review_required", "evidence_status": "unavailable", "review_status": "pending" }
+    },
+    {
+      "id": "AWF-016",
+      "category": "punctuality",
+      "actor_id": "user-a-manual",
+      "action": "check_in",
+      "occurred_at": "2026-07-21T04:30:00.000Z",
+      "expected": { "outcome": "accepted_with_warning", "presence_status": "working", "punctuality_status": "late_arrival" }
+    },
+    {
+      "id": "AWF-017",
+      "category": "overnight",
+      "actor_id": "user-a-night",
+      "action": "check_in_then_next_day_check_out",
+      "occurred_at": "2026-07-20T16:35:00.000Z",
+      "check_out_at": "2026-07-21T00:30:00.000Z",
+      "expected": { "work_date": "2026-07-20", "presence_status": "present", "exception_count": 0 }
+    },
+    {
+      "id": "AWF-018",
+      "category": "schedule_negative",
+      "actor_id": "user-a-manual",
+      "action": "check_in_on_scheduled_off",
+      "work_date": "2026-07-19",
+      "expected": { "outcome": "rejected", "reason_code": "attendance-non-working-day", "event_created": false }
+    },
+    {
+      "id": "AWF-019",
+      "category": "regularization",
+      "actor_id": "user-a-preferred",
+      "action": "create_regularization",
+      "expected": { "review_status": "pending", "current_approver_id": "user-a-manager-1" }
+    },
+    {
+      "id": "AWF-020",
+      "category": "manager_queue",
+      "actor_id": "user-a-manager-1",
+      "preconditions": ["AWF-019"],
+      "action": "read_and_approve_assigned_request",
+      "expected": { "queue_contains": ["AWF-019"], "review_status": "approved", "action_history_entries": 2 }
+    },
+    {
+      "id": "AWF-021",
+      "category": "manager_scope_negative",
+      "actor_id": "user-a-manager-2",
+      "preconditions": ["AWF-019"],
+      "action": "read_or_decide_unassigned_request",
+      "expected": { "queue_contains": [], "decision_http_status": 403 }
+    },
+    {
+      "id": "AWF-022",
+      "category": "self_approval_negative",
+      "actor_id": "user-a-preferred",
+      "preconditions": ["AWF-019"],
+      "action": "approve_own_request",
+      "expected": { "http_status": 403, "reason_code": "self-approval-blocked" }
+    },
+    {
+      "id": "AWF-023",
+      "category": "auditor",
+      "actor_id": "user-a-auditor",
+      "action": "read_queue_then_attempt_decision",
+      "expected": { "read_http_status": 200, "decision_http_status": 403, "mutation_controls_visible": false }
+    },
+    {
+      "id": "AWF-024",
+      "category": "tenant_isolation_negative",
+      "actor_id": "user-a-admin",
+      "target_user_id": "user-b-required",
+      "action": "read_context_calendar_queue_and_decide",
+      "expected": { "data_disclosed": false, "mutation_allowed": false }
+    },
+    {
+      "id": "AWF-025",
+      "category": "inactive_user_negative",
+      "actor_id": "user-a-inactive",
+      "action": "load_context_and_check_in",
+      "expected": { "authentication_or_action_allowed": false }
+    },
+    {
+      "id": "AWF-026",
+      "category": "tenant_timezone",
+      "actor_id": "user-b-required",
+      "action": "check_in",
+      "evidence_id": "evidence-b-inside",
+      "occurred_at": "2026-07-20T13:00:00.000Z",
+      "expected": { "work_date": "2026-07-20", "outcome": "accepted", "punctuality_status": "on_time" }
+    },
+    {
+      "id": "AWF-027",
+      "category": "optimistic_concurrency",
+      "actor_id": "user-a-manager-1",
+      "action": "decide_stale_regularization_version",
+      "expected": { "http_status": 409, "reason_code": "version-conflict", "duplicate_decision_created": false }
+    },
+    {
+      "id": "AWF-028",
+      "category": "privacy",
+      "actor_id": "user-a-hr",
+      "action": "inspect_general_summary_export_logs_and_telemetry",
+      "expected": { "raw_coordinates_present": false, "idempotency_key_present": false, "free_text_present": false }
+    }
+  ]
+}
+
