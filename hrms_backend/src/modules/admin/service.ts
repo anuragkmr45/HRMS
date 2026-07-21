@@ -1306,6 +1306,11 @@ const attendanceTimePolicyFields = new Set([
   "autoPunchOutTime"
 ]);
 const attendanceBooleanPolicyFields = new Set(["allowRegularization", "fullDayPunchWindow", "autoPunchOutEnabled", "allowOffDayPunches"]);
+const attendanceModeFields: Record<string, readonly string[]> = {
+  attendanceMode: ["manual_only", "geo_optional", "geo_required"],
+  fallbackApprovalMode: ["disabled", "approval_required"],
+  regularizationMode: ["disabled", "approval_required"]
+};
 const attendanceTimePolicyPattern = /^([01]\d|2[0-3]):[0-5]\d$/u;
 
 function normalizeAdminPolicyConfig(
@@ -1329,6 +1334,10 @@ function normalizeAdminPolicyConfig(
       if (typeof value !== "string" || !attendanceTimePolicyPattern.test(value.trim())) {
         throw badRequest("Attendance punch windows must use HH:mm time.", { policy_key: policyKey, field: key });
       }
+    }
+    const attendanceModeValues = policyKey === "attendance" ? attendanceModeFields[key] : undefined;
+    if (attendanceModeValues && (typeof value !== "string" || !attendanceModeValues.includes(value.trim()))) {
+      throw badRequest("Attendance policy mode value is invalid.", { policy_key: policyKey, field: key });
     }
     if (typeof value === "string") {
       const trimmed = value.trim();
@@ -1357,7 +1366,10 @@ function adminPolicyConfigKeys(policyKey: AdminPolicyKey): Set<string> {
       "punchOutEnd",
       "autoPunchOutEnabled",
       "autoPunchOutTime",
-      "allowOffDayPunches"
+      "allowOffDayPunches",
+      "attendanceMode",
+      "fallbackApprovalMode",
+      "regularizationMode"
     ],
     leave: ["casualPerYear", "sickPerYear", "earnedPerYear", "carryForwardCap", "encashmentAllowed"],
     timesheet: ["weeklyHours", "minDailyHours", "submitBy", "lockAfterApproval"],

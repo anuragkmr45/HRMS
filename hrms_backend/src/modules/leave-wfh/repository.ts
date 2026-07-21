@@ -153,15 +153,16 @@ export class LeaveWfhRepository {
     ].filter((request) => activeStatuses.has(request.status) && overlaps({ from: request.date_from, to: request.date_to }, dateFrom, dateTo));
   }
 
-  findHoliday(id: UUID): Holiday | null {
-    return this.store.holidays.find((candidate) => candidate.id === id && !candidate.deleted_at) ?? null;
+  findHoliday(id: UUID, companyId: UUID): Holiday | null {
+    return this.store.holidays.find((candidate) => candidate.id === id && candidate.company_id === companyId && !candidate.deleted_at) ?? null;
   }
 
   upsertHoliday(id: UUID, input: Omit<Holiday, "id" | "created_at" | "updated_at" | "version" | "deleted_at"> & { expected_version?: number }): Holiday {
-    const existing = this.findHoliday(id);
+    const existing = this.findHoliday(id, input.company_id ?? "");
     const duplicate = this.store.holidays.find(
       (candidate) =>
         candidate.id !== id &&
+        candidate.company_id === input.company_id &&
         !candidate.deleted_at &&
         candidate.region === input.region &&
         candidate.holiday_date === input.holiday_date &&
@@ -174,6 +175,7 @@ export class LeaveWfhRepository {
     if (!existing) {
       const holiday: Holiday = {
         id,
+        company_id: input.company_id,
         name: input.name,
         holiday_date: input.holiday_date,
         region: input.region,
@@ -198,10 +200,13 @@ export class LeaveWfhRepository {
     return existing;
   }
 
-  listHolidays(year?: number): Holiday[] {
+  listHolidays(companyId: UUID, year?: number): Holiday[] {
     return this.store.holidays
       .filter((holiday) => {
         if (holiday.deleted_at) {
+          return false;
+        }
+        if (holiday.company_id !== companyId) {
           return false;
         }
         return year ? holiday.holiday_date.startsWith(`${year}-`) : true;
