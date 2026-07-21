@@ -2107,11 +2107,43 @@ const attendancePunchBody = {
   required: ["event_type"],
   properties: {
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
-    occurred_at: dateTime("Punch timestamp"),
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
-    source: { type: "string", enum: ["web", "mobile", "kiosk", "admin"], default: "web", example: "web" },
+    source: { type: "string", enum: ["web", "mobile", "kiosk"], default: "web", example: "web" },
     metadata: { type: "object", additionalProperties: true }
   },
+  additionalProperties: false
+};
+
+const attendanceAssistedCurrentPunchBody = {
+  type: "object",
+  required: ["event_type"],
+  properties: {
+    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
+    metadata: { type: "object", additionalProperties: true },
+    reason: { type: "string", minLength: 3, maxLength: 1000 }
+  },
+  additionalProperties: false
+};
+
+const attendanceHistoricalCorrectionBody = {
+  type: "object",
+  required: ["event_type", "occurred_at", "reason"],
+  properties: {
+    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    occurred_at: dateTime("Past effective occurrence time"),
+    reason: { type: "string", minLength: 3, maxLength: 1000 },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
+    metadata: { type: "object", additionalProperties: true },
+    linked_regularization_request_id: uuid("Linked regularization request UUID")
+  },
+  additionalProperties: false
+};
+
+const attendanceEmployeeParamSchema = {
+  type: "object",
+  required: ["employeeUserId"],
+  properties: { employeeUserId: uuid("Employee user UUID") },
   additionalProperties: false
 };
 
@@ -2121,12 +2153,14 @@ const attendancePunchSchema = {
   properties: {
     id: uuid("Attendance punch UUID"),
     employee_user_id: uuid("Employee user UUID"),
+    actor_user_id: uuid("Authenticated actor UUID"),
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
     occurred_at: dateTime("Punch timestamp"),
     work_date: date("Work date"),
     time: { type: "string", nullable: true, example: "09:10" },
     work_mode: { type: "string", example: "office" },
-    source: { type: "string", example: "web" }
+    source: { type: "string", example: "web" },
+    origin: { type: "string", enum: ["employee_manual_now", "manager_assisted_now", "historical_correction", "approved_regularization", "system"] }
   },
   additionalProperties: true
 };
@@ -2245,10 +2279,11 @@ const attendanceRegularizationDecisionBody = {
 
 const attendanceRegularizationSchema = {
   type: "object",
-  required: ["id", "employee_user_id", "work_date", "reason", "status", "version"],
+  required: ["id", "employee_user_id", "submitted_by_user_id", "work_date", "reason", "status", "version"],
   properties: {
     id: uuid("Regularization request UUID"),
     employee_user_id: uuid("Employee user UUID"),
+    submitted_by_user_id: uuid("Submitting actor user UUID"),
     work_date: date("Work date"),
     reason: { type: "string", example: "Forgot to punch out." },
     requested_punches: { type: "array", items: { type: "object", additionalProperties: true } },
@@ -4225,9 +4260,47 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/notifications/read-all": operation("Notifications", "Mark all notifications read", "Marks all visible unread notifications as read, optionally scoped by type/category or timestamp.", { body: notificationReadAllBody, response200: notificationReadAllResponse }),
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
-    "Record punch",
-    "Records a check-in, break, resume, or check-out punch for the authenticated employee. Duplicate or out-of-sequence punches return 409 with next allowed actions.",
-    { body: attendancePunchBody, response200: { type: "object", additionalProperties: true } }
+    "Record employee manual-now punch",
+    "Records a current punch for the authenticated employee only. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. This mutation requires an Idempotency-Key: same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+    {
+      headers: {
+        type: "object",
+        required: ["idempotency-key"],
+        properties: {
+          "idempotency-key": {
+            type: "string",
+            minLength: 8,
+            maxLength: 200,
+            description: "Required client-generated key. Reuse only to retry the same validated attendance punch request.",
+            example: "attendance-punch-20260714-0001"
+          }
+        }
+      },
+      body: attendancePunchBody,
+      response200: { type: "object", additionalProperties: true }
+    }
+  ),
+  "POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches": operation(
+    "Attendance",
+    "Record manager-assisted current punch",
+    "Records a current punch for the explicit employee subject. The authenticated manager, HR, or Admin is the actor; the server controls occurrence time and no historical timestamp is accepted.",
+    {
+      params: attendanceEmployeeParamSchema,
+      headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
+      body: attendanceAssistedCurrentPunchBody,
+      response200: { type: "object", additionalProperties: true }
+    }
+  ),
+  "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections": operation(
+    "Attendance",
+    "Record historical attendance correction",
+    "Creates an append-only, privileged historical attendance fact for the explicit employee subject. HR or Admin is the actor. A past occurrence time, reason, and idempotency key are required; this endpoint cannot create a current punch or mutate the current open-session state.",
+    {
+      params: attendanceEmployeeParamSchema,
+      headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
+      body: attendanceHistoricalCorrectionBody,
+      response200: { type: "object", additionalProperties: true }
+    }
   ),
   "GET /api/v1/attendance/punches/my": operation(
     "Attendance",

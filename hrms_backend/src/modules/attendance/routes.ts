@@ -2,18 +2,23 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
   attendancePunchSchema,
+  attendanceAssistedCurrentPunchSchema,
+  attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
   attendanceRegularizationDecisionSchema,
-  paginationQuerySchema
+  paginationQuerySchema,
 } from "#shared";
 import { unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
+const employeeParamSchema = z.object({ employeeUserId: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
+const idempotencyKeySchema = z.string().trim().min(8).max(200);
 
 const attendanceQuerySchema = paginationQuerySchema.extend({
+  company_id: z.uuid().optional(),
   date: isoDateQuerySchema.optional(),
   date_from: isoDateQuerySchema.optional(),
   date_to: isoDateQuerySchema.optional(),
@@ -21,12 +26,24 @@ const attendanceQuerySchema = paginationQuerySchema.extend({
   user_id: z.uuid().optional(),
   department_id: z.uuid().optional(),
   status: z.string().optional(),
-  exception_type: z.enum(["late", "missing_punch", "absent", "early_out", "correction"]).optional()
+  exception_type: z
+    .enum(["late", "missing_punch", "absent", "early_out", "correction"])
+    .optional(),
 });
+const attendanceExportFiltersSchema = z.object({
+  user_id: z.uuid().optional(),
+  employee_user_id: z.uuid().optional(),
+  department_id: z.uuid().optional(),
+  status: z.string().optional(),
+  date_from: isoDateQuerySchema.optional(),
+  date_to: isoDateQuerySchema.optional(),
+});
+
 const attendanceExportSchema = z.object({
-  filters: z.record(z.string(), z.unknown()).optional(),
+  company_id: z.uuid().optional(),
+  filters: attendanceExportFiltersSchema.optional(),
   columns: z.array(z.string().min(1).max(80)).max(80).optional(),
-  format: z.enum(["csv", "xlsx", "json"]).optional()
+  format: z.enum(["csv", "xlsx", "json"]).optional(),
 });
 
 export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
@@ -34,9 +51,37 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    return new AttendanceService(fastify.store).punch(
+    const idempotencyKey = idempotencyKeySchema.parse(
+      request.headers["idempotency-key"],
+    );
+    const service = new AttendanceService(fastify.store);
+    const input = attendancePunchSchema.parse(request.body);
+    return fastify.store.kind === "postgres"
+      ? await service.recordEmployeeManualNowPostgres(request.actor, input, idempotencyKey)
+      : service.recordEmployeeManualNow(request.actor, input);
+  });
+
+  fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request) => {
+    if (!request.actor) throw unauthorized();
+    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const params = employeeParamSchema.parse(request.params);
+    const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
+    const service = new AttendanceService(fastify.store);
+    return fastify.store.kind === "postgres"
+      ? await service.recordManagerAssistedCurrentPunchPostgres(request.actor, params.employeeUserId, input, idempotencyKey)
+      : service.recordManagerAssistedCurrentPunch(request.actor, params.employeeUserId, input);
+  });
+
+  fastify.post("/employees/:employeeUserId/historical-corrections", async (request) => {
+    if (!request.actor) throw unauthorized();
+    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const params = employeeParamSchema.parse(request.params);
+    const input = attendanceHistoricalCorrectionSchema.parse(request.body);
+    return new AttendanceService(fastify.store).recordHistoricalCorrection(
       request.actor,
-      attendancePunchSchema.parse(request.body)
+      params.employeeUserId,
+      input,
+      idempotencyKey,
     );
   });
 
@@ -46,7 +91,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).listMyPunches(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -56,7 +101,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).mySummary(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -66,7 +111,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).teamSummary(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -76,7 +121,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).monthlyCalendar(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -86,7 +131,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).dailyCalendar(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -96,7 +141,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).createRegularization(
       request.actor,
-      attendanceRegularizationCreateSchema.parse(request.body)
+      attendanceRegularizationCreateSchema.parse(request.body),
     );
   });
 
@@ -106,7 +151,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).myRegularizations(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -116,7 +161,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).managerRegularizationQueue(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -125,11 +170,12 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       throw unauthorized();
     }
     const params = idParamSchema.parse(request.params);
-    return new AttendanceService(fastify.store).decideRegularization(
-      request.actor,
-      params.id,
-      attendanceRegularizationDecisionSchema.parse(request.body)
-    );
+    const input = attendanceRegularizationDecisionSchema.parse(request.body);
+    const service = new AttendanceService(fastify.store);
+    if (fastify.store.kind === "postgres") {
+      return service.decideRegularizationPostgres(request.actor, params.id, input);
+    }
+    return service.decideRegularization(request.actor, params.id, input);
   });
 
   fastify.get("/exceptions", async (request) => {
@@ -138,7 +184,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).exceptions(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -148,7 +194,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).createExportJob(
       request.actor,
-      attendanceExportSchema.parse(request.body ?? {})
+      attendanceExportSchema.parse(request.body ?? {}),
     );
   });
 };

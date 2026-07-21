@@ -319,7 +319,12 @@ function migrationSql(): string {
 export async function resetPostgresDatabase(databaseUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
+  let schemaLockAcquired = false;
   try {
+    await client.query(
+      "SELECT pg_advisory_lock(hashtext('hrms_postgres_schema_reset'))",
+    );
+    schemaLockAcquired = true;
     await client.query(migrationSql());
     await client.query("BEGIN");
     await client.query(`TRUNCATE ${resetTables.join(", ")} RESTART IDENTITY`);
@@ -328,6 +333,11 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
+    if (schemaLockAcquired) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext('hrms_postgres_schema_reset'))")
+        .catch(() => undefined);
+    }
     client.release();
     await pool.end();
   }
@@ -1829,11 +1839,15 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM attendance.punch_events ORDER BY occurred_at, id");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      actor_user_id: row.actor_user_id ?? row.employee_user_id,
       event_type: row.event_type,
       occurred_at: asIso(row.occurred_at),
       work_mode: row.work_mode,
       source: row.source,
+      origin: row.origin ?? "employee_manual_now",
+      regularization_request_id: row.regularization_request_id ?? null,
       metadata: json(row.metadata),
       created_at: asIso(row.created_at),
       deleted_at: asIsoOrNull(row.deleted_at)
@@ -1844,6 +1858,7 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM attendance.daily_records ORDER BY work_date, employee_user_id");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
       work_date: asDate(row.work_date),
       status: row.status,
@@ -1868,7 +1883,9 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM attendance.regularization_requests ORDER BY created_at, id");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      submitted_by_user_id: row.submitted_by_user_id ?? row.employee_user_id,
       work_date: asDate(row.work_date),
       reason: row.reason,
       requested_punches: Array.isArray(row.requested_punches) ? row.requested_punches : [],
@@ -1939,6 +1956,7 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM leave_wfh.holidays ORDER BY holiday_date, name");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       name: row.name,
       holiday_date: asDate(row.holiday_date),
       region: row.region,
@@ -3713,24 +3731,32 @@ class PostgresPersistence {
     for (const punch of this.store.attendancePunches) {
       await client.query(
         `INSERT INTO attendance.punch_events (
-          id, employee_user_id, event_type, occurred_at, work_mode, source,
-          metadata, created_at, deleted_at
+          id, company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode, source,
+          origin, regularization_request_id, metadata, created_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         ON CONFLICT (id) DO UPDATE
-        SET event_type = EXCLUDED.event_type,
+        SET company_id = EXCLUDED.company_id,
+            event_type = EXCLUDED.event_type,
             occurred_at = EXCLUDED.occurred_at,
             work_mode = EXCLUDED.work_mode,
-            source = EXCLUDED.source,
+             source = EXCLUDED.source,
+             actor_user_id = EXCLUDED.actor_user_id,
+             origin = EXCLUDED.origin,
+             regularization_request_id = EXCLUDED.regularization_request_id,
             metadata = EXCLUDED.metadata,
             deleted_at = EXCLUDED.deleted_at`,
         [
           punch.id,
+          punch.company_id,
           punch.employee_user_id,
+          punch.actor_user_id,
           punch.event_type,
           punch.occurred_at,
           punch.work_mode,
           punch.source,
+          punch.origin,
+          punch.regularization_request_id,
           JSON.stringify(punch.metadata),
           punch.created_at,
           punch.deleted_at
@@ -3740,13 +3766,14 @@ class PostgresPersistence {
     for (const day of this.store.attendanceDayRecords) {
       await client.query(
         `INSERT INTO attendance.daily_records (
-          id, employee_user_id, work_date, status, first_check_in, last_check_out,
+          id, company_id, employee_user_id, work_date, status, first_check_in, last_check_out,
           work_minutes, break_minutes, late_minutes, early_out_minutes, work_mode,
           note, exception_type, regularization_status, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         ON CONFLICT (id) DO UPDATE
-        SET employee_user_id = EXCLUDED.employee_user_id,
+        SET company_id = EXCLUDED.company_id,
+            employee_user_id = EXCLUDED.employee_user_id,
             work_date = EXCLUDED.work_date,
             status = EXCLUDED.status,
             first_check_in = EXCLUDED.first_check_in,
@@ -3764,6 +3791,7 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           day.id,
+          day.company_id,
           day.employee_user_id,
           day.work_date,
           day.status,
@@ -3787,13 +3815,15 @@ class PostgresPersistence {
     for (const request of this.store.attendanceRegularizations) {
       await client.query(
         `INSERT INTO attendance.regularization_requests (
-          id, employee_user_id, work_date, reason, requested_punches, status,
+          id, company_id, employee_user_id, submitted_by_user_id, work_date, reason, requested_punches, status,
           current_approver_user_id, decision_remarks, decided_by_user_id,
           decided_at, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (id) DO UPDATE
-        SET reason = EXCLUDED.reason,
+        SET company_id = EXCLUDED.company_id,
+             reason = EXCLUDED.reason,
+             submitted_by_user_id = EXCLUDED.submitted_by_user_id,
             requested_punches = EXCLUDED.requested_punches,
             status = EXCLUDED.status,
             current_approver_user_id = EXCLUDED.current_approver_user_id,
@@ -3805,7 +3835,9 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           request.id,
+          request.company_id,
           request.employee_user_id,
+          request.submitted_by_user_id,
           request.work_date,
           request.reason,
           JSON.stringify(request.requested_punches),
@@ -3927,9 +3959,9 @@ class PostgresPersistence {
     for (const holiday of this.store.holidays) {
       await client.query(
         `INSERT INTO leave_wfh.holidays (
-          id, name, holiday_date, region, optional, version, created_at, updated_at, deleted_at
+          id, company_id, name, holiday_date, region, optional, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
         SET name = EXCLUDED.name,
             holiday_date = EXCLUDED.holiday_date,
@@ -3940,6 +3972,7 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           holiday.id,
+          holiday.company_id,
           holiday.name,
           holiday.holiday_date,
           holiday.region,

@@ -302,11 +302,34 @@ export const attendancePunchSchema = z.object({
     AttendancePunchEventTypes.BreakEnd,
     AttendancePunchEventTypes.CheckOut
   ]),
-  occurred_at: isoDateTimeSchema.optional(),
   work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
-  source: z.enum(["web", "mobile", "kiosk", "admin"]).default("web"),
+  source: z.enum(["web", "mobile", "kiosk"]).default("web"),
   metadata: z.record(z.string(), z.unknown()).default({})
-});
+}).strict();
+
+export const attendanceAssistedCurrentPunchSchema = z.object({
+  event_type: z.enum([
+    AttendancePunchEventTypes.CheckIn,
+    AttendancePunchEventTypes.BreakStart,
+    AttendancePunchEventTypes.BreakEnd,
+    AttendancePunchEventTypes.CheckOut
+  ]),
+  work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  reason: z.string().trim().min(3).max(1000).optional()
+}).strict();
+
+export const attendanceHistoricalCorrectionSchema = z.object({
+  event_type: z.enum([
+    AttendancePunchEventTypes.CheckIn,
+    AttendancePunchEventTypes.CheckOut
+  ]),
+  occurred_at: isoDateTimeSchema,
+  reason: z.string().trim().min(3).max(1000),
+  work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  linked_regularization_request_id: z.uuid().optional()
+}).strict();
 
 export const attendanceRegularizationCreateSchema = z.object({
   work_date: isoDateSchema,
@@ -316,15 +339,13 @@ export const attendanceRegularizationCreateSchema = z.object({
       z.object({
         event_type: z.enum([
           AttendancePunchEventTypes.CheckIn,
-          AttendancePunchEventTypes.BreakStart,
-          AttendancePunchEventTypes.BreakEnd,
           AttendancePunchEventTypes.CheckOut
         ]),
         occurred_at: isoDateTimeSchema
       })
     )
     .default([])
-});
+}).strict();
 
 export const attendanceRegularizationDecisionSchema = z.object({
   decision: z.enum(["approve", "reject", "return"]),

@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
+import { randomUUID } from "node:crypto";
 import {
   createMemoryDataStore,
   seedIds,
@@ -6,12 +7,72 @@ import {
 import { AttendanceService } from "../service.js";
 import { Roles } from "#shared";
 
+function attendanceStore() {
+  const store = createMemoryDataStore();
+  const now = new Date().toISOString();
+  const companyId = randomUUID();
+  store.companyProfiles.push({
+    id: companyId,
+    company_name: "Attendance Test Co",
+    company_slug: `attendance-test-${companyId}`,
+    website: null,
+    industry: null,
+    address: null,
+    timezone: "Asia/Kolkata",
+    locale: "en-IN",
+    currency: "INR",
+    fiscal_year_start_month: 4,
+    working_week: "Mon-Fri",
+    work_hours_per_day: 8,
+    logo_label: null,
+    logo_document_id: null,
+    logo_url: null,
+    logo_file_name: null,
+    logo_mime_type: null,
+    logo_size_bytes: null,
+    status: "active",
+    bootstrap_completed_at: now,
+    created_at: now,
+    updated_at: now,
+    version: 1,
+  });
+  store.adminPolicies.push(
+    ...store.adminPolicies
+      .filter((policy) => policy.company_id === null)
+      .map((policy) => ({
+        ...policy,
+        id: randomUUID(),
+        company_id: companyId,
+        config: { ...policy.config },
+      })),
+  );
+  store.userSessionPreferences.push(
+    ...store.users.map((user) => ({
+      id: randomUUID(),
+      user_id: user.id,
+      active_role: user.roles[0]!,
+      company_id: companyId,
+      landing_page: "/dashboard",
+      locale: "en-IN",
+      timezone: user.timezone ?? "Asia/Kolkata",
+      created_at: now,
+      updated_at: now,
+      version: 1,
+    })),
+  );
+  return store;
+}
+
+function companyId(store: ReturnType<typeof createMemoryDataStore>) {
+  return store.companyProfiles[0]!.id;
+}
+
 describe("AttendanceService.punch", () => {
   let store: ReturnType<typeof createMemoryDataStore>;
   let service: AttendanceService;
 
   beforeEach(() => {
-    store = createMemoryDataStore();
+    store = attendanceStore();
     service = new AttendanceService(store);
   });
 
@@ -79,14 +140,17 @@ describe("AttendanceService.punch", () => {
     const event = store.outbox[0]!;
 
     expect(event.aggregate_type).toBe("attendance");
-    expect(event.event_type).toBe("attendance.punched");
+    expect(event.event_type).toBe("attendance.punch.recorded");
     expect(event.status).toBe("pending");
     expect(event.retry_count).toBe(0);
-    expect(event.idempotency_key).toContain("attendance.punched:");
+    expect(event.idempotency_key).toContain("attendance.punch.recorded:");
 
     expect(event.payload).toMatchObject({
-      employee_user_id: employee().id,
-      event_type: "check_in",
+      schema_version: 1,
+      actor_user_id: employee().id,
+      subject_employee_user_id: employee().id,
+      punch_event_id: event.aggregate_id,
+      punch_type: "check_in",
       work_date: "2026-07-08",
     });
   });
@@ -237,7 +301,7 @@ describe("AttendanceService.punch", () => {
     let service: AttendanceService;
 
     beforeEach(() => {
-      store = createMemoryDataStore();
+      store = attendanceStore();
       service = new AttendanceService(store);
     });
 
@@ -273,8 +337,8 @@ describe("AttendanceService.punch", () => {
         date_to: "2026-07-08",
       });
 
-      expect(result.total).toBe(1);
-      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
       expect(result.items[0]!.employee_user_id).toBe(employee().id);
     });
 
@@ -334,8 +398,10 @@ describe("AttendanceService.punch", () => {
         date_to: "2026-07-08",
       });
 
-      expect(result.total).toBe(1);
-      expect(result.items[0]!.occurred_at.startsWith("2026-07-08")).toBe(true);
+      expect(result.total).toBe(2);
+      expect(
+        result.items.every((item) => item.work_date === "2026-07-08"),
+      ).toBe(true);
     });
 
     it("supports pagination", () => {
@@ -384,7 +450,7 @@ describe("AttendanceService.punch", () => {
     let service: AttendanceService;
 
     beforeEach(() => {
-      store = createMemoryDataStore();
+      store = attendanceStore();
       service = new AttendanceService(store);
     });
 
@@ -507,7 +573,7 @@ describe("AttendanceService.punch", () => {
     let service: AttendanceService;
 
     beforeEach(() => {
-      store = createMemoryDataStore();
+      store = attendanceStore();
       service = new AttendanceService(store);
     });
 
@@ -592,7 +658,7 @@ describe("AttendanceService.punch", () => {
     let service: AttendanceService;
 
     beforeEach(() => {
-      store = createMemoryDataStore();
+      store = attendanceStore();
       service = new AttendanceService(store);
     });
 
@@ -708,7 +774,7 @@ describe("AttendanceService.punch", () => {
     let service: AttendanceService;
 
     beforeEach(() => {
-      store = createMemoryDataStore();
+      store = attendanceStore();
       service = new AttendanceService(store);
     });
 
@@ -756,6 +822,7 @@ describe("AttendanceService.punch", () => {
       });
 
       const day = service["resolveDay"](
+        companyId(store),
         employee().id,
         "2026-07-08",
         employee().timezone!,
@@ -775,7 +842,7 @@ describe("AttendanceService.punch", () => {
 
       expect(store.outbox[0]).toMatchObject({
         aggregate_type: "attendance",
-        event_type: "attendance.regularization_submitted",
+        event_type: "attendance.regularization.submitted",
       });
     });
 
@@ -956,6 +1023,7 @@ describe("AttendanceService.punch", () => {
       });
 
       const day = service["resolveDay"](
+        companyId(store),
         employee().id,
         "2026-07-08",
         employee().timezone!,
@@ -1065,6 +1133,7 @@ describe("AttendanceService.punch", () => {
       });
 
       const day = service["resolveDay"](
+        companyId(store),
         employee().id,
         "2026-07-08",
         employee().timezone!,
@@ -1239,8 +1308,28 @@ describe("AttendanceService.punch", () => {
 
       expect(store.outbox[0]).toMatchObject({
         aggregate_type: "attendance",
-        event_type: "attendance.export_requested",
+        event_type: "attendance.export.requested",
       });
+    });
+
+    it("exports only records for the selected company context", async () => {
+      service.punch(employee(), {
+        event_type: "check_in",
+        occurred_at: "2026-07-08T04:00:00.000Z",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+      });
+      const ownRecord = store.attendanceDayRecords[0]!;
+      store.attendanceDayRecords.push({
+        ...ownRecord,
+        id: randomUUID(),
+        company_id: randomUUID(),
+      });
+
+      const result = await service.createExportJob(admin(), { format: "json" });
+
+      expect(result.row_count).toBe(1);
     });
 
     it("blocks employees from exporting attendance", async () => {

@@ -381,10 +381,14 @@ export interface TimesheetSubmission {
 export interface AttendancePunch {
   id: UUID;
   employee_user_id: UUID;
+  actor_user_id: UUID;
+  company_id: UUID;
   event_type: AttendancePunchEventType;
   occurred_at: ISODateTime;
   work_mode: "office" | "remote" | "wfh" | "field";
   source: "web" | "mobile" | "kiosk" | "admin";
+  origin: "employee_manual_now" | "manager_assisted_now" | "historical_correction" | "approved_regularization" | "system";
+  regularization_request_id: UUID | null;
   metadata: Record<string, unknown>;
   created_at: ISODateTime;
   deleted_at: ISODateTime | null;
@@ -393,6 +397,7 @@ export interface AttendancePunch {
 export interface AttendanceDayRecord {
   id: UUID;
   employee_user_id: UUID;
+  company_id: UUID;
   work_date: ISODate;
   status: AttendanceDayStatus;
   first_check_in: ISODateTime | null;
@@ -414,6 +419,8 @@ export interface AttendanceDayRecord {
 export interface AttendanceRegularizationRequest {
   id: UUID;
   employee_user_id: UUID;
+  submitted_by_user_id: UUID;
+  company_id: UUID;
   work_date: ISODate;
   reason: string;
   requested_punches: Array<{
@@ -478,6 +485,7 @@ export interface WfhRequest {
 
 export interface Holiday {
   id: UUID;
+  company_id: UUID;
   name: string;
   holiday_date: ISODate;
   region: string;
