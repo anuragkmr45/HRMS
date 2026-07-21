@@ -1,0 +1,82 @@
+# ADR-02: PostgreSQL-First Attendance Command Path
+
+Project: Hawkaii HRMS   
+Date: 2026-07-13  
+Decision Type: Data Consistency / Command Architecture  
+
+## Context
+
+The current Attendance command flow has a critical blocker: attendance state can be mutated in memory before PostgreSQL persistence.
+
+That approach is unsafe for the upgraded attendance engine because Sprint 10 onward requires:
+
+- Cross-process concurrency safety.
+- Duplicate punch protection.
+- Tenant-safe writes.
+- Immutable evidence recording.
+- Deterministic policy and shift evaluation.
+- Geo decision recording.
+- Mobile/offline replay readiness.
+- Audit-safe regularization.
+- Payroll-safe finalization.
+
+A memory-first command path can fail in several ways:
+
+- Process crashes after memory mutation but before PostgreSQL write.
+- Two requests create conflicting attendance state.
+- Retry requests create duplicate punches.
+- Evidence is lost when validation fails late.
+- Audit events are missing or out of sync.
+- Derived daily summaries disagree with raw punch history.
+- Multi-tenant data is resolved inconsistently.
+
+Attendance commands must be reliable and replay-safe from the beginning.
+
+## Decision
+
+All Attendance mutations must follow a PostgreSQL-first command path.
+
+No attendance mutation is considered accepted until the PostgreSQL transaction commits successfully.
+
+The command path must persist immutable evidence and decision records before applying or returning final runtime/projection changes.
+
+PostgreSQL is the source of truth for:
+
+- Attendance events.
+- Location evidence.
+- Device evidence placeholders.
+- Attendance decisions.
+- Decision reason codes.
+- Employee runtime state.
+- Sessions.
+- Break segments.
+- Daily summaries.
+- Regularization actions.
+- Period locks.
+- Outbox events.
+
+## Target Command Flow
+
+Every Attendance mutation should follow this transaction sequence:
+
+```txt
+1. Authenticate actor.
+2. Resolve company context.
+3. Resolve subject employee.
+4. Authorize actor against the subject/object.
+5. Validate request schema.
+6. Check Idempotency-Key and canonical request hash.
+7. Start PostgreSQL transaction.
+8. Lock employee attendance runtime state.
+9. Resolve shift instance.
+10. Resolve policy version.
+11. Resolve site/geofence assignment where applicable.
+12. Persist raw attendance event.
+13. Persist location/device evidence where applicable.
+14. Evaluate policy/manual/geo/device rules.
+15. Persist attendance decision and reason codes.
+16. Apply allowed session state transition.
+17. Rebuild or update daily projection.
+18. Insert outbox event without sensitive exact coordinates.
+19. Commit transaction.
+20. Return event_id, session_state, decision, and reason codes.
