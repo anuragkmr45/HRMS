@@ -59,6 +59,7 @@ import {
   AttendanceCommandService,
   canonicalAttendanceRequestHash,
 } from "./command-service.js";
+import { BUILT_IN_STANDARD_SHIFT_VERSION } from "./shift-resolver.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -1858,7 +1859,16 @@ export class AttendanceService {
     const policy = this.attendancePolicy(companyId);
     const holiday = this.holidayForDate(companyId, workDate);
     const workingDay = this.isWorkingDay(companyId, workDate);
-    const shiftStart = zonedClockIso(workDate, 9, 30, timeZone);
+    const shiftStartParts =
+      BUILT_IN_STANDARD_SHIFT_VERSION.local_start_time.split(":");
+    const shiftStartHour = Number(shiftStartParts[0]);
+    const shiftStartMinute = Number(shiftStartParts[1]);
+    const shiftStart = zonedClockIso(
+      workDate,
+      shiftStartHour,
+      shiftStartMinute,
+      timeZone,
+    );
     const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes(companyId));
     const rawLateMinutes = firstCheckIn
       ? Math.max(0, minutesBetween(shiftStart, firstCheckIn))
