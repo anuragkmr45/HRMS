@@ -429,13 +429,26 @@ describe("PostgreSQL attendance command idempotency", () => {
   });
 
   it("uses the built-in attendance policy when no active policy is persisted", async () => {
-    const policy = app.store.adminPolicies.find(
-      (candidate) => candidate.policy_key === "attendance",
-    );
-    if (!policy) throw new Error("Attendance policy fixture is unavailable.");
-    policy.status = "inactive";
-
     const employee = await loginAs(app, "E1");
+    const companyId = app.store.userSessionPreferences.find(
+      (preference) => preference.user_id === employee.user.id,
+    )?.company_id;
+    if (!companyId) throw new Error("Employee company fixture is unavailable.");
+    await app.store.pgPool!.query(
+      `UPDATE attendance.policies
+        SET status = 'inactive'
+        WHERE company_id = $1
+          AND policy_key = 'attendance'`,
+      [companyId],
+    );
+    await app.store.pgPool!.query(
+      `UPDATE attendance.policy_assignments
+        SET status = 'inactive'
+        WHERE company_id = $1
+          AND scope_type = 'company'
+          AND scope_id IS NULL`,
+      [companyId],
+    );
     const idempotencyKey = "attendance-idempotency-built-in-policy-001";
     const response = await app.inject({
       method: "POST",

@@ -73,6 +73,7 @@ import {
 } from "./data-store.js";
 import type { EmailDeliveryRecord, EmailEventRecord } from "./email/types.js";
 import { CloudinaryObjectStorage } from "./object-storage.js";
+import { normalizeAttendancePolicyConfig } from "../modules/attendance/policy-config.js";
 
 function optionalSet(values: readonly string[] | undefined): ReadonlySet<string> | undefined {
   return values?.length ? new Set(values) : undefined;
@@ -140,6 +141,9 @@ const resetTables = [
   "attendance.shift_assignments",
   "attendance.shift_template_versions",
   "attendance.shift_templates",
+  "attendance.policy_assignments",
+  "attendance.policy_versions",
+  "attendance.policies",
   "attendance.break_segments",
   "attendance.employee_command_states",
   "attendance.command_decisions",
@@ -2385,6 +2389,7 @@ class PostgresPersistence {
           policy.version
         ]
       );
+      await this.publishAttendanceAdminPolicyVersion(client, policy);
     }
     for (const template of this.store.adminEmailTemplates) {
       await client.query(
@@ -2722,6 +2727,117 @@ class PostgresPersistence {
       );
     }
     await this.flushOutbox(client);
+  }
+
+  private async publishAttendanceAdminPolicyVersion(
+    client: PoolClient,
+    policy: AdminPolicyConfigRecord
+  ): Promise<void> {
+    if (policy.policy_key !== "attendance" || !policy.company_id || policy.deleted_at) {
+      return;
+    }
+    const effectiveFrom = policy.updated_at ?? policy.created_at;
+    const normalizedConfig = normalizeAttendancePolicyConfig(policy.config);
+    await client.query(
+      `INSERT INTO attendance.policies (
+          id, company_id, policy_key, name, label, status,
+          created_at, updated_at, deleted_at, version
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (id) DO UPDATE
+        SET policy_key = EXCLUDED.policy_key,
+            name = EXCLUDED.name,
+            label = EXCLUDED.label,
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at,
+            deleted_at = EXCLUDED.deleted_at,
+            version = EXCLUDED.version`,
+      [
+        policy.id,
+        policy.company_id,
+        policy.policy_key,
+        policy.policy_key,
+        policy.label,
+        policy.status === "inactive" ? "inactive" : "active",
+        policy.created_at,
+        policy.updated_at,
+        policy.deleted_at,
+        policy.version
+      ]
+    );
+
+    const openVersion = (await client.query<{ id: string; version_number: number }>(
+      `SELECT id, version_number
+        FROM attendance.policy_versions
+        WHERE company_id = $1
+          AND policy_id = $2
+          AND effective_until IS NULL
+        ORDER BY version_number DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [policy.company_id, policy.id]
+    )).rows[0];
+    if (openVersion && openVersion.version_number < policy.version) {
+      await client.query(
+        `UPDATE attendance.policy_versions
+          SET effective_until = $3
+          WHERE id = $1
+            AND company_id = $2
+            AND effective_until IS NULL`,
+        [openVersion.id, policy.company_id, effectiveFrom]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO attendance.policy_versions (
+          company_id, policy_id, version_number, effective_from, config, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5::jsonb, $4)
+        ON CONFLICT (policy_id, version_number) DO NOTHING`,
+      [
+        policy.company_id,
+        policy.id,
+        Math.max(1, policy.version),
+        effectiveFrom,
+        JSON.stringify(normalizedConfig)
+      ]
+    );
+
+    const existingAssignment = (await client.query<{ id: string }>(
+      `SELECT id
+        FROM attendance.policy_assignments
+        WHERE company_id = $1
+          AND policy_id = $2
+          AND scope_type = 'company'
+          AND scope_id IS NULL
+          AND deleted_at IS NULL
+        ORDER BY created_at
+        LIMIT 1
+        FOR UPDATE`,
+      [policy.company_id, policy.id]
+    )).rows[0];
+    const assignmentStatus = policy.status === "active" ? "active" : "inactive";
+    if (existingAssignment) {
+      await client.query(
+        `UPDATE attendance.policy_assignments
+          SET status = $3,
+              updated_at = $4,
+              version = version + 1
+          WHERE id = $1
+            AND company_id = $2`,
+        [existingAssignment.id, policy.company_id, assignmentStatus, effectiveFrom]
+      );
+      return;
+    }
+
+    await client.query(
+      `INSERT INTO attendance.policy_assignments (
+          company_id, policy_id, scope_type, scope_id, effective_from, status,
+          created_at, updated_at
+        )
+        VALUES ($1, $2, 'company', NULL, $3, $4, $3, $3)`,
+      [policy.company_id, policy.id, effectiveFrom, assignmentStatus]
+    );
   }
 
   private async flushOutbox(client: PoolClient, aggregateIds?: ReadonlySet<string>): Promise<void> {

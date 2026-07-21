@@ -59,6 +59,7 @@ import {
   AttendanceCommandService,
   canonicalAttendanceRequestHash,
 } from "./command-service.js";
+import { normalizeAttendancePolicyConfig } from "./policy-config.js";
 import { BUILT_IN_STANDARD_SHIFT_VERSION } from "./shift-resolver.js";
 
 export interface AttendancePageQuery {
@@ -231,42 +232,6 @@ function addDays(date: string, days: number): string {
   return value.toISOString().slice(0, 10);
 }
 
-function numberConfig(
-  config: Record<string, unknown>,
-  key: string,
-  fallback: number,
-): number {
-  const value = config[key];
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function booleanConfig(
-  config: Record<string, unknown>,
-  key: string,
-  fallback: boolean,
-): boolean {
-  const value = config[key];
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function timeConfig(
-  config: Record<string, unknown>,
-  key: string,
-  fallback: string,
-): string {
-  const value = config[key];
-  return typeof value === "string" &&
-    /^([01]\d|2[0-3]):[0-5]\d$/u.test(value.trim())
-    ? value.trim()
-    : fallback;
-}
-
 function minutesOfDay(clock: string): number {
   const [hourText, minuteText] = clock.split(":");
   return Number(hourText) * 60 + Number(minuteText);
@@ -338,6 +303,9 @@ interface AttendancePunchPolicy {
   autoPunchOutEnabled: boolean;
   autoPunchOutTime: string;
   allowOffDayPunches: boolean;
+  attendanceMode: "manual_only" | "geo_optional" | "geo_required";
+  fallbackApprovalMode: "disabled" | "approval_required";
+  regularizationMode: "disabled" | "approval_required";
   policyVersion: string;
 }
 
@@ -1212,7 +1180,6 @@ export class AttendanceService {
       remarks: input.remarks?.trim() ?? null,
       decision: input.decision,
       timeZone,
-      policy: this.attendancePolicy(companyId),
       // Re-evaluate authorization after the database row is locked. The
       // request snapshot is protected by its expected version and lock.
       authorize: () => assertCanDecideRegularization(actor, current),
@@ -1536,6 +1503,9 @@ export class AttendanceService {
       auto_punch_out_enabled: availability.policy.autoPunchOutEnabled,
       auto_punch_out_time: availability.policy.autoPunchOutTime,
       allow_off_day_punches: availability.policy.allowOffDayPunches,
+      attendance_mode: availability.policy.attendanceMode,
+      fallback_approval_mode: availability.policy.fallbackApprovalMode,
+      regularization_mode: availability.policy.regularizationMode,
       is_company_working_day: availability.is_company_working_day,
       local_time: availability.local_time,
       can_punch_now: availability.next_allowed_actions.length > 0,
@@ -2241,7 +2211,6 @@ export class AttendanceService {
       timeZone,
       idempotencyKey: input.idempotency_key,
       command: input,
-      policy: this.attendancePolicy(companyId),
       isWorkingDayFor: (workDate) => this.isWorkingDay(companyId, workDate),
     });
   }
@@ -2293,7 +2262,6 @@ export class AttendanceService {
         source: "admin",
         metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) },
       },
-      policy: this.attendancePolicy(context.companyId),
       isWorkingDayFor: (workDate) => this.isWorkingDay(context.companyId, workDate),
     });
   }
@@ -2345,7 +2313,6 @@ export class AttendanceService {
         idempotencyKey,
         timeZone: this.timezoneForUser(subject.id, context.companyId),
         command: input,
-        policy: this.attendancePolicy(context.companyId),
         commandKind: "historical_correction",
       });
     }
@@ -2498,18 +2465,9 @@ export class AttendanceService {
         candidate.status === "active" &&
         !candidate.deleted_at,
     );
-    const config = policy?.config ?? {};
+    const config = normalizeAttendancePolicyConfig(policy?.config);
     return {
-      graceMinutes: numberConfig(config, "graceMinutes", 10),
-      autoMarkAbsentMinutes: numberConfig(config, "autoMarkAbsentMinutes", 480),
-      fullDayPunchWindow: booleanConfig(config, "fullDayPunchWindow", true),
-      punchInStart: timeConfig(config, "punchInStart", "09:00"),
-      punchInEnd: timeConfig(config, "punchInEnd", "11:00"),
-      punchOutStart: timeConfig(config, "punchOutStart", "17:00"),
-      punchOutEnd: timeConfig(config, "punchOutEnd", "23:59"),
-      autoPunchOutEnabled: booleanConfig(config, "autoPunchOutEnabled", true),
-      autoPunchOutTime: timeConfig(config, "autoPunchOutTime", "23:59"),
-      allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false),
+      ...config,
       policyVersion: policy ? String(policy.version) : "built-in-default",
     };
   }

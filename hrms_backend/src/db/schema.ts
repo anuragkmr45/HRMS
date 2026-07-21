@@ -596,6 +596,74 @@ export const attendanceRegularizationRequests = attendance.table(
   ]
 );
 
+export const attendancePolicies = attendance.table(
+  "policies",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyKey: text("policy_key").notNull(),
+    name: text("name").notNull(),
+    label: text("label").notNull(),
+    status: text("status").notNull().default("active"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    uniqueIndex("attendance_policies_company_key_uq")
+      .on(table.companyId, table.policyKey, table.name)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_policies_company_status_idx")
+      .on(table.companyId, table.status, table.policyKey)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendancePolicyVersions = attendance.table(
+  "policy_versions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyId: uuid("policy_id").notNull(),
+    versionNumber: integer("version_number").notNull(),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    config: jsonb("config").notNull().default({}),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_policy_versions_policy_number_uq").on(table.policyId, table.versionNumber),
+    index("attendance_policy_versions_lookup_idx").on(table.companyId, table.policyId, table.effectiveFrom, table.effectiveUntil)
+  ]
+);
+
+export const attendancePolicyAssignments = attendance.table(
+  "policy_assignments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyId: uuid("policy_id").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: uuid("scope_id"),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    status: text("status").notNull().default("active"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    index("attendance_policy_assignments_lookup_idx")
+      .on(table.companyId, table.scopeType, table.scopeId, table.status, table.effectiveFrom, table.effectiveUntil)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
 export const attendanceShiftTemplates = attendance.table(
   "shift_templates",
   {
@@ -1702,6 +1770,9 @@ export const schema = {
   attendanceEmployeeCommandStates,
   attendanceDailyRecords,
   attendanceRegularizationRequests,
+  attendancePolicies,
+  attendancePolicyVersions,
+  attendancePolicyAssignments,
   attendanceShiftTemplates,
   attendanceShiftTemplateVersions,
   attendanceShiftAssignments,

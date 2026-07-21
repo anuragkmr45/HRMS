@@ -13,6 +13,8 @@ import {
   buildPunchRecordedEvent,
   buildRegularizationDecisionEvent,
 } from "./events.js";
+import type { EffectiveAttendancePolicy } from "./policy-config.js";
+import { resolveEffectiveAttendancePolicy } from "./policy-resolver.js";
 import { decideAttendanceTransition } from "./session-transition.js";
 
 export interface AttendanceCommandInput {
@@ -97,16 +99,6 @@ export class AttendanceCommandService {
     timeZone: string;
     idempotencyKey: string;
     command: AttendanceCommandInput;
-    policy: {
-      fullDayPunchWindow: boolean;
-      punchInStart: string;
-      punchInEnd: string;
-      punchOutStart: string;
-      punchOutEnd: string;
-      allowOffDayPunches: boolean;
-      graceMinutes: number;
-      policyVersion: string;
-    };
     isWorkingDayFor: (workDate: string) => boolean;
   }): Promise<Record<string, unknown>> {
     const pool = this.store.pgPool;
@@ -146,6 +138,11 @@ export class AttendanceCommandService {
             );
           }
           const occurredAt = await tx.getTransactionTimestamp();
+          const policy = await resolveEffectiveAttendancePolicy(tx, {
+            companyId: input.companyId,
+            subjectEmployeeUserId,
+            asOf: occurredAt,
+          });
           const workDate = dateInTimeZone(occurredAt, input.timeZone);
           const command = await tx.createCommandExecution({
             companyId: input.companyId,
@@ -255,7 +252,7 @@ export class AttendanceCommandService {
             input.command.event_type,
             occurredAt,
             input.timeZone,
-            input.policy,
+            policy,
             input.isWorkingDayFor(workDate),
             state.state,
           );
@@ -283,10 +280,10 @@ export class AttendanceCommandService {
             decisionType: "manual_attendance",
             outcome: denied ? "failed" : "passed",
             policyKey: "attendance",
-            policyVersion: input.policy.policyVersion,
+            policyVersion: policy.policyVersion,
             evaluatedAt: occurredAt,
             evidenceDigest: evidencePayloadHash,
-            policySnapshot: input.policy,
+            policySnapshot: policy,
             evaluationContext: {
               company_id: input.companyId,
               actor_user_id: input.actor.id,
@@ -319,7 +316,7 @@ export class AttendanceCommandService {
               reasonDetail: reason,
               previousState: previous,
               nextState: previous,
-              policySnapshot: input.policy,
+              policySnapshot: policy,
               evidenceSnapshot: {
                 state,
                 company_id: input.companyId,
@@ -339,7 +336,7 @@ export class AttendanceCommandService {
               reason_code: code,
               reason_detail: reason,
               next_allowed_actions: allowedActions(previous),
-              punch_policy: input.policy,
+              punch_policy: policy,
             };
             await tx.completeCommand({
               commandExecutionId: command.id,
@@ -365,7 +362,7 @@ export class AttendanceCommandService {
             reasonDetail: null,
             previousState: stateDecision.previous_state,
             nextState: stateDecision.next_state,
-            policySnapshot: input.policy,
+            policySnapshot: policy,
             evidenceSnapshot: {
               state,
               company_id: input.companyId,
@@ -424,7 +421,7 @@ export class AttendanceCommandService {
             subjectEmployeeUserId,
             session.work_date,
             input.command.work_mode,
-            input.policy.graceMinutes,
+            policy.graceMinutes,
             input.timeZone,
             occurredAt,
           );
@@ -470,7 +467,7 @@ export class AttendanceCommandService {
             next_allowed_actions: allowedActions(stateDecision.next_state),
             next_allowed_action:
               allowedActions(stateDecision.next_state)[0] ?? null,
-            punch_policy: input.policy,
+            punch_policy: policy,
           };
           await tx.completeCommand({
             commandExecutionId: command.id,
@@ -529,7 +526,6 @@ export class AttendanceCommandService {
       metadata: Record<string, unknown>;
       linked_regularization_request_id?: UUID;
     };
-    policy: { graceMinutes: number; policyVersion: string };
   }, existingTransaction?: AttendanceCommandTransactionRepository): Promise<Record<string, unknown>> {
     const pool = this.store.pgPool;
     if (!pool && !existingTransaction) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
@@ -556,6 +552,11 @@ export class AttendanceCommandService {
       if (Date.parse(input.command.occurred_at) >= Date.parse(receivedAt)) {
         throw badRequest("Historical correction occurrence time must be in the past.");
       }
+      const policy = await resolveEffectiveAttendancePolicy(tx, {
+        companyId: principal.companyId,
+        subjectEmployeeUserId: principal.subjectEmployeeUserId,
+        asOf: input.command.occurred_at,
+      });
       const workDate = dateInTimeZone(input.command.occurred_at, input.timeZone);
       const command = await tx.createCommandExecution({
         companyId: principal.companyId,
@@ -602,10 +603,10 @@ export class AttendanceCommandService {
         decisionType: input.commandKind,
         outcome: "passed",
         policyKey: "attendance",
-        policyVersion: input.policy.policyVersion,
+        policyVersion: policy.policyVersion,
         evaluatedAt: receivedAt,
         evidenceDigest,
-        policySnapshot: input.policy,
+        policySnapshot: policy,
         evaluationContext: {
           company_id: principal.companyId,
           actor_user_id: principal.actorUserId,
@@ -624,7 +625,7 @@ export class AttendanceCommandService {
         reasonDetail: null,
         previousState: "not_checked_in",
         nextState: "not_checked_in",
-        policySnapshot: input.policy,
+        policySnapshot: policy,
         evidenceSnapshot: {
           attendance_event_id: evidence.id,
           audit_decision_id: auditDecision.id,
@@ -727,7 +728,6 @@ export class AttendanceCommandService {
     remarks: string | null;
     decision: "approve" | "reject" | "return";
     timeZone: string;
-    policy: { graceMinutes: number; policyVersion: string };
     authorize: () => void;
   }): Promise<{ version: number; decidedAt: string; day: Record<string, unknown> }> {
     const pool = this.store.pgPool;
@@ -786,7 +786,6 @@ export class AttendanceCommandService {
             metadata: { decided_by_user_id: input.actor.id },
             linked_regularization_request_id: input.regularizationRequestId,
           },
-          policy: input.policy,
         }, tx);
       }
       const day = input.decision === "approve"
@@ -1250,15 +1249,16 @@ function deriveAttendanceRuntimeState(
   if (completed) return { state: "completed", sessionId: completed.id };
   return { state: "not_checked_in", sessionId: null };
 }
-type CommandPolicy = {
-  fullDayPunchWindow: boolean;
-  punchInStart: string;
-  punchInEnd: string;
-  punchOutStart: string;
-  punchOutEnd: string;
-  allowOffDayPunches: boolean;
-  graceMinutes: number;
-};
+type CommandPolicy = Pick<
+  EffectiveAttendancePolicy,
+  | "fullDayPunchWindow"
+  | "punchInStart"
+  | "punchInEnd"
+  | "punchOutStart"
+  | "punchOutEnd"
+  | "allowOffDayPunches"
+  | "graceMinutes"
+>;
 type PunchProjectionRow = {
   session_id: UUID;
   checked_in_at: Date;

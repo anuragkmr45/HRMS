@@ -943,6 +943,9 @@ export function buildDefaultAdminPolicies(
         autoPunchOutEnabled: true,
         autoPunchOutTime: "23:59",
         allowOffDayPunches: false,
+        attendanceMode: "manual_only",
+        fallbackApprovalMode: "disabled",
+        regularizationMode: "approval_required",
       },
     },
     {
