@@ -120,6 +120,7 @@ function commandRecord(
     idempotency_key: "same-text-key",
     request_hash: "request-hash",
     command_type: "check_in",
+    command_origin: "employee_manual_now",
     occurred_at: "2026-07-08T04:00:00.000Z",
     status: "completed",
     session_id: null,

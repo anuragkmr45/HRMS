@@ -113,6 +113,7 @@ describe("attendance outbox event contract", () => {
       work_date: "2026-07-16",
       work_mode: "office",
       source_channel: "mobile",
+      origin: "employee_manual_now",
       day_status: "present",
     });
     expect(JSON.stringify(event.payload)).not.toContain("attestation");

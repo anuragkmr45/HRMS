@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
   attendancePunchSchema,
+  attendanceAssistedCurrentPunchSchema,
+  attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
   attendanceRegularizationDecisionSchema,
   paginationQuerySchema,
@@ -10,6 +12,7 @@ import { unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
+const employeeParamSchema = z.object({ employeeUserId: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
@@ -52,13 +55,34 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       request.headers["idempotency-key"],
     );
     const service = new AttendanceService(fastify.store);
-    const input = {
-      ...attendancePunchSchema.parse(request.body),
-      idempotency_key: idempotencyKey,
-    };
+    const input = attendancePunchSchema.parse(request.body);
     return fastify.store.kind === "postgres"
-      ? await service.punchPostgres(request.actor, input)
-      : service.punch(request.actor, input);
+      ? await service.recordEmployeeManualNowPostgres(request.actor, input, idempotencyKey)
+      : service.recordEmployeeManualNow(request.actor, input);
+  });
+
+  fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request) => {
+    if (!request.actor) throw unauthorized();
+    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const params = employeeParamSchema.parse(request.params);
+    const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
+    const service = new AttendanceService(fastify.store);
+    return fastify.store.kind === "postgres"
+      ? await service.recordManagerAssistedCurrentPunchPostgres(request.actor, params.employeeUserId, input, idempotencyKey)
+      : service.recordManagerAssistedCurrentPunch(request.actor, params.employeeUserId, input);
+  });
+
+  fastify.post("/employees/:employeeUserId/historical-corrections", async (request) => {
+    if (!request.actor) throw unauthorized();
+    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+    const params = employeeParamSchema.parse(request.params);
+    const input = attendanceHistoricalCorrectionSchema.parse(request.body);
+    return new AttendanceService(fastify.store).recordHistoricalCorrection(
+      request.actor,
+      params.employeeUserId,
+      input,
+      idempotencyKey,
+    );
   });
 
   fastify.get("/punches/my", async (request) => {
@@ -146,11 +170,12 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       throw unauthorized();
     }
     const params = idParamSchema.parse(request.params);
-    return new AttendanceService(fastify.store).decideRegularization(
-      request.actor,
-      params.id,
-      attendanceRegularizationDecisionSchema.parse(request.body),
-    );
+    const input = attendanceRegularizationDecisionSchema.parse(request.body);
+    const service = new AttendanceService(fastify.store);
+    if (fastify.store.kind === "postgres") {
+      return service.decideRegularizationPostgres(request.actor, params.id, input);
+    }
+    return service.decideRegularization(request.actor, params.id, input);
   });
 
   fastify.get("/exceptions", async (request) => {

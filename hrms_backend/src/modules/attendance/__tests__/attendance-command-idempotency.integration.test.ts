@@ -87,18 +87,23 @@ describe("PostgreSQL attendance command idempotency", () => {
       ...authHeader(employee.token),
       "idempotency-key": idempotencyKey,
     };
+
     const payload = {
       event_type: "check_in",
-      occurred_at: "2001-01-01T00:00:00.000Z",
       work_mode: "office",
       source: "web",
       metadata: {
-        device: { os: "android", attestation: "private-attestation" },
+        device: {
+          os: "android",
+          attestation: "private-attestation",
+        },
         latitude: 12.971599,
         longitude: 77.594566,
         coordinates: [77.594566, 12.971599],
       },
     };
+
+    const requestStartedAt = Date.now();
 
     const first = await app.inject({
       method: "POST",
@@ -106,24 +111,27 @@ describe("PostgreSQL attendance command idempotency", () => {
       headers,
       payload,
     });
+
+    const requestCompletedAt = Date.now();
+
     expect(first.statusCode).toBe(200);
 
     const replay = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload: {
-        ...payload,
-        occurred_at: "2099-12-31T23:59:59.000Z",
-      },
+      payload,
     });
+
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toMatchObject({
       command_id: first.json().command_id,
       decision_id: first.json().decision_id,
       session_id: first.json().session_id,
       punch_id: first.json().punch_id,
-      punch: { occurred_at: first.json().punch.occurred_at },
+      punch: {
+        occurred_at: first.json().punch.occurred_at,
+      },
     });
 
     const counts = await app.store.pgPool!.query<{
@@ -137,14 +145,37 @@ describe("PostgreSQL attendance command idempotency", () => {
       outbox_events: string;
     }>(
       `SELECT
-        (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1) AS platform_keys,
-        (SELECT count(*) FROM attendance.command_executions WHERE idempotency_key = $1) AS commands,
-        (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = $2) AS decisions,
-        (SELECT count(*) FROM attendance.attendance_events WHERE command_execution_id = $2) AS evidence,
-        (SELECT count(*) FROM attendance.attendance_decisions WHERE command_execution_id = $2) AS audit_decisions,
-        (SELECT count(*) FROM attendance.sessions WHERE id = $3) AS sessions,
-        (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = $2) AS punches,
-        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id = $4) AS outbox_events`,
+      (SELECT count(*)
+       FROM platform.idempotency_keys
+       WHERE idempotency_key = $1) AS platform_keys,
+
+      (SELECT count(*)
+       FROM attendance.command_executions
+       WHERE idempotency_key = $1) AS commands,
+
+      (SELECT count(*)
+       FROM attendance.command_decisions
+       WHERE command_execution_id = $2) AS decisions,
+
+      (SELECT count(*)
+       FROM attendance.attendance_events
+       WHERE command_execution_id = $2) AS evidence,
+
+      (SELECT count(*)
+       FROM attendance.attendance_decisions
+       WHERE command_execution_id = $2) AS audit_decisions,
+
+      (SELECT count(*)
+       FROM attendance.sessions
+       WHERE id = $3) AS sessions,
+
+      (SELECT count(*)
+       FROM attendance.punch_events
+       WHERE command_execution_id = $2) AS punches,
+
+      (SELECT count(*)
+       FROM platform.outbox_events
+       WHERE aggregate_id = $4) AS outbox_events`,
       [
         idempotencyKey,
         first.json().command_id,
@@ -152,6 +183,7 @@ describe("PostgreSQL attendance command idempotency", () => {
         first.json().punch_id,
       ],
     );
+
     expect(counts.rows[0]).toEqual({
       platform_keys: "1",
       commands: "1",
@@ -172,6 +204,7 @@ describe("PostgreSQL attendance command idempotency", () => {
           !candidate.deleted_at,
       )?.version ?? "built-in-default",
     );
+
     const ledger = await app.store.pgPool!.query<{
       evidence_id: string;
       evidence_command_id: string;
@@ -184,25 +217,32 @@ describe("PostgreSQL attendance command idempotency", () => {
       evidence_digest: string;
       location_rows: string;
     }>(
-      `SELECT evidence.id AS evidence_id,
-          evidence.command_execution_id AS evidence_command_id,
-          audit.attendance_event_id AS audit_event_id,
-          audit.command_execution_id AS audit_command_id,
-          command_decision.command_execution_id AS command_decision_command_id,
-          audit.policy_version,
-          evidence.payload,
-          evidence.payload_hash,
-          audit.evidence_digest,
-          (SELECT count(*) FROM attendance.location_evidence location
-            WHERE location.attendance_event_id = evidence.id) AS location_rows
-        FROM attendance.attendance_events evidence
-        JOIN attendance.attendance_decisions audit
-          ON audit.command_execution_id = evidence.command_execution_id
-        JOIN attendance.command_decisions command_decision
-          ON command_decision.command_execution_id = evidence.command_execution_id
-        WHERE evidence.command_execution_id = $1`,
+      `SELECT
+        evidence.id AS evidence_id,
+        evidence.command_execution_id AS evidence_command_id,
+        audit.attendance_event_id AS audit_event_id,
+        audit.command_execution_id AS audit_command_id,
+        command_decision.command_execution_id
+          AS command_decision_command_id,
+        audit.policy_version,
+        evidence.payload,
+        evidence.payload_hash,
+        audit.evidence_digest,
+        (
+          SELECT count(*)
+          FROM attendance.location_evidence location
+          WHERE location.attendance_event_id = evidence.id
+        ) AS location_rows
+      FROM attendance.attendance_events evidence
+      JOIN attendance.attendance_decisions audit
+        ON audit.command_execution_id = evidence.command_execution_id
+      JOIN attendance.command_decisions command_decision
+        ON command_decision.command_execution_id =
+          evidence.command_execution_id
+      WHERE evidence.command_execution_id = $1`,
       [first.json().command_id],
     );
+
     expect(ledger.rows).toHaveLength(1);
     expect(ledger.rows[0]).toMatchObject({
       evidence_command_id: first.json().command_id,
@@ -213,13 +253,16 @@ describe("PostgreSQL attendance command idempotency", () => {
       payload_hash: ledger.rows[0]?.evidence_digest,
       location_rows: "0",
     });
+
     const evidencePayload = ledger.rows[0]?.payload;
+
     expect(evidencePayload).toEqual({
       schema_version: 1,
       command_type: "check_in",
       work_mode: "office",
       source_channel: "web",
     });
+
     for (const excludedField of [
       "occurred_at",
       "metadata",
@@ -240,31 +283,46 @@ describe("PostgreSQL attendance command idempotency", () => {
       session_at: Date;
       punch_at: Date;
     }>(
-      `SELECT command.occurred_at AS command_at,
-          evidence.occurred_at AS evidence_at,
-          evidence.received_at,
-          audit.evaluated_at,
-          session.checked_in_at AS session_at,
-          punch.occurred_at AS punch_at
-        FROM attendance.command_executions command
-        JOIN attendance.attendance_events evidence ON evidence.command_execution_id = command.id
-        JOIN attendance.attendance_decisions audit ON audit.command_execution_id = command.id
-        JOIN attendance.sessions session ON session.id = command.session_id
-        JOIN attendance.punch_events punch ON punch.id = command.punch_event_id
-        WHERE command.id = $1`,
+      `SELECT
+        command.occurred_at AS command_at,
+        evidence.occurred_at AS evidence_at,
+        evidence.received_at,
+        audit.evaluated_at,
+        session.checked_in_at AS session_at,
+        punch.occurred_at AS punch_at
+      FROM attendance.command_executions command
+      JOIN attendance.attendance_events evidence
+        ON evidence.command_execution_id = command.id
+      JOIN attendance.attendance_decisions audit
+        ON audit.command_execution_id = command.id
+      JOIN attendance.sessions session
+        ON session.id = command.session_id
+      JOIN attendance.punch_events punch
+        ON punch.id = command.punch_event_id
+      WHERE command.id = $1`,
       [first.json().command_id],
     );
+
     const timestampRow = timestamps.rows[0];
     expect(timestampRow).toBeDefined();
+
     const commandTime = timestampRow!.command_at.toISOString();
-    expect(commandTime).not.toBe(payload.occurred_at);
-    expect([
-      timestampRow!.evidence_at,
-      timestampRow!.received_at,
-      timestampRow!.evaluated_at,
-      timestampRow!.session_at,
-      timestampRow!.punch_at,
-    ].map((value) => value.toISOString())).toEqual([
+    const commandTimestamp = timestampRow!.command_at.getTime();
+
+    // The current punch timestamp must be server-generated during the request.
+    // A small tolerance avoids failures caused by minor clock precision differences.
+    expect(commandTimestamp).toBeGreaterThanOrEqual(requestStartedAt - 5_000);
+    expect(commandTimestamp).toBeLessThanOrEqual(requestCompletedAt + 5_000);
+
+    expect(
+      [
+        timestampRow!.evidence_at,
+        timestampRow!.received_at,
+        timestampRow!.evaluated_at,
+        timestampRow!.session_at,
+        timestampRow!.punch_at,
+      ].map((value) => value.toISOString()),
+    ).toEqual([
       commandTime,
       commandTime,
       commandTime,
@@ -278,10 +336,11 @@ describe("PostgreSQL attendance command idempotency", () => {
       payload: Record<string, unknown>;
     }>(
       `SELECT aggregate_id, event_type, payload
-       FROM platform.outbox_events
-       WHERE aggregate_id = $1`,
+     FROM platform.outbox_events
+     WHERE aggregate_id = $1`,
       [first.json().punch_id],
     );
+
     expect(outbox.rows[0]).toMatchObject({
       aggregate_id: first.json().punch_id,
       event_type: "attendance.punch.recorded",
@@ -295,10 +354,14 @@ describe("PostgreSQL attendance command idempotency", () => {
         session_id: first.json().session_id,
         punch_event_id: first.json().punch_id,
         punch_type: "check_in",
+        origin: "employee_manual_now",
       },
     });
+
     const persistedPayload = outbox.rows[0]?.payload;
+
     expect(persistedPayload?.occurred_at).toBe(commandTime);
+
     expect(Object.keys(persistedPayload ?? {}).sort()).toEqual(
       [
         "schema_version",
@@ -315,8 +378,10 @@ describe("PostgreSQL attendance command idempotency", () => {
         "work_mode",
         "source_channel",
         "day_status",
+        "origin",
       ].sort(),
     );
+
     for (const excludedField of [
       "latitude",
       "longitude",
@@ -351,8 +416,12 @@ describe("PostgreSQL attendance command idempotency", () => {
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload: { ...payload, work_mode: "remote" },
+      payload: {
+        ...payload,
+        work_mode: "remote",
+      },
     });
+
     expect(changed.statusCode).toBe(409);
     expect(changed.json().message).toBe(
       "Idempotency key was already used with a different attendance command.",
@@ -458,11 +527,11 @@ describe("PostgreSQL attendance command idempotency", () => {
     );
     await pool.query(
       `INSERT INTO attendance.punch_events (
-        company_id, employee_user_id, event_type, occurred_at, work_mode,
-        source, metadata, session_id, created_at, deleted_at
+        company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode,
+        source, origin, metadata, session_id, created_at, deleted_at
       ) VALUES
-        ($1, $2, 'break_start', $3::timestamptz + interval '30 minutes', 'office', 'web', '{}'::jsonb, $4, now(), NULL),
-        ($1, $2, 'break_end', $3::timestamptz + interval '45 minutes', 'office', 'web', '{}'::jsonb, $4, now(), NULL)`,
+        ($1, $2, $2, 'break_start', $3::timestamptz + interval '30 minutes', 'office', 'web', 'employee_manual_now', '{}'::jsonb, $4, now(), NULL),
+        ($1, $2, $2, 'break_end', $3::timestamptz + interval '45 minutes', 'office', 'web', 'employee_manual_now', '{}'::jsonb, $4, now(), NULL)`,
       [companyId, employee.user.id, secondSessionCheckIn, secondSessionId],
     );
 

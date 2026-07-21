@@ -31,6 +31,7 @@ export interface AttendanceCommandExecutionRecord {
   idempotency_key: string;
   request_hash: string;
   command_type: AttendancePunchEventType;
+  command_origin: string;
   occurred_at: string;
   status: AttendanceCommandExecutionStatus;
   session_id: UUID | null;
@@ -99,6 +100,7 @@ export interface CreateAttendanceCommandInput {
   idempotencyKey: string;
   requestHash: string;
   commandType: AttendancePunchEventType;
+  commandOrigin: string;
   occurredAt: string;
   requestSnapshot: Record<string, unknown>;
 }
@@ -385,8 +387,9 @@ export class AttendanceCommandTransactionRepository {
           platform_idempotency_key_id,
           idempotency_key,
           request_hash,
-          command_type,
-          occurred_at,
+           command_type,
+           command_origin,
+           occurred_at,
           status,
           session_id,
           punch_event_id,
@@ -414,9 +417,10 @@ export class AttendanceCommandTransactionRepository {
           employee_user_id,
           platform_idempotency_key_id,
           idempotency_key,
-          request_hash,
-          command_type,
-          occurred_at,
+           request_hash,
+           command_type,
+           command_origin,
+           occurred_at,
           status,
           session_id,
           punch_event_id,
@@ -432,12 +436,13 @@ export class AttendanceCommandTransactionRepository {
           $4,
           $5,
           $6,
-          $7,
-          $8,
-          'received',
+           $7,
+           $8,
+           $9,
+           'received',
           NULL,
           NULL,
-          $9::jsonb,
+           $10::jsonb,
           NULL,
           NULL,
           now()
@@ -453,8 +458,9 @@ export class AttendanceCommandTransactionRepository {
           platform_idempotency_key_id,
           idempotency_key,
           request_hash,
-          command_type,
-          occurred_at,
+           command_type,
+           command_origin,
+           occurred_at,
           status,
           session_id,
           punch_event_id,
@@ -470,6 +476,7 @@ export class AttendanceCommandTransactionRepository {
         input.idempotencyKey,
         input.requestHash,
         input.commandType,
+        input.commandOrigin,
         input.occurredAt,
         JSON.stringify(input.requestSnapshot),
       ],
@@ -1078,30 +1085,36 @@ export class AttendanceCommandTransactionRepository {
   async insertPunchEvent(input: {
     companyId: UUID;
     employeeUserId: UUID;
+    actorUserId: UUID;
     eventType: AttendancePunchEventType;
     occurredAt: string;
     workMode: string;
     source: string;
+    origin: string;
+    regularizationRequestId?: UUID | null;
     metadata: Record<string, unknown>;
     commandExecutionId: UUID;
-    sessionId: UUID;
+    sessionId?: UUID | null;
     decisionId: UUID;
   }) {
     return this.query<
       { id: UUID; created_at: string } & Record<string, unknown>
     >(
-      `INSERT INTO attendance.punch_events (company_id, employee_user_id, event_type, occurred_at, work_mode, source, metadata, command_execution_id, session_id, decision_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10) RETURNING id, created_at`,
+       `INSERT INTO attendance.punch_events (company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode, source, origin, regularization_request_id, metadata, command_execution_id, session_id, decision_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13) RETURNING id, created_at`,
       [
         input.companyId,
         input.employeeUserId,
+        input.actorUserId,
         input.eventType,
         input.occurredAt,
         input.workMode,
         input.source,
+        input.origin,
+        input.regularizationRequestId ?? null,
         JSON.stringify(input.metadata),
         input.commandExecutionId,
-        input.sessionId,
+        input.sessionId ?? null,
         input.decisionId,
       ],
     );

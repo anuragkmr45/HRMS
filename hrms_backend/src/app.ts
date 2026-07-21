@@ -250,6 +250,16 @@ const domainMutationPrefixes: Array<{ prefix: string; domain: PersistenceDomain 
 // attendance mutations such as regularization.
 const transactionOwnedMutationRoutes = new Set(["POST /api/v1/attendance/punches"]);
 
+function isTransactionOwnedMutationRoute(routeKey: string): boolean {
+  return (
+    transactionOwnedMutationRoutes.has(routeKey) ||
+    /^POST \/api\/v1\/attendance\/employees\/[^/]+\/(?:assisted-current-punches|historical-corrections)$/u.test(
+      routeKey,
+    ) ||
+    /^POST \/api\/v1\/attendance\/regularizations\/[^/]+\/decision$/u.test(routeKey)
+  );
+}
+
 function persistenceFlushTarget(method: string, url: string, statusCode: number): PersistenceFlushTarget {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) {
     return { kind: "none" };
@@ -262,7 +272,7 @@ function persistenceFlushTarget(method: string, url: string, statusCode: number)
   if (sessionOnlyMutationRoutes.has(routeKey)) {
     return { kind: "none" };
   }
-  if (transactionOwnedMutationRoutes.has(routeKey)) {
+  if (isTransactionOwnedMutationRoute(routeKey)) {
     return { kind: "none" };
   }
   if (authOnlyMutationRoutes.has(routeKey)) {

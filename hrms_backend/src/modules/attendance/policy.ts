@@ -70,7 +70,7 @@ export function assertCanDecideRegularization(
     throw selfApprovalBlocked("attendance_regularization_decision");
   }
   if (
-    canSeeAllAttendance(actor) ||
+    canManageAllAttendance(actor) ||
     request.current_approver_user_id === actor.id
   ) {
     return;
@@ -78,4 +78,37 @@ export function assertCanDecideRegularization(
   throw forbidden(
     "Only the assigned manager, HR, or Admin can decide this regularization request.",
   );
+}
+
+export function canManageAllAttendance(actor: AuthUser): boolean {
+  return actor.roles.some(
+    (role) => role === Roles.Admin || role === Roles.HRManager,
+  );
+}
+
+export function assertCanAssistCurrentPunch(
+  actor: AuthUser,
+  subject: CoreUser,
+): void {
+  if (actor.roles.includes(Roles.Auditor)) {
+    throw forbidden("Auditor users cannot record attendance punches.");
+  }
+  if (canManageAllAttendance(actor)) return;
+  if (
+    actor.id !== subject.id &&
+    subject.hierarchy_path.startsWith(`${actor.hierarchy_path}.`)
+  ) {
+    return;
+  }
+  throw forbidden(
+    "Only a reporting manager, HR, or Admin can record an assisted current punch.",
+  );
+}
+
+export function assertCanCreateHistoricalCorrection(
+  actor: AuthUser,
+): void {
+  if (!canManageAllAttendance(actor)) {
+    throw forbidden("Only HR or Admin can create a historical attendance correction.");
+  }
 }

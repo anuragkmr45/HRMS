@@ -12,10 +12,12 @@ function punch(company_id: string, employee_user_id = seedIds.employee1) {
   return {
     company_id,
     employee_user_id,
+    actor_user_id: employee_user_id,
     event_type: "check_in" as const,
     occurred_at: "2026-07-08T09:00:00.000Z",
     work_mode: "office" as const,
     source: "web" as const,
+    origin: "employee_manual_now" as const,
     metadata: {},
   };
 }
@@ -70,6 +72,7 @@ describe("AttendanceRepository tenancy", () => {
     const repository = new AttendanceRepository(createMemoryDataStore());
     const input = {
       employee_user_id: seedIds.employee1,
+      submitted_by_user_id: seedIds.employee1,
       work_date: "2026-07-08",
       reason: "Missed punch",
       requested_punches: [],
@@ -92,6 +95,7 @@ describe("AttendanceRepository tenancy", () => {
     const request = repository.addRegularization({
       ...{
         employee_user_id: seedIds.employee1,
+        submitted_by_user_id: seedIds.employee1,
         work_date: "2026-07-08",
         reason: "Missed punch",
         requested_punches: [],

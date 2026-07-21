@@ -316,7 +316,7 @@ describe("attendance policy", () => {
       ).not.toThrow();
     });
 
-    it("allows auditor", () => {
+    it("rejects auditor", () => {
       const auditor = makeAuthUser({
         roles: [Roles.Auditor],
       });
@@ -326,7 +326,7 @@ describe("attendance policy", () => {
           employee_user_id: randomUUID(),
           current_approver_user_id: null,
         }),
-      ).not.toThrow();
+      ).toThrow();
     });
 
     it("rejects unrelated employee", () => {

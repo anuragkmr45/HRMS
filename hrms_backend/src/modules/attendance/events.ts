@@ -31,6 +31,7 @@ export type AttendancePunchRecordedPayload = AttendanceEventBase & {
   work_date: string;
   work_mode: "office" | "remote" | "wfh" | "field";
   source_channel: "web" | "mobile" | "kiosk" | "admin";
+  origin: "employee_manual_now" | "manager_assisted_now" | "historical_correction" | "approved_regularization" | "system";
   day_status: string | null;
 };
 
@@ -85,6 +86,7 @@ export function buildPunchRecordedEvent(input: {
   workDate: string;
   workMode: AttendancePunchRecordedPayload["work_mode"];
   sourceChannel: AttendancePunchRecordedPayload["source_channel"];
+  origin?: AttendancePunchRecordedPayload["origin"];
   dayStatus: string | null;
 }): AttendanceOutboxEventContract {
   const payload: AttendancePunchRecordedPayload = {
@@ -101,6 +103,7 @@ export function buildPunchRecordedEvent(input: {
     work_date: input.workDate,
     work_mode: input.workMode,
     source_channel: input.sourceChannel,
+    origin: input.origin ?? "employee_manual_now",
     day_status: input.dayStatus,
   };
   return {

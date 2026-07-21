@@ -34,12 +34,15 @@ export class AttendanceRepository {
   constructor(private readonly store: MemoryDataStore) {}
 
   addPunch(
-    input: Omit<AttendancePunch, "id" | "created_at" | "deleted_at">,
+    input: Omit<AttendancePunch, "id" | "created_at" | "deleted_at" | "regularization_request_id"> & {
+      regularization_request_id?: UUID | null;
+    },
   ): AttendancePunch {
     const punch: AttendancePunch = {
       id: randomUUID(),
       created_at: nowIso(),
       deleted_at: null,
+      regularization_request_id: input.regularization_request_id ?? null,
       ...input,
     };
     this.store.attendancePunches.push(punch);

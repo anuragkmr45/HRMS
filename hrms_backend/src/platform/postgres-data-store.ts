@@ -1841,10 +1841,13 @@ class PostgresPersistence {
       id: row.id,
       company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      actor_user_id: row.actor_user_id ?? row.employee_user_id,
       event_type: row.event_type,
       occurred_at: asIso(row.occurred_at),
       work_mode: row.work_mode,
       source: row.source,
+      origin: row.origin ?? "employee_manual_now",
+      regularization_request_id: row.regularization_request_id ?? null,
       metadata: json(row.metadata),
       created_at: asIso(row.created_at),
       deleted_at: asIsoOrNull(row.deleted_at)
@@ -1882,6 +1885,7 @@ class PostgresPersistence {
       id: row.id,
       company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      submitted_by_user_id: row.submitted_by_user_id ?? row.employee_user_id,
       work_date: asDate(row.work_date),
       reason: row.reason,
       requested_punches: Array.isArray(row.requested_punches) ? row.requested_punches : [],
@@ -3727,26 +3731,32 @@ class PostgresPersistence {
     for (const punch of this.store.attendancePunches) {
       await client.query(
         `INSERT INTO attendance.punch_events (
-          id, company_id, employee_user_id, event_type, occurred_at, work_mode, source,
-          metadata, created_at, deleted_at
+          id, company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode, source,
+          origin, regularization_request_id, metadata, created_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         ON CONFLICT (id) DO UPDATE
         SET company_id = EXCLUDED.company_id,
             event_type = EXCLUDED.event_type,
             occurred_at = EXCLUDED.occurred_at,
             work_mode = EXCLUDED.work_mode,
-            source = EXCLUDED.source,
+             source = EXCLUDED.source,
+             actor_user_id = EXCLUDED.actor_user_id,
+             origin = EXCLUDED.origin,
+             regularization_request_id = EXCLUDED.regularization_request_id,
             metadata = EXCLUDED.metadata,
             deleted_at = EXCLUDED.deleted_at`,
         [
           punch.id,
           punch.company_id,
           punch.employee_user_id,
+          punch.actor_user_id,
           punch.event_type,
           punch.occurred_at,
           punch.work_mode,
           punch.source,
+          punch.origin,
+          punch.regularization_request_id,
           JSON.stringify(punch.metadata),
           punch.created_at,
           punch.deleted_at
@@ -3805,14 +3815,15 @@ class PostgresPersistence {
     for (const request of this.store.attendanceRegularizations) {
       await client.query(
         `INSERT INTO attendance.regularization_requests (
-          id, company_id, employee_user_id, work_date, reason, requested_punches, status,
+          id, company_id, employee_user_id, submitted_by_user_id, work_date, reason, requested_punches, status,
           current_approver_user_id, decision_remarks, decided_by_user_id,
           decided_at, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (id) DO UPDATE
         SET company_id = EXCLUDED.company_id,
-            reason = EXCLUDED.reason,
+             reason = EXCLUDED.reason,
+             submitted_by_user_id = EXCLUDED.submitted_by_user_id,
             requested_punches = EXCLUDED.requested_punches,
             status = EXCLUDED.status,
             current_approver_user_id = EXCLUDED.current_approver_user_id,
@@ -3826,6 +3837,7 @@ class PostgresPersistence {
           request.id,
           request.company_id,
           request.employee_user_id,
+          request.submitted_by_user_id,
           request.work_date,
           request.reason,
           JSON.stringify(request.requested_punches),

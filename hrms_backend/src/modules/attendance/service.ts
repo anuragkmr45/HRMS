@@ -47,13 +47,18 @@ import {
 } from "./events.js";
 import {
   assertCanDecideRegularization,
+  assertCanAssistCurrentPunch,
+  assertCanCreateHistoricalCorrection,
   assertCanSeeAttendanceUser,
   assertCanUseSelfAttendance,
   canSeeAllAttendance,
   canSeeAttendanceUser,
 } from "./policy.js";
 import { AttendanceRepository } from "./repository.js";
-import { AttendanceCommandService } from "./command-service.js";
+import {
+  AttendanceCommandService,
+  canonicalAttendanceRequestHash,
+} from "./command-service.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -375,7 +380,7 @@ export class AttendanceService {
     this.core = new CoreService(store);
   }
 
-  punch(
+  private recordPunchInMemory(
     actor: AuthUser,
     input: {
       event_type: AttendancePunchEventType;
@@ -385,26 +390,30 @@ export class AttendanceService {
       metadata: Record<string, unknown>;
       idempotency_key?: string;
     },
+    subjectEmployeeUserId = actor.id,
+    origin: AttendancePunch["origin"] = "employee_manual_now",
   ) {
     const context = this.resolveAttendanceCompanyContext(
       actor,
       "attendance.punch",
     );
-    assertCanUseSelfAttendance(actor);
+    if (subjectEmployeeUserId === actor.id) {
+      assertCanUseSelfAttendance(actor);
+    }
     const companyId = context.companyId;
     const occurredAt = input.occurred_at ?? nowIso();
-    const timeZone = this.timezoneForUser(actor.id, companyId);
-    this.autoPunchOutExpiredSessions(companyId, actor.id, timeZone, occurredAt);
+    const timeZone = this.timezoneForUser(subjectEmployeeUserId, companyId);
+    this.autoPunchOutExpiredSessions(companyId, subjectEmployeeUserId, timeZone, occurredAt);
     const workDate = this.workDateForPunch(
       companyId,
-      actor.id,
+      subjectEmployeeUserId,
       input.event_type,
       occurredAt,
       timeZone,
     );
     const availability = this.punchAvailability(
       companyId,
-      actor.id,
+      subjectEmployeeUserId,
       workDate,
       timeZone,
       occurredAt,
@@ -429,16 +438,18 @@ export class AttendanceService {
     }
     const punch = this.repository.addPunch({
       company_id: companyId,
-      employee_user_id: actor.id,
+      employee_user_id: subjectEmployeeUserId,
+      actor_user_id: actor.id,
       event_type: input.event_type,
       occurred_at: occurredAt,
       work_mode: input.work_mode,
       source: input.source,
+      origin,
       metadata: input.metadata,
     });
     const day = this.recomputeDay(
       companyId,
-      actor.id,
+      subjectEmployeeUserId,
       workDate,
       timeZone,
       occurredAt,
@@ -448,19 +459,20 @@ export class AttendanceService {
       buildPunchRecordedEvent({
         companyId,
         actorUserId: actor.id,
-        subjectEmployeeUserId: actor.id,
+        subjectEmployeeUserId,
         punchEventId: punch.id,
         punchType: punch.event_type,
         occurredAt: punch.occurred_at,
         workDate,
         workMode: punch.work_mode,
         sourceChannel: punch.source,
+        origin,
         dayStatus: day.status,
       }),
     );
     const nextAvailability = this.punchAvailability(
       companyId,
-      actor.id,
+      subjectEmployeeUserId,
       workDate,
       timeZone,
       occurredAt,
@@ -473,6 +485,76 @@ export class AttendanceService {
       next_allowed_action: nextAvailability.next_allowed_actions[0] ?? null,
       punch_policy: this.presentPunchPolicy(nextAvailability),
     };
+  }
+
+  /**
+   * Compatibility seam for pre-command unit tests. Production handlers never
+   * call this method; the explicit command methods below are the only runtime
+   * attendance mutation boundaries.
+   */
+  punch(
+    actor: AuthUser,
+    input: {
+      event_type: AttendancePunchEventType;
+      occurred_at?: string;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      source: "web" | "mobile" | "kiosk" | "admin";
+      metadata: Record<string, unknown>;
+      idempotency_key?: string;
+    },
+    subjectEmployeeUserId = actor.id,
+    origin: AttendancePunch["origin"] = "employee_manual_now",
+  ) {
+    if (process.env.NODE_ENV !== "test") {
+      throw forbidden("Use an explicit attendance command boundary.");
+    }
+    return this.recordPunchInMemory(actor, input, subjectEmployeeUserId, origin);
+  }
+
+  recordEmployeeManualNow(
+    actor: AuthUser,
+    input: {
+      event_type: AttendancePunchEventType;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      source: "web" | "mobile" | "kiosk";
+      metadata: Record<string, unknown>;
+      idempotency_key?: string;
+    },
+  ) {
+    return this.recordPunchInMemory(
+      actor,
+      { ...input, occurred_at: nowIso(), source: input.source === "mobile" || input.source === "kiosk" ? input.source : "web" },
+      actor.id,
+      "employee_manual_now",
+    );
+  }
+
+  recordManagerAssistedCurrentPunch(
+    actor: AuthUser,
+    subjectEmployeeUserId: UUID,
+    input: {
+      event_type: AttendancePunchEventType;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      metadata: Record<string, unknown>;
+      reason?: string;
+    },
+  ) {
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.assisted_current_punch",
+    ).companyId;
+    const subject = this.requireUser(subjectEmployeeUserId);
+    this.assertTargetUserInCompany(subject.id, companyId, {
+      operation: "attendance.assisted_current_punch.target_employee",
+      requireActiveEmployment: true,
+    });
+    assertCanAssistCurrentPunch(actor, subject);
+    return this.recordPunchInMemory(
+      actor,
+      { event_type: input.event_type, work_mode: input.work_mode, metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) }, occurred_at: nowIso(), source: "admin" },
+      subject.id,
+      "manager_assisted_now",
+    );
   }
 
   listMyPunches(actor: AuthUser, query: AttendancePageQuery) {
@@ -763,6 +845,7 @@ export class AttendanceService {
     const request = this.repository.addRegularization({
       company_id: companyId,
       employee_user_id: actor.id,
+      submitted_by_user_id: actor.id,
       work_date: input.work_date,
       reason: input.reason.trim(),
       requested_punches: input.requested_punches,
@@ -1033,7 +1116,7 @@ export class AttendanceService {
       },
     );
     if (input.decision === "approve" && request.requested_punches.length > 0) {
-      this.applyApprovedPunches(request, actor.id);
+      this.applyApprovedPunches(request, actor);
     }
     const requestTimeZone = this.timezoneForUser(
       request.employee_user_id,
@@ -1079,6 +1162,77 @@ export class AttendanceService {
       previous_status: previousStatus,
       next_status: nextStatus,
       day_status: this.presentDay(day, requestTimeZone),
+    };
+  }
+
+  async decideRegularizationPostgres(
+    actor: AuthUser,
+    id: UUID,
+    input: {
+      decision: "approve" | "reject" | "return";
+      remarks?: string;
+      expected_version: number;
+    },
+  ) {
+    const companyId = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.decide_regularization",
+    ).companyId;
+    const current = this.repository.findRegularization(id, new Set([companyId]));
+    this.assertTargetUserInCompany(current.employee_user_id, companyId, {
+      operation: "attendance.decide_regularization.target_employee",
+      requireActiveEmployment: false,
+    });
+    if (current.version !== input.expected_version) {
+      throw conflict("Attendance regularization request was modified by another actor.", {
+        aggregate: "attendance_regularization",
+        id,
+      });
+    }
+    if (current.status !== AttendanceRegularizationStatuses.Pending) {
+      throw conflict("Only pending attendance regularization requests can be decided.", {
+        request_id: id,
+        status: current.status,
+      });
+    }
+    if (["reject", "return"].includes(input.decision) && !input.remarks?.trim()) {
+      throw missingRemarks(input.decision);
+    }
+    const timeZone = this.timezoneForUser(current.employee_user_id, companyId);
+    const result = await new AttendanceCommandService(this.store).decideRegularization({
+      actor,
+      companyId,
+      regularizationRequestId: current.id,
+      employeeUserId: current.employee_user_id,
+      workDate: current.work_date,
+      expectedVersion: input.expected_version,
+      reason: current.reason,
+      requestedPunches: current.requested_punches,
+      remarks: input.remarks?.trim() ?? null,
+      decision: input.decision,
+      timeZone,
+      policy: this.attendancePolicy(companyId),
+      // Re-evaluate authorization after the database row is locked. The
+      // request snapshot is protected by its expected version and lock.
+      authorize: () => assertCanDecideRegularization(actor, current),
+    });
+    const nextStatus = input.decision === "approve"
+      ? AttendanceRegularizationStatuses.Approved
+      : input.decision === "reject"
+        ? AttendanceRegularizationStatuses.Rejected
+        : AttendanceRegularizationStatuses.Returned;
+    current.status = nextStatus;
+    current.current_approver_user_id = null;
+    current.decision_remarks = input.remarks?.trim() ?? null;
+    current.decided_by_user_id = actor.id;
+    current.decided_at = result.decidedAt;
+    current.version = result.version;
+    current.updated_at = result.decidedAt;
+    return {
+      ...this.presentRegularization(current),
+      previous_status: AttendanceRegularizationStatuses.Pending,
+      next_status: nextStatus,
+      day_status: this.presentDay(result.day as unknown as AttendanceDayRecord, timeZone),
     };
   }
 
@@ -1444,10 +1598,12 @@ export class AttendanceService {
         this.repository.addPunch({
           company_id: input.companyId,
           employee_user_id: input.employeeUserId,
+          actor_user_id: input.employeeUserId,
           event_type: AttendancePunchEventTypes.BreakEnd,
           occurred_at: closeAt,
           work_mode: input.lastOpenPunch.work_mode,
           source: "admin",
+          origin: "system",
           metadata,
         }),
       );
@@ -1457,10 +1613,12 @@ export class AttendanceService {
       this.repository.addPunch({
         company_id: input.companyId,
         employee_user_id: input.employeeUserId,
+        actor_user_id: input.employeeUserId,
         event_type: AttendancePunchEventTypes.CheckOut,
         occurred_at: closeAt,
         work_mode: input.lastOpenPunch.work_mode,
         source: "admin",
+        origin: "system",
         metadata,
       }),
     );
@@ -2078,6 +2236,190 @@ export class AttendanceService {
     });
   }
 
+  async recordEmployeeManualNowPostgres(
+    actor: AuthUser,
+    input: Omit<Parameters<AttendanceService["punch"]>[1], "occurred_at">,
+    idempotencyKey: string,
+  ): Promise<Record<string, unknown>> {
+    return this.punchPostgres(actor, {
+      ...input,
+      source: input.source === "mobile" || input.source === "kiosk" ? input.source : "web",
+      idempotency_key: idempotencyKey,
+    });
+  }
+
+  async recordManagerAssistedCurrentPunchPostgres(
+    actor: AuthUser,
+    subjectEmployeeUserId: UUID,
+    input: {
+      event_type: AttendancePunchEventType;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      metadata: Record<string, unknown>;
+      reason?: string;
+    },
+    idempotencyKey: string,
+  ): Promise<Record<string, unknown>> {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.assisted_current_punch",
+    );
+    const subject = this.requireUser(subjectEmployeeUserId);
+    this.assertTargetUserInCompany(subject.id, context.companyId, {
+      operation: "attendance.assisted_current_punch.target_employee",
+      requireActiveEmployment: true,
+    });
+    assertCanAssistCurrentPunch(actor, subject);
+    if (!this.store.pgPool) throw conflict("Attendance command service is unavailable.");
+    return new AttendanceCommandService(this.store).execute({
+      actor,
+      companyId: context.companyId,
+      subjectEmployeeUserId: subject.id,
+      commandKind: "manager_assisted_now",
+      timeZone: this.timezoneForUser(subject.id, context.companyId),
+      idempotencyKey,
+      command: {
+        event_type: input.event_type,
+        work_mode: input.work_mode,
+        source: "admin",
+        metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) },
+      },
+      policy: this.attendancePolicy(context.companyId),
+      isWorkingDayFor: (workDate) => this.isWorkingDay(context.companyId, workDate),
+    });
+  }
+
+  async recordHistoricalCorrection(
+    actor: AuthUser,
+    subjectEmployeeUserId: UUID,
+    input: {
+      event_type: AttendancePunchEventType;
+      occurred_at: string;
+      reason: string;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      metadata: Record<string, unknown>;
+      linked_regularization_request_id?: UUID;
+    },
+    idempotencyKey: string,
+  ): Promise<Record<string, unknown>> {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.historical_correction",
+    );
+    const subject = this.requireUser(subjectEmployeeUserId);
+    this.assertTargetUserInCompany(subject.id, context.companyId, {
+      operation: "attendance.historical_correction.target_employee",
+      requireActiveEmployment: false,
+    });
+    assertCanCreateHistoricalCorrection(actor);
+    if (Date.parse(input.occurred_at) >= Date.parse(nowIso())) {
+      throw badRequest("Historical correction occurrence time must be in the past.");
+    }
+    if (input.linked_regularization_request_id) {
+      const request = this.repository.findRegularization(
+        input.linked_regularization_request_id,
+        new Set([context.companyId]),
+      );
+      if (request.employee_user_id !== subject.id) {
+        throw forbidden("Linked regularization does not belong to the correction subject.");
+      }
+    }
+    if (this.store.kind === "postgres") {
+      if (!this.store.pgPool) throw conflict("Attendance command service is unavailable.");
+      return new AttendanceCommandService(this.store).executeHistoricalCorrection({
+        actor,
+        principal: {
+          companyId: context.companyId,
+          actorUserId: actor.id,
+          subjectEmployeeUserId: subject.id,
+        },
+        idempotencyKey,
+        timeZone: this.timezoneForUser(subject.id, context.companyId),
+        command: input,
+        policy: this.attendancePolicy(context.companyId),
+        commandKind: "historical_correction",
+      });
+    }
+    const requestHash = canonicalAttendanceRequestHash({
+      company_id: context.companyId,
+      actor_user_id: actor.id,
+      subject_employee_user_id: subject.id,
+      command_kind: "historical_correction",
+      ...input,
+    });
+    const key = `attendance.historical_correction:${context.companyId}:${actor.id}:${subject.id}:${idempotencyKey}`;
+    const entries = memoryHistoricalCorrectionIdempotency.get(this.store) ?? new Map();
+    memoryHistoricalCorrectionIdempotency.set(this.store, entries);
+    const existing = entries.get(key);
+    if (existing) {
+      if (existing.requestHash !== requestHash) {
+        throw conflict("Idempotency key was already used with a different correction request.");
+      }
+      return existing.response;
+    }
+    const response = this.recordHistoricalCorrectionInMemory(
+      actor,
+      context.companyId,
+      subject.id,
+      input,
+      "historical_correction",
+    );
+    entries.set(key, { requestHash, response });
+    return response;
+  }
+
+  private recordHistoricalCorrectionInMemory(
+    actor: AuthUser,
+    companyId: UUID,
+    subjectEmployeeUserId: UUID,
+    input: {
+      event_type: AttendancePunchEventType;
+      occurred_at: string;
+      reason: string;
+      work_mode: "office" | "remote" | "wfh" | "field";
+      metadata: Record<string, unknown>;
+      linked_regularization_request_id?: UUID;
+    },
+    origin: Extract<AttendancePunch["origin"], "historical_correction" | "approved_regularization">,
+  ): Record<string, unknown> {
+    const timeZone = this.timezoneForUser(subjectEmployeeUserId, companyId);
+    const workDate = dateInTimeZone(input.occurred_at, timeZone);
+    const punch = this.repository.addPunch({
+      company_id: companyId,
+      employee_user_id: subjectEmployeeUserId,
+      actor_user_id: actor.id,
+      event_type: input.event_type,
+      occurred_at: input.occurred_at,
+      work_mode: input.work_mode,
+      source: "admin",
+      origin,
+      metadata: { ...input.metadata, correction_reason: input.reason },
+      regularization_request_id: input.linked_regularization_request_id ?? null,
+    });
+    const day = this.recomputeDay(
+      companyId,
+      subjectEmployeeUserId,
+      workDate,
+      timeZone,
+    );
+    appendAttendanceOutboxEvent(
+      this.store,
+      buildPunchRecordedEvent({
+        companyId,
+        actorUserId: actor.id,
+        subjectEmployeeUserId,
+        punchEventId: punch.id,
+        punchType: punch.event_type,
+        occurredAt: punch.occurred_at,
+        workDate,
+        workMode: punch.work_mode,
+        sourceChannel: punch.source,
+        origin,
+        dayStatus: day.status,
+      }),
+    );
+    return { punch_id: punch.id, punch, day_status: this.presentDay(day, timeZone) };
+  }
+
   private resolveAttendanceCompanyContext(
     actor: AuthUser,
     operation: string,
@@ -2408,7 +2750,7 @@ export class AttendanceService {
 
   private applyApprovedPunches(
     request: AttendanceRegularizationRequest,
-    actorUserId: UUID,
+    actor: AuthUser,
   ): void {
     const timeZone = this.timezoneForUser(
       request.employee_user_id,
@@ -2424,18 +2766,20 @@ export class AttendanceService {
           "Requested punch timestamps must fall on the regularization work_date.",
         );
       }
-      this.repository.addPunch({
-        company_id: request.company_id,
-        employee_user_id: request.employee_user_id,
-        event_type: requested.event_type,
-        occurred_at: requested.occurred_at,
-        work_mode: "office",
-        source: "admin",
-        metadata: {
-          regularization_request_id: request.id,
-          decided_by_user_id: actorUserId,
+      this.recordHistoricalCorrectionInMemory(
+        actor,
+        request.company_id,
+        request.employee_user_id,
+        {
+          event_type: requested.event_type,
+          occurred_at: requested.occurred_at,
+          reason: request.reason,
+          work_mode: "office",
+          metadata: { decided_by_user_id: actor.id },
+          linked_regularization_request_id: request.id,
         },
-      });
+        "approved_regularization",
+      );
     }
     this.recomputeDay(
       request.company_id,
@@ -2560,3 +2904,7 @@ function datesInclusive(from: string, to: string): string[] {
 function textFilter(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
+const memoryHistoricalCorrectionIdempotency = new WeakMap<
+  MemoryDataStore,
+  Map<string, { requestHash: string; response: Record<string, unknown> }>
+>();
