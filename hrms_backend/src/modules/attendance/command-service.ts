@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
-import type { AttendancePunchEventType, AuthUser, UUID } from "#shared";
+import type {
+  AttendanceDayRecord,
+  AttendancePunchEventType,
+  AuthUser,
+  UUID,
+} from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import { badRequest, conflict } from "../../platform/errors.js";
-import { AttendanceDayStatuses, AttendancePunchEventTypes } from "#shared";
+import {
+  AttendanceApprovalKinds,
+  AttendanceDayClassifications,
+  AttendancePunchEventTypes,
+} from "#shared";
+import { isWorkingDate } from "../../platform/work-schedule.js";
 import {
   PostgresAttendanceCommandRepository,
   type AttendanceCommandTransactionRepository,
@@ -16,6 +26,22 @@ import {
 import type { EffectiveAttendancePolicy } from "./policy-config.js";
 import { resolveEffectiveAttendancePolicy } from "./policy-resolver.js";
 import { decideAttendanceTransition } from "./session-transition.js";
+import {
+  calculateSessionDurations,
+  projectAttendanceDay,
+  secondsBetween,
+  type AttendanceApprovalFact,
+  type AttendanceDailyProjection,
+} from "./daily-projection.js";
+import {
+  resolveEmployeeShift,
+  type ResolvedEmployeeShift,
+  type ShiftAssignmentInput,
+  type ShiftCompanyInput,
+  type ShiftEmployeeInput,
+  type ShiftTemplateInput,
+  type ShiftTemplateVersionInput,
+} from "./shift-resolver.js";
 
 export interface AttendanceCommandInput {
   event_type: AttendancePunchEventType;
@@ -419,7 +445,7 @@ export class AttendanceCommandService {
             tx,
             input.companyId,
             subjectEmployeeUserId,
-            session.work_date,
+            workDate,
             input.command.work_mode,
             policy.graceMinutes,
             input.timeZone,
@@ -436,7 +462,7 @@ export class AttendanceCommandService {
               punchEventId: punch.id,
               punchType: input.command.event_type,
               occurredAt,
-              workDate: session.work_date,
+              workDate,
               workMode: input.command.work_mode,
               sourceChannel: input.command.source,
               origin: commandKind,
@@ -660,6 +686,8 @@ export class AttendanceCommandService {
         workDate,
         input.command.work_mode,
         input.timeZone,
+        policy.graceMinutes,
+        receivedAt,
       );
       await tx.insertOutboxEvent(buildPunchRecordedEvent({
         companyId: principal.companyId,
@@ -788,12 +816,46 @@ export class AttendanceCommandService {
           },
         }, tx);
       }
+      const projectionPolicy = input.decision === "approve"
+        ? await resolveEffectiveAttendancePolicy(tx, {
+            companyId: input.companyId,
+            subjectEmployeeUserId: input.employeeUserId,
+            asOf: updated.decided_at.toISOString(),
+          })
+        : null;
       const day = input.decision === "approve"
-        ? await projectHistoricalCorrectionDay(tx, input.companyId, input.employeeUserId, input.workDate, "office", input.timeZone)
-        : ((await tx.query<Record<string, unknown>>(
-            `SELECT * FROM attendance.daily_records
-             WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date`,
-            [input.companyId, input.employeeUserId, input.workDate],
+        ? await projectHistoricalCorrectionDay(
+            tx,
+            input.companyId,
+            input.employeeUserId,
+            input.workDate,
+            "office",
+            input.timeZone,
+            projectionPolicy!.graceMinutes,
+            updated.decided_at.toISOString(),
+          )
+        : normalizeDailyProjectionRow((await tx.query<Record<string, unknown>>(
+            `UPDATE attendance.daily_records
+             SET regularization_status = $4,
+                 approval_kind = CASE
+                   WHEN approval_kind IN ('none', 'regularization') THEN 'regularization'
+                   ELSE 'multiple'
+                 END,
+                 approval_state = CASE
+                   WHEN approval_kind IN ('none', 'regularization') THEN $4
+                   WHEN approval_state = $4 THEN approval_state
+                   ELSE 'mixed'
+                 END,
+                 version = version + 1,
+                 updated_at = now()
+             WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date
+             RETURNING *`,
+            [
+              input.companyId,
+              input.employeeUserId,
+              input.workDate,
+              input.decision === "reject" ? "rejected" : "returned",
+            ],
           )).rows[0] ?? {});
       await tx.insertOutboxEvent(buildRegularizationDecisionEvent({
         companyId: input.companyId,
@@ -954,6 +1016,8 @@ export class AttendanceCommandService {
         workDate,
         input.command.work_mode,
         input.timeZone,
+        input.policy.graceMinutes,
+        receivedAt,
       );
       await tx.insertOutboxEvent(buildPunchRecordedEvent({
         companyId: principal.companyId,
@@ -1259,13 +1323,6 @@ type CommandPolicy = Pick<
   | "allowOffDayPunches"
   | "graceMinutes"
 >;
-type PunchProjectionRow = {
-  session_id: UUID;
-  checked_in_at: Date;
-  closed_at: Date | null;
-  event_type: AttendancePunchEventType | null;
-  occurred_at: Date | null;
-} & Record<string, unknown>;
 function policyBlocked(
   type: AttendancePunchEventType,
   at: string,
@@ -1324,111 +1381,150 @@ async function projectDay(
   companyId: UUID,
   employeeId: UUID,
   workDate: string,
-  workMode: string,
-  grace: number,
-  _timeZone: string,
+  workMode: AttendanceDayRecord["work_mode"],
+  graceMinutes: number,
+  timeZone: string,
   asOf: string,
 ): Promise<Record<string, unknown>> {
-  const asOfDate = new Date(asOf);
-  if (Number.isNaN(asOfDate.getTime())) {
-    throw new Error("Attendance projection received an invalid asOf timestamp.");
-  }
-  const sessionPunches = (
-    await tx.query<PunchProjectionRow>(
-      `SELECT s.id AS session_id, s.checked_in_at, s.closed_at,
-          p.event_type, p.occurred_at
-        FROM attendance.sessions s
-        LEFT JOIN attendance.punch_events p
-          ON p.session_id = s.id
-          AND p.company_id = s.company_id
-          AND p.employee_user_id = s.employee_user_id
-          AND p.deleted_at IS NULL
-        WHERE s.company_id = $1
-          AND s.employee_user_id = $2
-          AND s.work_date = $3::date
-          AND s.deleted_at IS NULL
-        ORDER BY s.checked_in_at, p.occurred_at, p.id`,
-      [companyId, employeeId, workDate],
-    )
-  ).rows;
-  const sessions = new Map<
-    UUID,
-    {
-      checkedInAt: Date;
-      closedAt: Date | null;
-      punches: PunchProjectionRow[];
-    }
-  >();
-  for (const row of sessionPunches) {
-    const session = sessions.get(row.session_id) ?? {
-      checkedInAt: row.checked_in_at,
-      closedAt: row.closed_at,
-      punches: [],
-    };
-    if (row.event_type && row.occurred_at) session.punches.push(row);
-    sessions.set(row.session_id, session);
-  }
-  const orderedSessions = [...sessions.values()].sort(
-    (a, b) => a.checkedInAt.getTime() - b.checkedInAt.getTime(),
+  const sessions = (await tx.query<{
+    id: UUID;
+    checked_in_at: Date;
+    closed_at: Date | null;
+  }>(
+    `SELECT id, checked_in_at, closed_at
+     FROM attendance.sessions
+     WHERE company_id = $1 AND employee_user_id = $2
+       AND work_date = $3::date AND deleted_at IS NULL
+     ORDER BY checked_in_at, id`,
+    [companyId, employeeId, workDate],
+  )).rows;
+  const breaks = (await tx.query<{
+    session_id: UUID;
+    started_at: Date;
+    ended_at: Date | null;
+  }>(
+    `SELECT segment.session_id, segment.started_at, segment.ended_at
+     FROM attendance.break_segments segment
+     JOIN attendance.sessions session
+       ON session.id = segment.session_id AND session.company_id = segment.company_id
+     WHERE segment.company_id = $1 AND session.employee_user_id = $2
+       AND session.work_date = $3::date AND session.deleted_at IS NULL
+     ORDER BY segment.started_at, segment.id`,
+    [companyId, employeeId, workDate],
+  )).rows;
+  const legacyBreakPunches = (await tx.query<{
+    session_id: UUID;
+    event_type: "break_start" | "break_end";
+    occurred_at: Date;
+  }>(
+    `SELECT punch.session_id, punch.event_type, punch.occurred_at
+     FROM attendance.punch_events punch
+     JOIN attendance.sessions session
+       ON session.id = punch.session_id AND session.company_id = punch.company_id
+     WHERE punch.company_id = $1 AND punch.employee_user_id = $2
+       AND session.work_date = $3::date AND session.deleted_at IS NULL
+       AND punch.deleted_at IS NULL
+       AND punch.event_type IN ('break_start', 'break_end')
+       AND NOT EXISTS (
+         SELECT 1
+         FROM attendance.break_segments segment
+         WHERE segment.company_id = punch.company_id
+           AND segment.session_id = punch.session_id
+       )
+     ORDER BY punch.session_id, punch.occurred_at, punch.id`,
+    [companyId, employeeId, workDate],
+  )).rows;
+  const durations = calculateSessionDurations({
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      startedAt: session.checked_in_at.toISOString(),
+      endedAt: session.closed_at?.toISOString() ?? null,
+    })),
+    breaks: [
+      ...breaks.map((segment) => ({
+        sessionId: segment.session_id,
+        startedAt: segment.started_at.toISOString(),
+        endedAt: segment.ended_at?.toISOString() ?? null,
+      })),
+      ...legacyBreakIntervals(legacyBreakPunches),
+    ],
+    asOf,
+  });
+  const firstCheckIn = sessions[0]?.checked_in_at.toISOString() ?? null;
+  const lastCheckOut = sessions
+    .map((session) => session.closed_at)
+    .filter((value): value is Date => value !== null)
+    .at(-1)?.toISOString() ?? null;
+  const context = await attendanceProjectionContext(
+    tx,
+    companyId,
+    employeeId,
+    workDate,
+    timeZone,
+    asOf,
+    workMode,
   );
-  const checkIn = orderedSessions[0]?.checkedInAt.toISOString() ?? null;
-  const checkOut =
-    orderedSessions
-      .map((session) => session.closedAt)
-      .filter((value): value is Date => value !== null)
-      .at(-1)
-      ?.toISOString() ?? null;
-  let breaks = 0;
-  let work = 0;
-  for (const session of orderedSessions) {
-    let breakStart: Date | null = null;
-    for (const punch of session.punches) {
-      if (punch.event_type === "break_start" && punch.occurred_at) {
-        breakStart = punch.occurred_at;
-      } else if (
-        punch.event_type === "break_end" &&
-        punch.occurred_at &&
-        breakStart
-      ) {
-        breaks += Math.max(
-          0,
-          Math.round(
-            (punch.occurred_at.getTime() - breakStart.getTime()) / 60000,
-          ),
-        );
-        breakStart = null;
+  const projection = projectAttendanceDay({
+    companyId,
+    employeeUserId: employeeId,
+    workDate,
+    asOf,
+    dayClassification: context.dayClassification,
+    firstCheckIn,
+    lastCheckOut,
+    hasOpenSession: sessions.some((session) => session.closed_at === null),
+    incompleteIsException: workDate < dateInTimeZone(asOf, timeZone),
+    workMode,
+    workSeconds: durations.workSeconds,
+    breakSeconds: durations.breakSeconds,
+    scheduledStartAt: context.shift.scheduled_start_at,
+    scheduledEndAt: context.shift.scheduled_end_at,
+    graceSeconds: graceMinutes * 60,
+    approvalFacts: context.approvalFacts,
+    existingApproval: context.existing,
+    regularizationStatus: context.regularizationStatus,
+  });
+  return persistDailyProjection(tx, projection);
+}
+
+function legacyBreakIntervals(
+  punches: Array<{
+    session_id: UUID;
+    event_type: "break_start" | "break_end";
+    occurred_at: Date;
+  }>,
+): Array<{
+  sessionId: UUID;
+  startedAt: string;
+  endedAt: string | null;
+}> {
+  const openBySession = new Map<UUID, string>();
+  const intervals: Array<{
+    sessionId: UUID;
+    startedAt: string;
+    endedAt: string | null;
+  }> = [];
+  for (const punch of punches) {
+    const occurredAt = punch.occurred_at.toISOString();
+    if (punch.event_type === "break_start") {
+      if (!openBySession.has(punch.session_id)) {
+        openBySession.set(punch.session_id, occurredAt);
       }
+      continue;
     }
-    const sessionEnd = session.closedAt ?? asOfDate;
-    work += Math.max(
-      0,
-      Math.round(
-        (sessionEnd.getTime() - session.checkedInAt.getTime()) / 60000,
-      ),
-    );
+    const startedAt = openBySession.get(punch.session_id);
+    if (!startedAt) continue;
+    intervals.push({
+      sessionId: punch.session_id,
+      startedAt,
+      endedAt: occurredAt,
+    });
+    openBySession.delete(punch.session_id);
   }
-  work = Math.max(0, work - breaks);
-  const status =
-    workMode === "wfh"
-      ? AttendanceDayStatuses.Wfh
-      : AttendanceDayStatuses.Present;
-  const row = (
-    await tx.query<Record<string, unknown>>(
-      `INSERT INTO attendance.daily_records (company_id,employee_user_id,work_date,status,first_check_in,last_check_out,work_minutes,break_minutes,late_minutes,early_out_minutes,work_mode,note,exception_type,regularization_status,version,created_at,updated_at,deleted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,$9,NULL,NULL,NULL,1,now(),now(),NULL) ON CONFLICT (company_id,employee_user_id,work_date) DO UPDATE SET status=EXCLUDED.status,first_check_in=EXCLUDED.first_check_in,last_check_out=EXCLUDED.last_check_out,work_minutes=EXCLUDED.work_minutes,break_minutes=EXCLUDED.break_minutes,work_mode=EXCLUDED.work_mode,version=attendance.daily_records.version+1,updated_at=now() RETURNING *`,
-      [
-        companyId,
-        employeeId,
-        workDate,
-        status,
-        checkIn,
-        checkOut,
-        work,
-        breaks,
-        workMode,
-      ],
-    )
-  ).rows[0];
-  return row ?? {};
+  for (const [sessionId, startedAt] of openBySession) {
+    intervals.push({ sessionId, startedAt, endedAt: null });
+  }
+  return intervals;
 }
 
 async function projectHistoricalCorrectionDay(
@@ -1438,6 +1534,8 @@ async function projectHistoricalCorrectionDay(
   workDate: string,
   workMode: string,
   timeZone: string,
+  graceMinutes: number,
+  asOf: string,
 ): Promise<Record<string, unknown>> {
   const facts = (await tx.query<{
     first_check_in: Date | null;
@@ -1455,26 +1553,231 @@ async function projectHistoricalCorrectionDay(
   )).rows[0];
   const firstCheckIn = facts?.first_check_in?.toISOString() ?? null;
   const lastCheckOut = facts?.last_check_out?.toISOString() ?? null;
-  const workMinutes = firstCheckIn && lastCheckOut
-    ? Math.max(0, Math.round((Date.parse(lastCheckOut) - Date.parse(firstCheckIn)) / 60_000))
-    : 0;
-  return (await tx.query<Record<string, unknown>>(
+  const context = await attendanceProjectionContext(
+    tx,
+    companyId,
+    employeeUserId,
+    workDate,
+    timeZone,
+    asOf,
+    workMode as AttendanceDayRecord["work_mode"],
+  );
+  const projection = projectAttendanceDay({
+    companyId,
+    employeeUserId,
+    workDate,
+    asOf,
+    dayClassification: context.dayClassification,
+    firstCheckIn,
+    lastCheckOut,
+    hasOpenSession: Boolean(firstCheckIn && !lastCheckOut),
+    hasIncompleteEvidence: Boolean(firstCheckIn) !== Boolean(lastCheckOut),
+    incompleteIsException: true,
+    workMode: workMode as AttendanceDayRecord["work_mode"],
+    workSeconds: firstCheckIn && lastCheckOut
+      ? secondsBetween(firstCheckIn, lastCheckOut)
+      : 0,
+    breakSeconds: 0,
+    scheduledStartAt: context.shift.scheduled_start_at,
+    scheduledEndAt: context.shift.scheduled_end_at,
+    graceSeconds: graceMinutes * 60,
+    approvalFacts: context.approvalFacts,
+    existingApproval: context.existing,
+    regularizationStatus: context.regularizationStatus,
+    note: "Historical correction",
+  });
+  return persistDailyProjection(tx, projection);
+}
+
+async function attendanceProjectionContext(
+  tx: AttendanceCommandTransactionRepository,
+  companyId: UUID,
+  employeeUserId: UUID,
+  workDate: string,
+  timeZone: string,
+  asOf: string,
+  workMode: AttendanceDayRecord["work_mode"],
+): Promise<{
+  dayClassification: AttendanceDayRecord["day_classification"];
+  shift: ResolvedEmployeeShift;
+  approvalFacts: AttendanceApprovalFact[];
+  existing: Pick<AttendanceDayRecord, "approval_kind" | "approval_state"> | null;
+  regularizationStatus: AttendanceDayRecord["regularization_status"];
+}> {
+  const company = (await tx.query<ShiftCompanyInput & { working_week: string } & Record<string, unknown>>(
+    `SELECT id, timezone, work_hours_per_day, working_week
+     FROM platform.company_profiles WHERE id = $1 AND status = 'active'`,
+    [companyId],
+  )).rows[0];
+  const employee = (await tx.query<ShiftEmployeeInput & Record<string, unknown>>(
+    `SELECT id, timezone FROM core.users WHERE id = $1 AND deleted_at IS NULL`,
+    [employeeUserId],
+  )).rows[0];
+  if (!company || !employee) throw new Error("Attendance projection context is unavailable.");
+  const templates = (await tx.query<ShiftTemplateInput & Record<string, unknown>>(
+    `SELECT id, company_id, code, name, description, status, is_company_default, deleted_at
+     FROM attendance.shift_templates WHERE company_id = $1 AND deleted_at IS NULL`,
+    [companyId],
+  )).rows;
+  const versions = (await tx.query<ShiftTemplateVersionInput & Record<string, unknown>>(
+    `SELECT id, company_id, template_id, version_number, effective_from::text,
+        effective_until::text, local_start_time::text, local_end_time::text,
+        end_day_offset, timezone_strategy, fixed_timezone,
+        eligibility_open_before_start_minutes, eligibility_close_after_end_minutes
+     FROM attendance.shift_template_versions
+     WHERE company_id = $1 AND effective_from <= $2::date
+       AND (effective_until IS NULL OR effective_until >= $2::date)`,
+    [companyId, workDate],
+  )).rows;
+  const assignments = (await tx.query<ShiftAssignmentInput & Record<string, unknown>>(
+    `SELECT id, company_id, employee_user_id, template_id, effective_from::text,
+        effective_until::text, status, deleted_at
+     FROM attendance.shift_assignments
+     WHERE company_id = $1 AND employee_user_id = $2 AND deleted_at IS NULL
+       AND effective_from <= $3::date
+       AND (effective_until IS NULL OR effective_until >= $3::date)`,
+    [companyId, employeeUserId, workDate],
+  )).rows;
+  const shift = resolveEmployeeShift({ company, employee, workDate, templates, versions, assignments });
+  const calendar = (await tx.query<{
+    holiday: boolean;
+    leave_approved: boolean;
+    wfh_approved: boolean;
+  }>(
+    `SELECT
+       EXISTS (SELECT 1 FROM leave_wfh.holidays h
+         WHERE h.company_id = $1 AND h.holiday_date = $3::date
+           AND h.optional = false AND h.deleted_at IS NULL) AS holiday,
+       EXISTS (SELECT 1 FROM leave_wfh.leave_requests l
+         WHERE l.employee_user_id = $2 AND l.status = 'approved'
+           AND $3::date BETWEEN l.date_from AND l.date_to AND l.deleted_at IS NULL) AS leave_approved,
+       EXISTS (SELECT 1 FROM leave_wfh.wfh_requests w
+         WHERE w.employee_user_id = $2 AND w.status = 'approved'
+           AND $3::date BETWEEN w.date_from AND w.date_to AND w.deleted_at IS NULL) AS wfh_approved`,
+    [companyId, employeeUserId, workDate],
+  )).rows[0] ?? { holiday: false, leave_approved: false, wfh_approved: false };
+  const approvalRows = (await tx.query<{ kind: "regularization" | "leave" | "wfh"; state: string }>(
+    `(SELECT 'regularization'::text AS kind, status AS state
+       FROM attendance.regularization_requests
+       WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date AND deleted_at IS NULL
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1)
+     UNION ALL
+     SELECT 'leave'::text, CASE status WHEN 'pending_manager' THEN 'pending' ELSE status END
+       FROM leave_wfh.leave_requests
+       WHERE employee_user_id = $2 AND $3::date BETWEEN date_from AND date_to
+         AND status <> 'cancelled' AND deleted_at IS NULL
+     UNION ALL
+     SELECT 'wfh'::text, CASE status WHEN 'pending_manager' THEN 'pending' ELSE status END
+       FROM leave_wfh.wfh_requests
+       WHERE employee_user_id = $2 AND $3::date BETWEEN date_from AND date_to
+         AND status <> 'cancelled' AND deleted_at IS NULL`,
+    [companyId, employeeUserId, workDate],
+  )).rows;
+  const approvalFacts = approvalRows.filter(
+    (row): row is { kind: AttendanceApprovalFact["kind"]; state: AttendanceApprovalFact["state"] } =>
+      ["regularization", "leave", "wfh"].includes(row.kind) &&
+      ["pending", "approved", "returned", "rejected"].includes(row.state),
+  );
+  const existing = (await tx.query<{
+    approval_kind: AttendanceDayRecord["approval_kind"];
+    approval_state: AttendanceDayRecord["approval_state"];
+    regularization_status: AttendanceDayRecord["regularization_status"];
+  }>(
+    `SELECT approval_kind, approval_state, regularization_status
+     FROM attendance.daily_records
+     WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date AND deleted_at IS NULL`,
+    [companyId, employeeUserId, workDate],
+  )).rows[0] ?? null;
+  const dayClassification = calendar.leave_approved
+    ? AttendanceDayClassifications.Leave
+    : calendar.wfh_approved
+      ? AttendanceDayClassifications.Wfh
+      : calendar.holiday
+        ? AttendanceDayClassifications.Holiday
+        : !isWorkingDate(workDate, company.working_week, new Set())
+          ? AttendanceDayClassifications.Weekend
+          : workMode === "wfh"
+            ? AttendanceDayClassifications.Wfh
+            : workDate > dateInTimeZone(asOf, timeZone)
+              ? AttendanceDayClassifications.Future
+              : AttendanceDayClassifications.WorkingDay;
+  return {
+    dayClassification,
+    shift,
+    approvalFacts,
+    existing,
+    regularizationStatus: (
+      approvalRows.find((row) => row.kind === "regularization")?.state as
+        AttendanceDayRecord["regularization_status"] | undefined
+    ) ?? existing?.regularization_status ?? null,
+  };
+}
+
+async function persistDailyProjection(
+  tx: AttendanceCommandTransactionRepository,
+  projection: AttendanceDailyProjection,
+): Promise<Record<string, unknown>> {
+  const values = [
+    projection.company_id, projection.employee_user_id, projection.work_date,
+    projection.status, projection.day_classification, projection.presence_state,
+    projection.punctuality_state, projection.evidence_state, projection.approval_kind,
+    projection.approval_state, projection.payroll_state, projection.first_check_in,
+    projection.last_check_out, projection.work_minutes, projection.break_minutes,
+    projection.late_minutes, projection.early_out_minutes, projection.work_seconds,
+    projection.break_seconds, projection.scheduled_seconds, projection.late_seconds,
+    projection.early_departure_seconds, projection.work_mode, projection.note,
+    projection.exception_type, projection.regularization_status,
+  ];
+  const row = (await tx.query<Record<string, unknown>>(
     `INSERT INTO attendance.daily_records (
-       company_id, employee_user_id, work_date, status, first_check_in,
-       last_check_out, work_minutes, break_minutes, late_minutes,
-       early_out_minutes, work_mode, note, exception_type,
+       company_id, employee_user_id, work_date, status, day_classification,
+       presence_state, punctuality_state, evidence_state, approval_kind,
+       approval_state, payroll_state, first_check_in, last_check_out,
+       work_minutes, break_minutes, late_minutes, early_out_minutes,
+       work_seconds, break_seconds, scheduled_seconds, late_seconds,
+       early_departure_seconds, work_mode, note, exception_type,
        regularization_status, version, created_at, updated_at, deleted_at
-     ) VALUES ($1,$2,$3,'present',$4,$5,$6,0,0,0,$7,'Historical correction',NULL,NULL,1,now(),now(),NULL)
-     ON CONFLICT (company_id,employee_user_id,work_date) DO UPDATE SET
+     ) VALUES (
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+       $21,$22,$23,$24,$25,$26,1,now(),now(),NULL
+     )
+     ON CONFLICT (company_id, employee_user_id, work_date) DO UPDATE SET
        status = EXCLUDED.status,
+       day_classification = EXCLUDED.day_classification,
+       presence_state = EXCLUDED.presence_state,
+       punctuality_state = EXCLUDED.punctuality_state,
+       evidence_state = EXCLUDED.evidence_state,
+       approval_kind = EXCLUDED.approval_kind,
+       approval_state = EXCLUDED.approval_state,
+       payroll_state = EXCLUDED.payroll_state,
        first_check_in = EXCLUDED.first_check_in,
        last_check_out = EXCLUDED.last_check_out,
        work_minutes = EXCLUDED.work_minutes,
+       break_minutes = EXCLUDED.break_minutes,
+       late_minutes = EXCLUDED.late_minutes,
+       early_out_minutes = EXCLUDED.early_out_minutes,
+       work_seconds = EXCLUDED.work_seconds,
+       break_seconds = EXCLUDED.break_seconds,
+       scheduled_seconds = EXCLUDED.scheduled_seconds,
+       late_seconds = EXCLUDED.late_seconds,
+       early_departure_seconds = EXCLUDED.early_departure_seconds,
        work_mode = EXCLUDED.work_mode,
        note = EXCLUDED.note,
+       exception_type = EXCLUDED.exception_type,
+       regularization_status = EXCLUDED.regularization_status,
        version = attendance.daily_records.version + 1,
-       updated_at = now()
+       updated_at = now(), deleted_at = NULL
      RETURNING *`,
-    [companyId, employeeUserId, workDate, firstCheckIn, lastCheckOut, workMinutes, workMode],
-  )).rows[0] ?? {};
+    values,
+  )).rows[0];
+  if (!row) throw new Error("Attendance daily projection did not return a row.");
+  return normalizeDailyProjectionRow(row);
+}
+
+function normalizeDailyProjectionRow(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [
+    key,
+    value instanceof Date ? value.toISOString() : value,
+  ]));
 }

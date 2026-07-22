@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -548,12 +549,24 @@ export const attendanceDailyRecords = attendance.table(
     employeeUserId: uuid("employee_user_id").notNull(),
     workDate: date("work_date").notNull(),
     status: text("status").notNull(),
+    dayClassification: text("day_classification").notNull().default("unknown"),
+    presenceState: text("presence_state").notNull().default("unknown"),
+    punctualityState: text("punctuality_state").notNull().default("unknown"),
+    evidenceState: text("evidence_state").notNull().default("unknown"),
+    approvalKind: text("approval_kind").notNull().default("none"),
+    approvalState: text("approval_state").notNull().default("not_required"),
+    payrollState: text("payroll_state").notNull().default("unprocessed"),
     firstCheckIn: timestamp("first_check_in", { withTimezone: true }),
     lastCheckOut: timestamp("last_check_out", { withTimezone: true }),
     workMinutes: integer("work_minutes").notNull().default(0),
     breakMinutes: integer("break_minutes").notNull().default(0),
     lateMinutes: integer("late_minutes").notNull().default(0),
     earlyOutMinutes: integer("early_out_minutes").notNull().default(0),
+    workSeconds: integer("work_seconds").notNull().default(0),
+    breakSeconds: integer("break_seconds").notNull().default(0),
+    scheduledSeconds: integer("scheduled_seconds").notNull().default(0),
+    lateSeconds: integer("late_seconds").notNull().default(0),
+    earlyDepartureSeconds: integer("early_departure_seconds").notNull().default(0),
     workMode: text("work_mode"),
     note: text("note"),
     exceptionType: text("exception_type"),
@@ -566,7 +579,17 @@ export const attendanceDailyRecords = attendance.table(
   (table) => [
     uniqueIndex("attendance_daily_company_employee_date_uq").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_daily_status_date_idx").on(table.status, table.workDate),
-    index("attendance_daily_exception_idx").on(table.exceptionType, table.workDate)
+    index("attendance_daily_classification_date_idx").on(table.dayClassification, table.workDate),
+    index("attendance_daily_presence_date_idx").on(table.presenceState, table.workDate),
+    index("attendance_daily_exception_idx").on(table.exceptionType, table.workDate),
+    check("attendance_daily_day_classification_check", sql`${table.dayClassification} IN ('working_day', 'weekend', 'holiday', 'leave', 'wfh', 'future', 'unknown')`),
+    check("attendance_daily_presence_state_check", sql`${table.presenceState} IN ('not_started', 'present', 'partial', 'incomplete', 'absent', 'not_applicable', 'unknown')`),
+    check("attendance_daily_punctuality_state_check", sql`${table.punctualityState} IN ('on_time', 'late', 'early_departure', 'late_and_early_departure', 'not_applicable', 'unknown')`),
+    check("attendance_daily_evidence_state_check", sql`${table.evidenceState} IN ('complete', 'partial', 'missing', 'disputed', 'not_applicable', 'unknown')`),
+    check("attendance_daily_approval_kind_check", sql`${table.approvalKind} IN ('none', 'regularization', 'leave', 'wfh', 'multiple')`),
+    check("attendance_daily_approval_state_check", sql`${table.approvalState} IN ('not_required', 'pending', 'approved', 'returned', 'rejected', 'mixed', 'unknown')`),
+    check("attendance_daily_payroll_state_check", sql`${table.payrollState} IN ('unprocessed', 'not_applicable', 'unknown')`),
+    check("attendance_daily_seconds_nonnegative_check", sql`${table.workSeconds} >= 0 AND ${table.breakSeconds} >= 0 AND ${table.scheduledSeconds} >= 0 AND ${table.lateSeconds} >= 0 AND ${table.earlyDepartureSeconds} >= 0`)
   ]
 );
 

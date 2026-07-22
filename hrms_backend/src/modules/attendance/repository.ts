@@ -117,6 +117,9 @@ export class AttendanceRepository {
       this.store.attendanceDayRecords.push(record);
       return record;
     }
+    if (Object.entries(input).every(([key, value]) =>
+      JSON.stringify(existing[key as keyof AttendanceDayRecord]) === JSON.stringify(value)
+    )) return existing;
     Object.assign(existing, input);
     existing.version += 1;
     existing.updated_at = now;

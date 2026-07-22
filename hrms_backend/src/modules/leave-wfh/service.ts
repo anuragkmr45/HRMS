@@ -15,6 +15,9 @@ import type {
   WfhRequestCreateInput
 } from "#shared";
 import {
+  AttendanceApprovalKinds,
+  AttendanceApprovalStates,
+  AttendanceDayClassifications,
   AttendanceDayStatuses,
   EmploymentStatuses,
   LeaveRequestStatuses,
@@ -28,6 +31,7 @@ import { badRequest, conflict, forbidden, missingRemarks, notFound } from "../..
 import { createGeneratedExportDocument, type GeneratedExportFormat } from "../../platform/generated-exports.js";
 import { isWorkingDate, workingDatesInclusive, workdaysInclusive } from "../../platform/work-schedule.js";
 import { AttendanceRepository } from "../attendance/repository.js";
+import { projectAttendanceDay } from "../attendance/daily-projection.js";
 import { CoreService } from "../core/service.js";
 import { appendLeaveWfhOutboxEvent, leaveWfhEvents } from "./events.js";
 import {
@@ -667,22 +671,45 @@ export class LeaveWfhService {
   ): void {
     const companyId = this.requireCompanyId(employeeUserId);
     for (const workDate of workingDatesInclusive(dateFrom, dateTo, this.workingWeek(), this.holidayDates())) {
-      this.attendance.upsertDayRecord({
-        company_id: companyId,
-        employee_user_id: employeeUserId,
-        work_date: workDate,
-        status,
-        first_check_in: null,
-        last_check_out: null,
-        work_minutes: 0,
-        break_minutes: 0,
-        late_minutes: 0,
-        early_out_minutes: 0,
-        work_mode: workMode,
+      const existing = this.attendance.dayRecord(companyId, employeeUserId, workDate);
+      const kind = status === AttendanceDayStatuses.Leave
+        ? AttendanceApprovalKinds.Leave
+        : AttendanceApprovalKinds.Wfh;
+      const classification = status === AttendanceDayStatuses.Leave
+        ? AttendanceDayClassifications.Leave
+        : AttendanceDayClassifications.Wfh;
+      const hasRecordedAttendance = Boolean(
+        existing?.first_check_in || existing?.last_check_out || (existing?.work_seconds ?? 0) > 0,
+      );
+      const projection = projectAttendanceDay({
+        companyId,
+        employeeUserId,
+        workDate,
+        asOf: nowIso(),
+        dayClassification: classification,
+        firstCheckIn: existing?.first_check_in ?? null,
+        lastCheckOut: existing?.last_check_out ?? null,
+        hasOpenSession: Boolean(existing?.first_check_in && !existing.last_check_out),
+        workMode: workMode ?? existing?.work_mode ?? null,
+        workSeconds: existing?.work_seconds ?? (existing?.work_minutes ?? 0) * 60,
+        breakSeconds: existing?.break_seconds ?? (existing?.break_minutes ?? 0) * 60,
+        scheduledStartAt: null,
+        scheduledEndAt: null,
+        graceSeconds: 0,
+        approvalFacts: [{ kind, state: AttendanceApprovalStates.Approved }],
+        existingApproval: existing,
+        regularizationStatus: existing?.regularization_status ?? null,
+        forcePresenceState: hasRecordedAttendance ? existing?.presence_state : undefined,
+        forceEvidenceState: hasRecordedAttendance ? existing?.evidence_state : undefined,
         note,
-        exception_type: null,
-        regularization_status: null
       });
+      projection.scheduled_seconds = existing?.scheduled_seconds ?? 0;
+      projection.punctuality_state = existing?.punctuality_state ?? projection.punctuality_state;
+      projection.late_seconds = existing?.late_seconds ?? 0;
+      projection.early_departure_seconds = existing?.early_departure_seconds ?? 0;
+      projection.late_minutes = Math.floor(projection.late_seconds / 60);
+      projection.early_out_minutes = Math.floor(projection.early_departure_seconds / 60);
+      this.attendance.upsertDayRecord(projection);
     }
   }
 

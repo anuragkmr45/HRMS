@@ -613,12 +613,24 @@ describe("attendance", () => {
         employee_user_id: employee.user.id,
         work_date: staleDate,
         status: "future",
+        day_classification: "future",
+        presence_state: "not_started",
+        punctuality_state: "not_applicable",
+        evidence_state: "not_applicable",
+        approval_kind: "none",
+        approval_state: "not_required",
+        payroll_state: "unprocessed",
         first_check_in: null,
         last_check_out: null,
         work_minutes: 0,
         break_minutes: 0,
         late_minutes: 0,
         early_out_minutes: 0,
+        work_seconds: 0,
+        break_seconds: 0,
+        scheduled_seconds: 0,
+        late_seconds: 0,
+        early_departure_seconds: 0,
         work_mode: null,
         note: null,
         exception_type: null,
@@ -757,7 +769,16 @@ describe("attendance", () => {
       status: "approved",
       version: 2,
     });
-    expect(approved.json().day_status.status).toBe("present");
+    expect(approved.json().day_status).toMatchObject({
+      status: "present",
+      presence_state: "present",
+      evidence_state: "complete",
+      approval_kind: "regularization",
+      approval_state: "approved",
+      regularization_status: "approved",
+      work_seconds: 33_900,
+      work_minutes: 565,
+    });
 
     const stale = await app.inject({
       method: "POST",
@@ -780,7 +801,10 @@ describe("attendance", () => {
       );
     expect(day).toMatchObject({
       status: "present",
+      approval_kind: "regularization",
+      approval_state: "approved",
       regularization_status: "approved",
+      work_seconds: 33_900,
     });
   });
 

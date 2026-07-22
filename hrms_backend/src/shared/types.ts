@@ -1,7 +1,14 @@
 import type {
   AssetStatus,
+  AttendanceApprovalKind,
+  AttendanceApprovalState,
+  AttendanceDayClassification,
   AttendanceDayStatus,
+  AttendanceEvidenceState,
+  AttendancePayrollState,
+  AttendancePresenceState,
   AttendancePunchEventType,
+  AttendancePunctualityState,
   AttendanceRegularizationStatus,
   DocumentClassification,
   EmsLetterStatus,
@@ -400,12 +407,24 @@ export interface AttendanceDayRecord {
   company_id: UUID;
   work_date: ISODate;
   status: AttendanceDayStatus;
+  day_classification: AttendanceDayClassification;
+  presence_state: AttendancePresenceState;
+  punctuality_state: AttendancePunctualityState;
+  evidence_state: AttendanceEvidenceState;
+  approval_kind: AttendanceApprovalKind;
+  approval_state: AttendanceApprovalState;
+  payroll_state: AttendancePayrollState;
   first_check_in: ISODateTime | null;
   last_check_out: ISODateTime | null;
   work_minutes: number;
   break_minutes: number;
   late_minutes: number;
   early_out_minutes: number;
+  work_seconds: number;
+  break_seconds: number;
+  scheduled_seconds: number;
+  late_seconds: number;
+  early_departure_seconds: number;
   work_mode: "office" | "remote" | "wfh" | "field" | null;
   note: string | null;
   exception_type: "late" | "missing_punch" | "absent" | "early_out" | null;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AttendanceDayRecord,
+  AttendanceDayStatus,
   AttendancePunch,
   AttendancePunchEventType,
   AttendanceRegularizationRequest,
@@ -9,7 +10,12 @@ import type {
   UUID,
 } from "#shared";
 import {
+  AttendanceApprovalKinds,
+  AttendanceApprovalStates,
+  AttendanceDayClassifications,
   AttendanceDayStatuses,
+  AttendancePresenceStates,
+  AttendancePunctualityStates,
   AttendancePunchEventTypes,
   AttendanceRegularizationStatuses,
   ErrorCodes,
@@ -60,7 +66,15 @@ import {
   canonicalAttendanceRequestHash,
 } from "./command-service.js";
 import { normalizeAttendancePolicyConfig } from "./policy-config.js";
-import { BUILT_IN_STANDARD_SHIFT_VERSION } from "./shift-resolver.js";
+import { resolveEmployeeShift } from "./shift-resolver.js";
+import {
+  deriveLegacyAttendanceStatus,
+  mergeAttendanceApprovals,
+  matchesLegacyAttendanceStatus,
+  projectAttendanceDay,
+  secondsBetween,
+  type AttendanceApprovalFact,
+} from "./daily-projection.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -828,7 +842,14 @@ export class AttendanceService {
       this.timezoneForUser(actor.id, companyId),
     );
     day.regularization_status = AttendanceRegularizationStatuses.Pending;
+    const pendingApproval = mergeAttendanceApprovals(
+      [{ kind: AttendanceApprovalKinds.Regularization, state: AttendanceApprovalStates.Pending }],
+      day,
+    );
+    day.approval_kind = pendingApproval.approvalKind;
+    day.approval_state = pendingApproval.approvalState;
     day.updated_at = nowIso();
+    day.version += 1;
     appendAttendanceOutboxEvent(
       this.store,
       buildRegularizationSubmittedEvent({
@@ -1098,17 +1119,29 @@ export class AttendanceService {
       requestTimeZone,
     );
     day.regularization_status = nextStatus;
+    const decidedApproval = mergeAttendanceApprovals(
+      [{ kind: AttendanceApprovalKinds.Regularization, state: nextStatus }],
+      day.approval_kind === AttendanceApprovalKinds.Regularization
+        ? null
+        : day,
+    );
+    day.approval_kind = decidedApproval.approvalKind;
+    day.approval_state = decidedApproval.approvalState;
     if (
       nextStatus === AttendanceRegularizationStatuses.Approved &&
       day.exception_type
     ) {
       day.exception_type = null;
-      day.status =
-        day.work_mode === "wfh"
-          ? AttendanceDayStatuses.Wfh
-          : AttendanceDayStatuses.Present;
       day.note = "Regularized";
     }
+    day.status = deriveLegacyAttendanceStatus({
+      dayClassification: day.day_classification,
+      presenceState: day.presence_state,
+      punctualityState: day.punctuality_state,
+      approvalKind: day.approval_kind,
+      approvalState: day.approval_state,
+      workMode: day.work_mode,
+    });
     day.updated_at = nowIso();
     day.version += 1;
     appendAttendanceOutboxEvent(
@@ -1301,7 +1334,7 @@ export class AttendanceService {
       .filter(
         (record) =>
           !textFilter(filters.status) ||
-          record.status === textFilter(filters.status),
+          matchesLegacyAttendanceStatus(record, textFilter(filters.status)!),
       )
       .filter(
         (record) =>
@@ -1345,9 +1378,21 @@ export class AttendanceService {
           date: record.work_date,
           work_date: record.work_date,
           status: record.status,
+          day_classification: record.day_classification,
+          presence_state: record.presence_state,
+          punctuality_state: record.punctuality_state,
+          evidence_state: record.evidence_state,
+          approval_kind: record.approval_kind,
+          approval_state: record.approval_state,
+          payroll_state: record.payroll_state,
           in_time: timeText(record.first_check_in, timeZone) ?? "",
           out_time: timeText(record.last_check_out, timeZone) ?? "",
-          hours: Math.round((record.work_minutes / 60) * 100) / 100,
+          hours: Math.round((record.work_seconds / 3600) * 100) / 100,
+          work_seconds: record.work_seconds,
+          break_seconds: record.break_seconds,
+          scheduled_seconds: record.scheduled_seconds,
+          late_seconds: record.late_seconds,
+          early_departure_seconds: record.early_departure_seconds,
           late_minutes: record.late_minutes,
           early_out_minutes: record.early_out_minutes,
           work_mode: record.work_mode ?? "",
@@ -1813,137 +1858,158 @@ export class AttendanceService {
       workDate,
       timeZone,
     );
-    const checkIns = punches.filter(
-      (punch) => punch.event_type === AttendancePunchEventTypes.CheckIn,
+    const durationFacts = this.durationFactsFromPunches(
+      punches,
+      workDate === todayDate(timeZone) ? referenceIso : null,
     );
-    const checkOuts = punches.filter(
-      (punch) => punch.event_type === AttendancePunchEventTypes.CheckOut,
-    );
-    const firstCheckIn = checkIns[0]?.occurred_at ?? null;
-    const lastCheckOut = checkOuts.at(-1)?.occurred_at ?? null;
+    const firstCheckIn = durationFacts.firstCheckIn;
+    const lastCheckOut = durationFacts.lastCheckOut;
     const workMode =
       punches.find((punch) => punch.work_mode)?.work_mode ?? null;
     const localToday = todayDate(timeZone);
     const isPast = workDate < localToday;
-    const isFuture = workDate > localToday;
     const policy = this.attendancePolicy(companyId);
     const holiday = this.holidayForDate(companyId, workDate);
     const workingDay = this.isWorkingDay(companyId, workDate);
-    const shiftStartParts =
-      BUILT_IN_STANDARD_SHIFT_VERSION.local_start_time.split(":");
-    const shiftStartHour = Number(shiftStartParts[0]);
-    const shiftStartMinute = Number(shiftStartParts[1]);
-    const shiftStart = zonedClockIso(
+    const shift = resolveEmployeeShift({
+      company: this.company(companyId),
+      employee: this.requireUser(employeeUserId),
       workDate,
-      shiftStartHour,
-      shiftStartMinute,
-      timeZone,
+      templates: [],
+      versions: [],
+      assignments: [],
+    });
+    const autoAbsentAt = addMinutes(
+      shift.scheduled_start_at,
+      policy.autoMarkAbsentMinutes,
     );
-    const shiftEnd = addMinutes(shiftStart, this.targetWorkMinutes(companyId));
-    const rawLateMinutes = firstCheckIn
-      ? Math.max(0, minutesBetween(shiftStart, firstCheckIn))
-      : 0;
-    const lateMinutes =
-      rawLateMinutes > policy.graceMinutes ? rawLateMinutes : 0;
-    const earlyOutMinutes =
-      lastCheckOut && isPast
-        ? Math.max(0, minutesBetween(lastCheckOut, shiftEnd))
-        : 0;
-    const workEnd =
-      lastCheckOut ?? (workDate === localToday ? nowIso() : firstCheckIn);
-    const breakMinutes = this.breakMinutesUntil(
-      punches,
-      workDate === localToday ? workEnd : null,
-    );
-    const totalMinutes =
-      firstCheckIn && workEnd
-        ? Math.max(0, minutesBetween(firstCheckIn, workEnd) - breakMinutes)
-        : 0;
-    const autoAbsentAt = addMinutes(shiftStart, policy.autoMarkAbsentMinutes);
     const canMarkAbsentToday =
       workDate === localToday &&
-      Date.parse(nowIso()) >= Date.parse(autoAbsentAt);
-    const missingPunch = Boolean(firstCheckIn && !lastCheckOut && isPast);
+      Date.parse(referenceIso) >= Date.parse(autoAbsentAt);
     const absent =
       !firstCheckIn && workingDay && !holiday && (isPast || canMarkAbsentToday);
-    const exceptionType = absent
-      ? "absent"
-      : missingPunch
-        ? "missing_punch"
-        : lateMinutes > 0
-          ? "late"
-          : earlyOutMinutes > 0
-            ? "early_out"
-            : null;
-    const status =
-      holiday && punches.length === 0
-        ? AttendanceDayStatuses.Holiday
-        : !workingDay && punches.length === 0
-          ? AttendanceDayStatuses.Weekend
-          : isFuture
-            ? AttendanceDayStatuses.Future
-            : absent
-              ? AttendanceDayStatuses.Absent
-              : workMode === "wfh"
-                ? AttendanceDayStatuses.Wfh
-                : lateMinutes > 0
-                  ? AttendanceDayStatuses.Late
-                  : AttendanceDayStatuses.Present;
+    const existing = this.repository.dayRecord(companyId, employeeUserId, workDate);
+    const approvalFacts = this.approvalFactsForDay(companyId, employeeUserId, workDate);
+    const dayClassification = this.dayClassificationFor({
+      workDate,
+      localToday,
+      holiday: Boolean(holiday),
+      workingDay,
+      workMode,
+      approvalFacts,
+    });
     const passiveNote =
       holiday && punches.length === 0
         ? `Holiday: ${holiday.name}`
         : !workingDay && punches.length === 0
           ? "Company non-working day"
           : null;
-    return this.repository.upsertDayRecord({
-      company_id: companyId,
-      employee_user_id: employeeUserId,
-      work_date: workDate,
-      status,
-      first_check_in: firstCheckIn,
-      last_check_out: lastCheckOut,
-      work_minutes: totalMinutes,
-      break_minutes: breakMinutes,
-      late_minutes: lateMinutes,
-      early_out_minutes: earlyOutMinutes,
-      work_mode: workMode,
-      note: exceptionType
-        ? this.exceptionDetail({
-            exception_type: exceptionType,
-            late_minutes: lateMinutes,
-            early_out_minutes: earlyOutMinutes,
-            work_minutes: totalMinutes,
-          } as AttendanceDayRecord)
-        : passiveNote,
-      exception_type: exceptionType,
-      regularization_status:
-        this.repository.dayRecord(companyId, employeeUserId, workDate)
-          ?.regularization_status ?? null,
+    const projection = projectAttendanceDay({
+      companyId,
+      employeeUserId,
+      workDate,
+      asOf: referenceIso,
+      dayClassification,
+      firstCheckIn,
+      lastCheckOut,
+      hasOpenSession: durationFacts.hasOpenSession,
+      hasIncompleteEvidence: durationFacts.hasUnmatchedPunch,
+      incompleteIsException: isPast,
+      workMode,
+      workSeconds: durationFacts.workSeconds,
+      breakSeconds: durationFacts.breakSeconds,
+      scheduledStartAt: shift.scheduled_start_at,
+      scheduledEndAt: shift.scheduled_end_at,
+      graceSeconds: policy.graceMinutes * 60,
+      approvalFacts,
+      existingApproval: existing,
+      regularizationStatus: existing?.regularization_status ?? null,
+      forcePresenceState: absent
+        ? AttendancePresenceStates.Absent
+        : !firstCheckIn && workDate === localToday
+          ? AttendancePresenceStates.NotStarted
+          : undefined,
+      note: passiveNote,
     });
+    projection.note = projection.exception_type
+      ? this.exceptionDetail(projection)
+      : passiveNote;
+    return this.repository.upsertDayRecord(projection);
   }
 
-  private breakMinutesUntil(
+  private durationFactsFromPunches(
     punches: AttendancePunch[],
-    openBreakEndAt: string | null,
-  ): number {
-    let total = 0;
+    openSessionEndAt: string | null,
+  ): {
+    firstCheckIn: string | null;
+    lastCheckOut: string | null;
+    workSeconds: number;
+    breakSeconds: number;
+    hasOpenSession: boolean;
+    hasUnmatchedPunch: boolean;
+  } {
+    let workSeconds = 0;
+    let breakSeconds = 0;
+    let sessionStartedAt: string | null = null;
     let breakStartedAt: string | null = null;
+    let sessionBreakSeconds = 0;
+    let firstCheckIn: string | null = null;
+    let lastCheckOut: string | null = null;
+    let hasUnmatchedPunch = false;
     for (const punch of punches) {
-      if (punch.event_type === AttendancePunchEventTypes.BreakStart) {
+      if (punch.event_type === AttendancePunchEventTypes.CheckIn) {
+        if (sessionStartedAt) hasUnmatchedPunch = true;
+        sessionStartedAt = punch.occurred_at;
+        firstCheckIn ??= punch.occurred_at;
+        sessionBreakSeconds = 0;
+        breakStartedAt = null;
+      } else if (punch.event_type === AttendancePunchEventTypes.BreakStart && sessionStartedAt) {
         breakStartedAt = punch.occurred_at;
-      }
-      if (
+      } else if (
         punch.event_type === AttendancePunchEventTypes.BreakEnd &&
         breakStartedAt
       ) {
-        total += minutesBetween(breakStartedAt, punch.occurred_at);
+        const seconds = secondsBetween(breakStartedAt, punch.occurred_at);
+        breakSeconds += seconds;
+        sessionBreakSeconds += seconds;
         breakStartedAt = null;
+      } else if (punch.event_type === AttendancePunchEventTypes.CheckOut && sessionStartedAt) {
+        if (breakStartedAt) {
+          const seconds = secondsBetween(breakStartedAt, punch.occurred_at);
+          breakSeconds += seconds;
+          sessionBreakSeconds += seconds;
+          breakStartedAt = null;
+        }
+        workSeconds += Math.max(
+          0,
+          secondsBetween(sessionStartedAt, punch.occurred_at) - sessionBreakSeconds,
+        );
+        lastCheckOut = punch.occurred_at;
+        sessionStartedAt = null;
+        sessionBreakSeconds = 0;
+      } else if (punch.event_type === AttendancePunchEventTypes.CheckOut) {
+        hasUnmatchedPunch = true;
       }
     }
-    if (breakStartedAt && openBreakEndAt) {
-      total += minutesBetween(breakStartedAt, openBreakEndAt);
+    if (sessionStartedAt && openSessionEndAt) {
+      if (breakStartedAt) {
+        const seconds = secondsBetween(breakStartedAt, openSessionEndAt);
+        breakSeconds += seconds;
+        sessionBreakSeconds += seconds;
+      }
+      workSeconds += Math.max(
+        0,
+        secondsBetween(sessionStartedAt, openSessionEndAt) - sessionBreakSeconds,
+      );
     }
-    return total;
+    return {
+      firstCheckIn,
+      lastCheckOut,
+      workSeconds,
+      breakSeconds,
+      hasOpenSession: sessionStartedAt !== null,
+      hasUnmatchedPunch,
+    };
   }
 
   private resolveDay(
@@ -1983,9 +2049,9 @@ export class AttendanceService {
 
   private shouldPreserveManualDay(record: AttendanceDayRecord): boolean {
     return (
-      record.status === AttendanceDayStatuses.Leave ||
-      record.status === AttendanceDayStatuses.Wfh ||
-      (record.status === AttendanceDayStatuses.Holiday &&
+      record.day_classification === AttendanceDayClassifications.Leave ||
+      record.day_classification === AttendanceDayClassifications.Wfh ||
+      (record.day_classification === AttendanceDayClassifications.Holiday &&
         Boolean(this.holidayForDate(record.company_id, record.work_date))) ||
       record.regularization_status === AttendanceRegularizationStatuses.Approved
     );
@@ -2007,36 +2073,45 @@ export class AttendanceService {
     }
     const holiday = this.holidayForDate(companyId, workDate);
     const workingDay = this.isWorkingDay(companyId, workDate);
-    const status = holiday
-      ? AttendanceDayStatuses.Holiday
+    const localToday = todayDate(timeZone);
+    const dayClassification = holiday
+      ? AttendanceDayClassifications.Holiday
       : !workingDay
-        ? AttendanceDayStatuses.Weekend
-        : workDate > todayDate(timeZone)
-          ? AttendanceDayStatuses.Future
-          : AttendanceDayStatuses.Absent;
-    return this.repository.upsertDayRecord({
-      company_id: companyId,
-      employee_user_id: employeeUserId,
-      work_date: workDate,
-      status,
-      first_check_in: null,
-      last_check_out: null,
-      work_minutes: 0,
-      break_minutes: 0,
-      late_minutes: 0,
-      early_out_minutes: 0,
-      work_mode: null,
-      note:
-        status === AttendanceDayStatuses.Absent
-          ? "No punch-in recorded"
-          : status === AttendanceDayStatuses.Holiday
-            ? `Holiday: ${holiday?.name ?? "Company holiday"}`
-            : status === AttendanceDayStatuses.Weekend
-              ? "Company non-working day"
-              : null,
-      exception_type: status === AttendanceDayStatuses.Absent ? "absent" : null,
-      regularization_status: null,
+        ? AttendanceDayClassifications.Weekend
+        : workDate > localToday
+          ? AttendanceDayClassifications.Future
+          : AttendanceDayClassifications.WorkingDay;
+    const shift = resolveEmployeeShift({
+      company: this.company(companyId),
+      employee: this.requireUser(employeeUserId),
+      workDate,
+      templates: [],
+      versions: [],
+      assignments: [],
     });
+    return this.repository.upsertDayRecord(projectAttendanceDay({
+      companyId,
+      employeeUserId,
+      workDate,
+      asOf: nowIso(),
+      dayClassification,
+      firstCheckIn: null,
+      lastCheckOut: null,
+      hasOpenSession: false,
+      workMode: null,
+      workSeconds: 0,
+      breakSeconds: 0,
+      scheduledStartAt: shift.scheduled_start_at,
+      scheduledEndAt: shift.scheduled_end_at,
+      graceSeconds: this.attendancePolicy(companyId).graceMinutes * 60,
+      note: dayClassification === AttendanceDayClassifications.WorkingDay
+        ? "No punch-in recorded"
+        : dayClassification === AttendanceDayClassifications.Holiday
+          ? `Holiday: ${holiday?.name ?? "Company holiday"}`
+          : dayClassification === AttendanceDayClassifications.Weekend
+            ? "Company non-working day"
+            : null,
+    }));
   }
 
   private weekRecords(
@@ -2142,7 +2217,7 @@ export class AttendanceService {
         record.work_date <=
         todayDate(this.timezoneForUser(record.employee_user_id, companyId)),
     );
-    const target = this.targetWorkMinutes(companyId);
+    const targetSeconds = this.targetWorkMinutes(companyId) * 60;
     const weekdayRecords = elapsedRecords.filter(
       (record) =>
         this.isWorkingDay(companyId, record.work_date) &&
@@ -2153,27 +2228,33 @@ export class AttendanceService {
         !this.isWorkingDay(companyId, record.work_date) ||
         Boolean(this.holidayForDate(companyId, record.work_date)),
     );
-    const requiredWeekdayMinutes = weekdayRecords.length * target;
-    const weekdayWorkedMinutes = weekdayRecords.reduce(
-      (total, record) => total + record.work_minutes,
+    const requiredWeekdaySeconds = weekdayRecords.length * targetSeconds;
+    const weekdayWorkedSeconds = weekdayRecords.reduce(
+      (total, record) => total + record.work_seconds,
       0,
     );
-    const offDayWorkedMinutes = offDayRecords.reduce(
-      (total, record) => total + record.work_minutes,
+    const offDayWorkedSeconds = offDayRecords.reduce(
+      (total, record) => total + record.work_seconds,
       0,
     );
-    const weekdayShortageMinutes = Math.max(
+    const weekdayShortageSeconds = Math.max(
       0,
-      requiredWeekdayMinutes - weekdayWorkedMinutes,
+      requiredWeekdaySeconds - weekdayWorkedSeconds,
     );
-    const compensatedMinutes = Math.min(
-      weekdayShortageMinutes,
-      offDayWorkedMinutes,
+    const compensatedSeconds = Math.min(
+      weekdayShortageSeconds,
+      offDayWorkedSeconds,
     );
-    const overtimeMinutes = Math.max(
+    const overtimeSeconds = Math.max(
       0,
-      offDayWorkedMinutes - compensatedMinutes,
+      offDayWorkedSeconds - compensatedSeconds,
     );
+    const requiredWeekdayMinutes = Math.floor(requiredWeekdaySeconds / 60);
+    const weekdayWorkedMinutes = Math.floor(weekdayWorkedSeconds / 60);
+    const offDayWorkedMinutes = Math.floor(offDayWorkedSeconds / 60);
+    const weekdayShortageMinutes = Math.floor(weekdayShortageSeconds / 60);
+    const compensatedMinutes = Math.floor(compensatedSeconds / 60);
+    const overtimeMinutes = Math.floor(overtimeSeconds / 60);
     return {
       required_weekly_minutes: requiredWeekdayMinutes,
       required_weekly_hours: minutesToHours(requiredWeekdayMinutes),
@@ -2505,6 +2586,84 @@ export class AttendanceService {
     );
   }
 
+  private approvalFactsForDay(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+  ): AttendanceApprovalFact[] {
+    const facts: AttendanceApprovalFact[] = [];
+    const regularization = this.store.attendanceRegularizations
+      .filter((request) =>
+        request.company_id === companyId &&
+        request.employee_user_id === employeeUserId &&
+        request.work_date === workDate &&
+        !request.deleted_at,
+      )
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
+    if (regularization) {
+      facts.push({
+        kind: AttendanceApprovalKinds.Regularization,
+        state: regularization.status,
+      });
+    }
+    for (const request of this.store.leaveRequests) {
+      if (
+        request.employee_user_id !== employeeUserId ||
+        request.deleted_at ||
+        request.date_from > workDate ||
+        request.date_to < workDate ||
+        request.status === "cancelled"
+      ) continue;
+      facts.push({
+        kind: AttendanceApprovalKinds.Leave,
+        state: request.status === "pending_manager" ? AttendanceApprovalStates.Pending : request.status,
+      });
+    }
+    for (const request of this.store.wfhRequests) {
+      if (
+        request.employee_user_id !== employeeUserId ||
+        request.deleted_at ||
+        request.date_from > workDate ||
+        request.date_to < workDate ||
+        request.status === "cancelled"
+      ) continue;
+      facts.push({
+        kind: AttendanceApprovalKinds.Wfh,
+        state: request.status === "pending_manager" ? AttendanceApprovalStates.Pending : request.status,
+      });
+    }
+    return facts;
+  }
+
+  private dayClassificationFor(input: {
+    workDate: string;
+    localToday: string;
+    holiday: boolean;
+    workingDay: boolean;
+    workMode: AttendanceDayRecord["work_mode"];
+    approvalFacts: AttendanceApprovalFact[];
+  }) {
+    if (
+      input.approvalFacts.some(
+        (fact) =>
+          fact.kind === AttendanceApprovalKinds.Leave &&
+          fact.state === AttendanceApprovalStates.Approved,
+      )
+    ) return AttendanceDayClassifications.Leave;
+    if (
+      input.approvalFacts.some(
+        (fact) =>
+          fact.kind === AttendanceApprovalKinds.Wfh &&
+          fact.state === AttendanceApprovalStates.Approved,
+      )
+    ) return AttendanceDayClassifications.Wfh;
+    if (input.holiday) return AttendanceDayClassifications.Holiday;
+    if (!input.workingDay) return AttendanceDayClassifications.Weekend;
+    if (input.workMode === "wfh") return AttendanceDayClassifications.Wfh;
+    if (input.workDate > input.localToday) return AttendanceDayClassifications.Future;
+    return AttendanceDayClassifications.WorkingDay;
+  }
+
   private targetWorkMinutes(companyId: UUID): number {
     return Math.max(
       0,
@@ -2540,7 +2699,7 @@ export class AttendanceService {
     records: Array<
       | AttendanceDayRecord
       | {
-          status: string;
+          status: AttendanceDayStatus;
           work_minutes: number;
           late_minutes?: number;
           exception_type?: string | null;
@@ -2549,28 +2708,28 @@ export class AttendanceService {
   ) {
     return {
       present: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Present,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Present),
       ).length,
       absent: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Absent,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Absent),
       ).length,
       late: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Late,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Late),
       ).length,
       wfh: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Wfh,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Wfh),
       ).length,
       leave: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Leave,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Leave),
       ).length,
       weekend: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Weekend,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Weekend),
       ).length,
       holiday: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Holiday,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Holiday),
       ).length,
       future: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Future,
+        (record) => matchesLegacyAttendanceStatus(record, AttendanceDayStatuses.Future),
       ).length,
       missing_punch: records.filter(
         (record) => record.exception_type === "missing_punch",
@@ -2581,10 +2740,10 @@ export class AttendanceService {
           record.regularization_status ===
             AttendanceRegularizationStatuses.Approved,
       ).length,
-      work_minutes: records.reduce(
-        (total, record) => total + record.work_minutes,
+      work_minutes: Math.floor(records.reduce(
+        (total, record) => total + ("work_seconds" in record ? record.work_seconds : record.work_minutes * 60),
         0,
-      ),
+      ) / 60),
     };
   }
 
@@ -2593,22 +2752,23 @@ export class AttendanceService {
       total: totalEmployees,
       present: records.filter(
         (record) =>
-          record.status === AttendanceDayStatuses.Present ||
-          record.status === AttendanceDayStatuses.Late,
+          record.presence_state === AttendancePresenceStates.Present,
       ).length,
       absent: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Absent,
+        (record) => record.presence_state === AttendancePresenceStates.Absent,
       ).length,
       late: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Late,
+        (record) =>
+          record.punctuality_state === AttendancePunctualityStates.Late ||
+          record.punctuality_state === AttendancePunctualityStates.LateAndEarlyDeparture,
       ).length,
-      early_out: records.filter((record) => record.early_out_minutes > 0)
+      early_out: records.filter((record) => record.early_departure_seconds > 0)
         .length,
       wfh: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Wfh,
+        (record) => record.day_classification === AttendanceDayClassifications.Wfh,
       ).length,
       on_leave: records.filter(
-        (record) => record.status === AttendanceDayStatuses.Leave,
+        (record) => record.day_classification === AttendanceDayClassifications.Leave,
       ).length,
     };
   }
@@ -2626,9 +2786,7 @@ export class AttendanceService {
         );
         const present = departmentRecords.filter(
           (record) =>
-            record.status === AttendanceDayStatuses.Present ||
-            record.status === AttendanceDayStatuses.Late ||
-            record.status === AttendanceDayStatuses.Wfh,
+            record.presence_state === AttendancePresenceStates.Present,
         ).length;
         return {
           department_id: department.id,

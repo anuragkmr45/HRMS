@@ -136,7 +136,11 @@ describe("AttendanceAutoPunchoutWorker", () => {
     expect(store.attendanceDayRecords[0]).toMatchObject({
       last_check_out: "2026-05-20T13:00:00.000Z",
       break_minutes: 360,
-      work_minutes: 180
+      work_minutes: 180,
+      break_seconds: 21_600,
+      work_seconds: 10_800,
+      presence_state: "present",
+      evidence_state: "complete"
     });
   });
 

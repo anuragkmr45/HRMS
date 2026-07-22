@@ -115,6 +115,15 @@ describe("PostgreSQL attendance command idempotency", () => {
     const requestCompletedAt = Date.now();
 
     expect(first.statusCode).toBe(200);
+    expect(first.json().day_status).toMatchObject({
+      day_classification: expect.any(String),
+      presence_state: "incomplete",
+      evidence_state: "partial",
+      payroll_state: "unprocessed",
+      work_seconds: expect.any(Number),
+      break_seconds: 0,
+      scheduled_seconds: expect.any(Number),
+    });
 
     const replay = await app.inject({
       method: "POST",
@@ -132,6 +141,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       punch: {
         occurred_at: first.json().punch.occurred_at,
       },
+      day_status: first.json().day_status,
     });
 
     const counts = await app.store.pgPool!.query<{
