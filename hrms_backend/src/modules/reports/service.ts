@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AuthUser, CoreUser, ExpensePayment, ExpenseTicket, OutboxEvent, ProjectRecord, UUID } from "#shared";
-import { addMoney, AssetStatuses, compareMoney, ExpenseStatuses, HelpdeskTicketStatuses, ProjectMemberStatuses, ProjectStatuses, Roles, RequiredDocumentsByExpenseSubType } from "#shared";
+import { addMoney, AssetStatuses, AttendanceDayClassifications, AttendancePresenceStates, AttendancePunctualityStates, compareMoney, ExpenseStatuses, HelpdeskTicketStatuses, ProjectMemberStatuses, ProjectStatuses, Roles, RequiredDocumentsByExpenseSubType } from "#shared";
 import type { ExpenseApprovalRecord, MemoryDataStore } from "../../platform/data-store.js";
 import { ReportRepository } from "./repository.js";
 import { assertReportRole } from "./policy.js";
@@ -8,6 +8,7 @@ import { forbidden, notFound } from "../../platform/errors.js";
 import { createGeneratedExportDocument, type GeneratedExportFormat } from "../../platform/generated-exports.js";
 import { appendOutboxEvent } from "../expenses/events.js";
 import { canSeeProject } from "../projects/policy.js";
+import { matchesLegacyAttendanceStatus } from "../attendance/daily-projection.js";
 
 export interface ExpenseReportQuery {
   page: number;
@@ -380,7 +381,7 @@ export class ReportService {
       .filter((record) => this.canSeeUserReportRow(actor, record.employee_user_id, "attendance"))
       .filter((record) => !query.user_id || record.employee_user_id === query.user_id)
       .filter((record) => !query.employee_user_id || record.employee_user_id === query.employee_user_id)
-      .filter((record) => !query.status || record.status === query.status)
+      .filter((record) => !query.status || matchesLegacyAttendanceStatus(record, query.status))
       .filter((record) => !query.date_from || record.work_date >= query.date_from)
       .filter((record) => !query.date_to || record.work_date <= query.date_to)
       .filter((record) => {
@@ -398,9 +399,21 @@ export class ReportService {
           department_id: user?.department_id ?? null,
           department: user ? this.departmentName(user.department_id) : null,
           status: record.status,
+          day_classification: record.day_classification,
+          presence_state: record.presence_state,
+          punctuality_state: record.punctuality_state,
+          evidence_state: record.evidence_state,
+          approval_kind: record.approval_kind,
+          approval_state: record.approval_state,
+          payroll_state: record.payroll_state,
           in_time: record.first_check_in?.slice(11, 16) ?? "",
           out_time: record.last_check_out?.slice(11, 16) ?? "",
-          hours: Math.round((record.work_minutes / 60) * 10) / 10,
+          hours: Math.round((record.work_seconds / 3600) * 10) / 10,
+          work_seconds: record.work_seconds,
+          break_seconds: record.break_seconds,
+          scheduled_seconds: record.scheduled_seconds,
+          late_seconds: record.late_seconds,
+          early_departure_seconds: record.early_departure_seconds,
           late_minutes: record.late_minutes,
           early_out_minutes: record.early_out_minutes,
           work_mode: record.work_mode,
@@ -412,11 +425,14 @@ export class ReportService {
     return pageWithMeta(rows, query.page, query.page_size, {
       totals: {
         records: rows.length,
-        present: rows.filter((row) => row.status === "present").length,
-        late: rows.filter((row) => row.status === "late").length,
-        absent: rows.filter((row) => row.status === "absent").length,
-        wfh: rows.filter((row) => row.status === "wfh").length,
-        leave: rows.filter((row) => row.status === "leave").length,
+        present: rows.filter((row) => row.presence_state === AttendancePresenceStates.Present).length,
+        late: rows.filter((row) =>
+          row.punctuality_state === AttendancePunctualityStates.Late ||
+          row.punctuality_state === AttendancePunctualityStates.LateAndEarlyDeparture,
+        ).length,
+        absent: rows.filter((row) => row.presence_state === AttendancePresenceStates.Absent).length,
+        wfh: rows.filter((row) => row.day_classification === AttendanceDayClassifications.Wfh).length,
+        leave: rows.filter((row) => row.day_classification === AttendanceDayClassifications.Leave).length,
         average_hours: average(rows.map((row) => row.hours))
       },
       status_breakdown: groupCount(rows, (row) => row.status),
