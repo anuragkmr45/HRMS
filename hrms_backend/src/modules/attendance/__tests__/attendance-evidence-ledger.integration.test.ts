@@ -19,6 +19,7 @@ type LedgerFixture = {
 async function truncateLedgerTables(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      attendance.regularization_correction_applications,
       attendance.decision_reasons,
       attendance.attendance_decisions,
       attendance.location_evidence,

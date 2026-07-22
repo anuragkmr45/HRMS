@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type {
   AttendanceDayRecord,
   AttendancePunch,
+  AttendanceRegularizationAction,
+  AttendanceRegularizationCorrectionApplication,
   AttendanceRegularizationRequest,
+  AttendanceRegularizationRequestItem,
   UUID,
 } from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
@@ -56,12 +59,18 @@ export class AttendanceRepository {
     dateTo?: string,
     timeZone = "UTC",
   ): AttendancePunch[] {
+    const supersededTargets = new Set(
+      this.store.attendanceRegularizationCorrectionApplications
+        .filter((application) => application.company_id === companyId)
+        .flatMap((application) => application.target_punch_event_id ? [application.target_punch_event_id] : []),
+    );
     return this.store.attendancePunches
       .filter((punch) => {
         if (
           punch.company_id !== companyId ||
           punch.employee_user_id !== employeeUserId ||
-          punch.deleted_at
+          punch.deleted_at ||
+          supersededTargets.has(punch.id)
         ) {
           return false;
         }
@@ -169,7 +178,12 @@ export class AttendanceRepository {
       | "decided_at"
       | "decided_by_user_id"
       | "decision_remarks"
-    >,
+      | "items"
+      | "requested_punches"
+    > & {
+      items: Array<Pick<AttendanceRegularizationRequestItem,
+        "operation" | "target_punch_event_id" | "event_type" | "occurred_at">>;
+    },
   ): AttendanceRegularizationRequest {
     const duplicate = this.store.attendanceRegularizations.find(
       (request) =>
@@ -188,8 +202,20 @@ export class AttendanceRepository {
       );
     }
     const now = nowIso();
-    const request: AttendanceRegularizationRequest = {
+    const requestId = randomUUID();
+    const items: AttendanceRegularizationRequestItem[] = input.items.map((item, ordinal) => ({
       id: randomUUID(),
+      company_id: input.company_id,
+      regularization_request_id: requestId,
+      ordinal,
+      operation: item.operation,
+      target_punch_event_id: item.target_punch_event_id,
+      event_type: item.event_type,
+      occurred_at: item.occurred_at,
+      created_at: now,
+    }));
+    const request: AttendanceRegularizationRequest = {
+      id: requestId,
       version: 1,
       created_at: now,
       updated_at: now,
@@ -198,9 +224,62 @@ export class AttendanceRepository {
       decided_by_user_id: null,
       decision_remarks: null,
       ...input,
+      items,
+      requested_punches: items.flatMap((item) =>
+        item.event_type && item.occurred_at
+          ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+          : [],
+      ),
     };
     this.store.attendanceRegularizations.push(request);
+    this.appendRegularizationAction({
+      company_id: request.company_id,
+      regularization_request_id: request.id,
+      actor_user_id: request.submitted_by_user_id,
+      subject_employee_user_id: request.employee_user_id,
+      action_kind: "submitted",
+      previous_state: null,
+      resulting_state: "pending",
+      remarks: null,
+      resulting_version: 1,
+      occurred_at: now,
+      migration_reconstructed: false,
+    });
     return request;
+  }
+
+  appendRegularizationAction(
+    input: Omit<AttendanceRegularizationAction, "id">,
+  ): AttendanceRegularizationAction {
+    const duplicate = this.store.attendanceRegularizationActions.find(
+      (action) =>
+        action.regularization_request_id === input.regularization_request_id &&
+        action.resulting_version === input.resulting_version,
+    );
+    if (duplicate) {
+      throw conflict("Attendance regularization transition was already recorded.");
+    }
+    const action = { id: randomUUID(), ...input };
+    this.store.attendanceRegularizationActions.push(action);
+    return action;
+  }
+
+  addRegularizationCorrectionApplication(
+    input: Omit<AttendanceRegularizationCorrectionApplication, "id">,
+  ): AttendanceRegularizationCorrectionApplication {
+    const duplicateItem = this.store.attendanceRegularizationCorrectionApplications.some(
+      (application) => application.regularization_request_item_id === input.regularization_request_item_id,
+    );
+    const duplicateTarget = input.target_punch_event_id &&
+      this.store.attendanceRegularizationCorrectionApplications.some(
+        (application) => application.target_punch_event_id === input.target_punch_event_id,
+      );
+    if (duplicateItem || duplicateTarget) {
+      throw conflict("Attendance regularization correction was already applied.");
+    }
+    const application = { id: randomUUID(), ...input };
+    this.store.attendanceRegularizationCorrectionApplications.push(application);
+    return application;
   }
 
   findRegularization(

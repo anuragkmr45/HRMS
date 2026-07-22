@@ -374,6 +374,25 @@ export const AttendanceRegularizationStatuses = {
 export type AttendanceRegularizationStatus =
   (typeof AttendanceRegularizationStatuses)[keyof typeof AttendanceRegularizationStatuses];
 
+export const AttendanceRegularizationOperations = {
+  Add: "add",
+  Replace: "replace",
+  Void: "void",
+} as const;
+
+export type AttendanceRegularizationOperation =
+  (typeof AttendanceRegularizationOperations)[keyof typeof AttendanceRegularizationOperations];
+
+export const AttendanceRegularizationActionKinds = {
+  Submitted: "submitted",
+  Approved: "approved",
+  Returned: "returned",
+  Rejected: "rejected",
+} as const;
+
+export type AttendanceRegularizationActionKind =
+  (typeof AttendanceRegularizationActionKinds)[keyof typeof AttendanceRegularizationActionKinds];
+
 export const LeaveTypes = {
   Casual: "casual",
   Sick: "sick",

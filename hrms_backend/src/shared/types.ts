@@ -9,6 +9,8 @@ import type {
   AttendancePresenceState,
   AttendancePunchEventType,
   AttendancePunctualityState,
+  AttendanceRegularizationActionKind,
+  AttendanceRegularizationOperation,
   AttendanceRegularizationStatus,
   DocumentClassification,
   EmsLetterStatus,
@@ -446,6 +448,7 @@ export interface AttendanceRegularizationRequest {
     event_type: AttendancePunchEventType;
     occurred_at: ISODateTime;
   }>;
+  items: AttendanceRegularizationRequestItem[];
   status: AttendanceRegularizationStatus;
   current_approver_user_id: UUID | null;
   decision_remarks: string | null;
@@ -455,6 +458,47 @@ export interface AttendanceRegularizationRequest {
   created_at: ISODateTime;
   updated_at: ISODateTime;
   deleted_at: ISODateTime | null;
+}
+
+export interface AttendanceRegularizationRequestItem {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  ordinal: number;
+  operation: AttendanceRegularizationOperation;
+  target_punch_event_id: UUID | null;
+  event_type: AttendancePunchEventType | null;
+  occurred_at: ISODateTime | null;
+  created_at: ISODateTime;
+}
+
+export interface AttendanceRegularizationAction {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  actor_user_id: UUID;
+  subject_employee_user_id: UUID;
+  action_kind: AttendanceRegularizationActionKind;
+  previous_state: AttendanceRegularizationStatus | null;
+  resulting_state: AttendanceRegularizationStatus;
+  remarks: string | null;
+  resulting_version: number;
+  occurred_at: ISODateTime;
+  migration_reconstructed: boolean;
+}
+
+export interface AttendanceRegularizationCorrectionApplication {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  regularization_request_item_id: UUID;
+  regularization_action_id: UUID;
+  operation: AttendanceRegularizationOperation;
+  target_punch_event_id: UUID | null;
+  replacement_punch_event_id: UUID | null;
+  attendance_event_id: UUID | null;
+  applied_by_user_id: UUID;
+  applied_at: ISODateTime;
 }
 
 export interface LeaveRequest {

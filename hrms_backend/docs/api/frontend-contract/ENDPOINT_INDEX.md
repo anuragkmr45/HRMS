@@ -9577,7 +9577,8 @@ Required: yes
 |---|---|---|---|
 | `work_date` | string<date> | required | Regularization work date |
 | `reason` | string | required | minLength 3 |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | optional | Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.; minItems 1 |
+| `items` | array of unknown | optional | minItems 1 |
 
 **Responses**
 | Status | Meaning |
@@ -9600,7 +9601,8 @@ Success body highlights:
 | `submitted_by_user_id` | string<uuid> | required | Submitting actor user UUID |
 | `work_date` | string<date> | required | Work date |
 | `reason` | string | required | - |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | required | Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations. |
+| `items` | array of object | required | - |
 | `status` | string enum("pending", "approved", "returned", "rejected") | required | - |
 | `current_approver_user_id` | string<uuid> | optional, nullable | Current approver user UUID |
 | `decision_remarks` | string | optional, nullable | - |

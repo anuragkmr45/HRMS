@@ -478,6 +478,7 @@ export const attendancePunchEvents = attendance.table(
     deletedAt
   },
   (table) => [
+    uniqueIndex("attendance_punch_events_id_company_uq").on(table.id, table.companyId),
     index("attendance_punch_company_employee_occurred_idx").on(table.companyId, table.employeeUserId, table.occurredAt),
     index("attendance_punch_event_type_idx").on(table.eventType, table.occurredAt)
   ]
@@ -614,8 +615,83 @@ export const attendanceRegularizationRequests = attendance.table(
     deletedAt
   },
   (table) => [
+    uniqueIndex("attendance_regularization_requests_id_company_uq").on(table.id, table.companyId),
     index("attendance_regularizations_company_employee_date_idx").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_regularizations_queue_idx").on(table.status, table.currentApproverUserId, table.createdAt)
+  ]
+);
+
+export const attendanceRegularizationRequestItems = attendance.table(
+  "regularization_request_items",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    regularizationRequestId: uuid("regularization_request_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    operation: text("operation").notNull(),
+    targetPunchEventId: uuid("target_punch_event_id"),
+    eventType: text("event_type"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_regularization_items_request_ordinal_uq").on(table.regularizationRequestId, table.ordinal),
+    uniqueIndex("attendance_regularization_items_id_company_uq").on(table.id, table.companyId),
+    index("attendance_regularization_items_company_request_idx").on(table.companyId, table.regularizationRequestId, table.ordinal),
+    index("attendance_regularization_items_target_idx").on(table.companyId, table.targetPunchEventId).where(sql`${table.targetPunchEventId} IS NOT NULL`),
+    check("attendance_regularization_items_ordinal_check", sql`${table.ordinal} >= 0`),
+    check("attendance_regularization_items_operation_check", sql`${table.operation} IN ('add', 'replace', 'void')`),
+    check("attendance_regularization_items_event_type_check", sql`${table.eventType} IS NULL OR ${table.eventType} IN ('check_in', 'check_out')`),
+    check("attendance_regularization_items_operation_shape_check", sql`(${table.operation} = 'add' AND ${table.targetPunchEventId} IS NULL AND ${table.eventType} IS NOT NULL AND ${table.occurredAt} IS NOT NULL) OR (${table.operation} = 'replace' AND ${table.targetPunchEventId} IS NOT NULL AND ${table.eventType} IS NOT NULL AND ${table.occurredAt} IS NOT NULL) OR (${table.operation} = 'void' AND ${table.targetPunchEventId} IS NOT NULL AND ${table.eventType} IS NULL AND ${table.occurredAt} IS NULL)`)
+  ]
+);
+
+export const attendanceRegularizationActions = attendance.table(
+  "regularization_actions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    regularizationRequestId: uuid("regularization_request_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    subjectEmployeeUserId: uuid("subject_employee_user_id").notNull(),
+    actionKind: text("action_kind").notNull(),
+    previousState: text("previous_state"),
+    resultingState: text("resulting_state").notNull(),
+    remarks: text("remarks"),
+    resultingVersion: integer("resulting_version").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    migrationReconstructed: boolean("migration_reconstructed").notNull().default(false)
+  },
+  (table) => [
+    uniqueIndex("attendance_regularization_actions_request_version_uq").on(table.regularizationRequestId, table.resultingVersion),
+    uniqueIndex("attendance_regularization_actions_id_request_company_uq").on(table.id, table.regularizationRequestId, table.companyId),
+    index("attendance_regularization_actions_company_request_idx").on(table.companyId, table.regularizationRequestId, table.occurredAt, table.id),
+    check("attendance_regularization_actions_version_check", sql`${table.resultingVersion} > 0`),
+    check("attendance_regularization_actions_kind_check", sql`${table.actionKind} IN ('submitted', 'approved', 'returned', 'rejected')`)
+  ]
+);
+
+export const attendanceRegularizationCorrectionApplications = attendance.table(
+  "regularization_correction_applications",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    regularizationRequestId: uuid("regularization_request_id").notNull(),
+    regularizationRequestItemId: uuid("regularization_request_item_id").notNull(),
+    regularizationActionId: uuid("regularization_action_id").notNull(),
+    operation: text("operation").notNull(),
+    targetPunchEventId: uuid("target_punch_event_id"),
+    replacementPunchEventId: uuid("replacement_punch_event_id"),
+    attendanceEventId: uuid("attendance_event_id"),
+    appliedByUserId: uuid("applied_by_user_id").notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    uniqueIndex("attendance_regularization_applications_item_uq").on(table.regularizationRequestItemId),
+    uniqueIndex("attendance_regularization_applications_target_uq").on(table.targetPunchEventId).where(sql`${table.targetPunchEventId} IS NOT NULL`),
+    uniqueIndex("attendance_regularization_applications_replacement_uq").on(table.replacementPunchEventId).where(sql`${table.replacementPunchEventId} IS NOT NULL`),
+    index("attendance_regularization_applications_company_request_idx").on(table.companyId, table.regularizationRequestId, table.appliedAt, table.id),
+    check("attendance_regularization_applications_operation_check", sql`${table.operation} IN ('add', 'replace', 'void')`)
   ]
 );
 
@@ -1793,6 +1869,9 @@ export const schema = {
   attendanceEmployeeCommandStates,
   attendanceDailyRecords,
   attendanceRegularizationRequests,
+  attendanceRegularizationRequestItems,
+  attendanceRegularizationActions,
+  attendanceRegularizationCorrectionApplications,
   attendancePolicies,
   attendancePolicyVersions,
   attendancePolicyAssignments,

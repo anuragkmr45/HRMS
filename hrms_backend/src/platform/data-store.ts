@@ -4,6 +4,8 @@ import type {
   AssetRecord,
   AttendanceDayRecord,
   AttendancePunch,
+  AttendanceRegularizationAction,
+  AttendanceRegularizationCorrectionApplication,
   AttendanceRegularizationRequest,
   AuthUser,
   CoreUser,
@@ -564,6 +566,8 @@ export interface DataStore {
   attendancePunches: AttendancePunch[];
   attendanceDayRecords: AttendanceDayRecord[];
   attendanceRegularizations: AttendanceRegularizationRequest[];
+  attendanceRegularizationActions: AttendanceRegularizationAction[];
+  attendanceRegularizationCorrectionApplications: AttendanceRegularizationCorrectionApplication[];
   leaveRequests: LeaveRequest[];
   wfhRequests: WfhRequest[];
   holidays: Holiday[];
@@ -2399,6 +2403,8 @@ export function createMemoryDataStore(): MemoryDataStore {
     attendancePunches: [],
     attendanceDayRecords: [],
     attendanceRegularizations: [],
+    attendanceRegularizationActions: [],
+    attendanceRegularizationCorrectionApplications: [],
     leaveRequests: [],
     wfhRequests: [],
     holidays: [

@@ -552,6 +552,7 @@ export class AttendanceCommandService {
       metadata: Record<string, unknown>;
       linked_regularization_request_id?: UUID;
     };
+    deferProjection?: boolean;
   }, existingTransaction?: AttendanceCommandTransactionRepository): Promise<Record<string, unknown>> {
     const pool = this.store.pgPool;
     if (!pool && !existingTransaction) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
@@ -679,16 +680,18 @@ export class AttendanceCommandService {
         commandExecutionId: command.id,
         decisionId: decision.id,
       })).rows[0]!;
-      const day = await projectHistoricalCorrectionDay(
-        tx,
-        principal.companyId,
-        principal.subjectEmployeeUserId,
-        workDate,
-        input.command.work_mode,
-        input.timeZone,
-        policy.graceMinutes,
-        receivedAt,
-      );
+      const day = input.deferProjection
+        ? {}
+        : await projectHistoricalCorrectionDay(
+            tx,
+            principal.companyId,
+            principal.subjectEmployeeUserId,
+            workDate,
+            input.command.work_mode,
+            input.timeZone,
+            policy.graceMinutes,
+            receivedAt,
+          );
       await tx.insertOutboxEvent(buildPunchRecordedEvent({
         companyId: principal.companyId,
         actorUserId: principal.actorUserId,
@@ -708,6 +711,7 @@ export class AttendanceCommandService {
         allowed: true,
         command_id: command.id,
         decision_id: decision.id,
+        attendance_event_id: evidence.id,
         punch_id: punch.id,
         punch: {
           id: punch.id,
@@ -752,12 +756,26 @@ export class AttendanceCommandService {
     workDate: string;
     expectedVersion: number;
     reason: string;
-    requestedPunches: Array<{ event_type: AttendancePunchEventType; occurred_at: string }>;
     remarks: string | null;
     decision: "approve" | "reject" | "return";
     timeZone: string;
     authorize: () => void;
-  }): Promise<{ version: number; decidedAt: string; day: Record<string, unknown> }> {
+  }): Promise<{
+    version: number;
+    decidedAt: string;
+    day: Record<string, unknown>;
+    applications: Array<{
+      id: UUID;
+      regularization_request_item_id: UUID;
+      regularization_action_id: UUID;
+      operation: "add" | "replace" | "void";
+      target_punch_event_id: UUID | null;
+      replacement_punch_event_id: UUID | null;
+      attendance_event_id: UUID | null;
+      replacement_punch: Record<string, unknown> | null;
+      applied_at: string;
+    }>;
+  }> {
     const pool = this.store.pgPool;
     if (!pool) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
     return new PostgresAttendanceCommandRepository(pool).transaction(async (tx) => {
@@ -774,6 +792,90 @@ export class AttendanceCommandService {
         throw conflict("Only the expected pending attendance regularization request can be decided.");
       }
       input.authorize();
+      const items = (await tx.query<{
+        id: UUID;
+        ordinal: number;
+        operation: "add" | "replace" | "void";
+        target_punch_event_id: UUID | null;
+        event_type: AttendancePunchEventType | null;
+        occurred_at: Date | null;
+      }>(
+        `SELECT id, ordinal, operation, target_punch_event_id, event_type, occurred_at
+         FROM attendance.regularization_request_items
+         WHERE regularization_request_id = $1 AND company_id = $2
+         ORDER BY ordinal, id`,
+        [input.regularizationRequestId, input.companyId],
+      )).rows;
+      if (items.length === 0) {
+        throw badRequest("Attendance regularization request has no normalized items.");
+      }
+      const targetIds = items.flatMap((item) => item.target_punch_event_id ? [item.target_punch_event_id] : []);
+      if (new Set(targetIds).size !== targetIds.length) {
+        throw badRequest("A target punch may be corrected only once per request.");
+      }
+      const targets = targetIds.length
+        ? (await tx.query<{
+            id: UUID;
+            company_id: UUID;
+            employee_user_id: UUID;
+            event_type: AttendancePunchEventType;
+            occurred_at: Date;
+          }>(
+            `SELECT id, company_id, employee_user_id, event_type, occurred_at
+             FROM attendance.punch_events
+             WHERE id = ANY($1::uuid[]) AND company_id = $2 AND deleted_at IS NULL
+             FOR UPDATE`,
+            [targetIds, input.companyId],
+          )).rows
+        : [];
+      const targetById = new Map(targets.map((target) => [target.id, target]));
+      const alreadyAppliedTargets = targetIds.length
+        ? new Set((await tx.query<{ target_punch_event_id: UUID }>(
+            `SELECT target_punch_event_id
+             FROM attendance.regularization_correction_applications
+             WHERE target_punch_event_id = ANY($1::uuid[]) AND company_id = $2`,
+            [targetIds, input.companyId],
+          )).rows.map((row) => row.target_punch_event_id))
+        : new Set<UUID>();
+      for (const item of items) {
+        if (item.operation === "add" || item.operation === "replace") {
+          if (!item.event_type || !item.occurred_at) {
+            throw badRequest("ADD and REPLACE items require event_type and occurred_at.");
+          }
+          if (item.event_type !== "check_in" && item.event_type !== "check_out") {
+            throw badRequest("Approved regularizations may materialize only check-in and check-out facts.");
+          }
+          if (dateInTimeZone(item.occurred_at.toISOString(), input.timeZone) !== input.workDate) {
+            throw badRequest("Requested punch timestamps must fall on the regularization work_date.");
+          }
+        }
+        if (item.operation === "add") {
+          if (item.target_punch_event_id) throw badRequest("ADD items cannot target an existing punch.");
+          continue;
+        }
+        if (!item.target_punch_event_id) {
+          throw badRequest("REPLACE and VOID items require target_punch_event_id.");
+        }
+        const target = targetById.get(item.target_punch_event_id);
+        if (!target || target.company_id !== input.companyId) {
+          throw badRequest("Target punch does not belong to the active company.");
+        }
+        if (target.employee_user_id !== input.employeeUserId) {
+          throw badRequest("Target punch does not belong to the regularization employee.");
+        }
+        if (target.event_type !== "check_in" && target.event_type !== "check_out") {
+          throw badRequest("Target punch type is not eligible for regularization correction.");
+        }
+        if (dateInTimeZone(target.occurred_at.toISOString(), input.timeZone) !== input.workDate) {
+          throw badRequest("Target punch must belong to the regularization work_date.");
+        }
+        if (alreadyAppliedTargets.has(target.id)) {
+          throw conflict("Target punch was already replaced or voided.");
+        }
+        if (item.operation === "void" && (item.event_type || item.occurred_at)) {
+          throw badRequest("VOID items cannot include replacement event data.");
+        }
+      }
       const updated = (await tx.query<{ version: number; decided_at: Date }>(
         `UPDATE attendance.regularization_requests
          SET status = $6, current_approver_user_id = NULL,
@@ -784,37 +886,88 @@ export class AttendanceCommandService {
         [input.regularizationRequestId, input.companyId, input.remarks, input.actor.id, input.expectedVersion, input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "returned"],
       )).rows[0];
       if (!updated) throw conflict("Attendance regularization request was modified by another actor.");
-      for (const [ordinal, requested] of input.decision === "approve" ? input.requestedPunches.entries() : []) {
-        if (requested.event_type !== "check_in" && requested.event_type !== "check_out") {
-          throw badRequest("Approved regularizations may materialize only check-in and check-out facts.");
+      const nextStatus = input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "returned";
+      const action = (await tx.query<{ id: UUID }>(
+        `INSERT INTO attendance.regularization_actions (
+           company_id, regularization_request_id, actor_user_id, subject_employee_user_id,
+           action_kind, previous_state, resulting_state, remarks, resulting_version, occurred_at
+         ) VALUES ($1,$2,$3,$4,$5,'pending',$5,$6,$7,$8)
+         RETURNING id`,
+        [input.companyId, input.regularizationRequestId, input.actor.id, input.employeeUserId, nextStatus, input.remarks, updated.version, updated.decided_at],
+      )).rows[0]!;
+      const applications = [] as Array<{
+        id: UUID;
+        regularization_request_item_id: UUID;
+        regularization_action_id: UUID;
+        operation: "add" | "replace" | "void";
+        target_punch_event_id: UUID | null;
+        replacement_punch_event_id: UUID | null;
+        attendance_event_id: UUID | null;
+        replacement_punch: Record<string, unknown> | null;
+        applied_at: string;
+      }>;
+      for (const item of input.decision === "approve" ? items : []) {
+        let replacementPunchEventId: UUID | null = null;
+        let attendanceEventId: UUID | null = null;
+        let replacementPunch: Record<string, unknown> | null = null;
+        if (item.operation !== "void") {
+          const occurredAt = item.occurred_at!.toISOString();
+          const result = await this.executeHistoricalCorrection({
+            actor: input.actor,
+            principal: { companyId: input.companyId, actorUserId: input.actor.id, subjectEmployeeUserId: input.employeeUserId },
+            idempotencyKey: `attendance.regularization.item:${item.id}`,
+            timeZone: input.timeZone,
+            commandKind: "approved_regularization",
+            deferProjection: true,
+            command: {
+              event_type: item.event_type!,
+              occurred_at: occurredAt,
+              reason: input.reason,
+              work_mode: "office",
+              metadata: {
+                decided_by_user_id: input.actor.id,
+                regularization_request_item_id: item.id,
+                correction_operation: item.operation,
+                target_punch_event_id: item.target_punch_event_id,
+              },
+              linked_regularization_request_id: input.regularizationRequestId,
+            },
+          }, tx);
+          replacementPunchEventId = result.punch_id as UUID;
+          attendanceEventId = result.attendance_event_id as UUID;
+          replacementPunch = result.punch as Record<string, unknown>;
         }
-        if (dateInTimeZone(requested.occurred_at, input.timeZone) !== input.workDate) {
-          throw badRequest("Requested punch timestamps must fall on the regularization work_date.");
-        }
-        const idempotencyKey = `attendance.regularization.materialize:${canonicalAttendanceRequestHash({
-          company_id: input.companyId,
-          regularization_request_id: input.regularizationRequestId,
-          approval_version: input.expectedVersion,
-          subject_employee_user_id: input.employeeUserId,
-          ordinal,
-          event_type: requested.event_type,
-          occurred_at: requested.occurred_at,
-        })}`;
-        await this.executeHistoricalCorrection({
-          actor: input.actor,
-          principal: { companyId: input.companyId, actorUserId: input.actor.id, subjectEmployeeUserId: input.employeeUserId },
-          idempotencyKey,
-          timeZone: input.timeZone,
-          commandKind: "approved_regularization",
-          command: {
-            event_type: requested.event_type,
-            occurred_at: requested.occurred_at,
-            reason: input.reason,
-            work_mode: "office",
-            metadata: { decided_by_user_id: input.actor.id },
-            linked_regularization_request_id: input.regularizationRequestId,
-          },
-        }, tx);
+        const application = (await tx.query<{ id: UUID; applied_at: Date }>(
+           `INSERT INTO attendance.regularization_correction_applications (
+              company_id, regularization_request_id, regularization_request_item_id, regularization_action_id,
+              operation, target_punch_event_id, replacement_punch_event_id,
+              attendance_event_id, applied_by_user_id, applied_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            RETURNING id, applied_at`,
+          [
+            input.companyId,
+            input.regularizationRequestId,
+            item.id,
+            action.id,
+            item.operation,
+            item.target_punch_event_id,
+            replacementPunchEventId,
+            attendanceEventId,
+            input.actor.id,
+            updated.decided_at,
+          ],
+        )).rows[0]!;
+        applications.push({
+          id: application.id,
+          regularization_request_item_id: item.id,
+          regularization_action_id: action.id,
+          operation: item.operation,
+          target_punch_event_id: item.target_punch_event_id,
+          replacement_punch_event_id: replacementPunchEventId,
+          attendance_event_id: attendanceEventId,
+          replacement_punch: replacementPunch,
+          applied_at: application.applied_at.toISOString(),
+        });
       }
       const projectionPolicy = input.decision === "approve"
         ? await resolveEffectiveAttendancePolicy(tx, {
@@ -865,11 +1018,11 @@ export class AttendanceCommandService {
         workDate: input.workDate,
         decision: input.decision,
         previousStatus: "pending",
-        nextStatus: input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "returned",
+        nextStatus,
         version: updated.version,
         decidedAt: updated.decided_at.toISOString(),
       }));
-      return { version: updated.version, decidedAt: updated.decided_at.toISOString(), day };
+      return { version: updated.version, decidedAt: updated.decided_at.toISOString(), day, applications };
     });
   }
 
@@ -1545,10 +1698,16 @@ async function projectHistoricalCorrectionDay(
        min(occurred_at) FILTER (WHERE event_type = 'check_in') AS first_check_in,
        max(occurred_at) FILTER (WHERE event_type = 'check_out') AS last_check_out
      FROM attendance.punch_events
-     WHERE company_id = $1
-       AND employee_user_id = $2
-       AND deleted_at IS NULL
-       AND (occurred_at AT TIME ZONE $3)::date = $4::date`,
+     WHERE punch_events.company_id = $1
+       AND punch_events.employee_user_id = $2
+       AND punch_events.deleted_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM attendance.regularization_correction_applications application
+         WHERE application.company_id = punch_events.company_id
+           AND application.target_punch_event_id = punch_events.id
+       )
+       AND (punch_events.occurred_at AT TIME ZONE $3)::date = $4::date`,
     [companyId, employeeUserId, timeZone, workDate],
   )).rows[0];
   const firstCheckIn = facts?.first_check_in?.toISOString() ?? null;
@@ -1778,6 +1937,8 @@ async function persistDailyProjection(
 function normalizeDailyProjectionRow(row: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row).map(([key, value]) => [
     key,
-    value instanceof Date ? value.toISOString() : value,
+    value instanceof Date && key === "work_date"
+      ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`
+      : value instanceof Date ? value.toISOString() : value,
   ]));
 }

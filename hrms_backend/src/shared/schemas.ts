@@ -331,21 +331,77 @@ export const attendanceHistoricalCorrectionSchema = z.object({
   linked_regularization_request_id: z.uuid().optional()
 }).strict();
 
+const regularizationEventTypeSchema = z.enum([
+  AttendancePunchEventTypes.CheckIn,
+  AttendancePunchEventTypes.CheckOut
+]);
+
+const regularizationLegacyPunchSchema = z.object({
+  event_type: regularizationEventTypeSchema,
+  occurred_at: isoDateTimeSchema
+}).strict();
+
+export const attendanceRegularizationItemSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("add"),
+    event_type: regularizationEventTypeSchema,
+    occurred_at: isoDateTimeSchema
+  }).strict(),
+  z.object({
+    operation: z.literal("replace"),
+    target_punch_event_id: z.uuid(),
+    event_type: regularizationEventTypeSchema,
+    occurred_at: isoDateTimeSchema
+  }).strict(),
+  z.object({
+    operation: z.literal("void"),
+    target_punch_event_id: z.uuid()
+  }).strict()
+]);
+
 export const attendanceRegularizationCreateSchema = z.object({
   work_date: isoDateSchema,
-  reason: z.string().min(3).max(1000),
-  requested_punches: z
-    .array(
-      z.object({
-        event_type: z.enum([
-          AttendancePunchEventTypes.CheckIn,
-          AttendancePunchEventTypes.CheckOut
-        ]),
-        occurred_at: isoDateTimeSchema
-      })
-    )
-    .default([])
-}).strict();
+  reason: z.string().trim().min(3).max(1000),
+  requested_punches: z.array(regularizationLegacyPunchSchema).min(1).max(20).optional(),
+  items: z.array(attendanceRegularizationItemSchema).min(1).max(20).optional()
+}).strict().superRefine((input, context) => {
+  if (Boolean(input.items) === Boolean(input.requested_punches)) {
+    context.addIssue({
+      code: "custom",
+      message: "Supply exactly one of items or requested_punches.",
+      path: input.items ? ["requested_punches"] : ["items"]
+    });
+    return;
+  }
+  const items = input.items ?? input.requested_punches?.map((punch) => ({
+    operation: "add" as const,
+    ...punch
+  })) ?? [];
+  const targets = new Set<string>();
+  const adds = new Set<string>();
+  for (const [index, item] of items.entries()) {
+    if (item.operation === "replace" || item.operation === "void") {
+      if (targets.has(item.target_punch_event_id)) {
+        context.addIssue({
+          code: "custom",
+          message: "A target punch may be corrected only once per request.",
+          path: ["items", index, "target_punch_event_id"]
+        });
+      }
+      targets.add(item.target_punch_event_id);
+    } else {
+      const key = `${item.event_type}:${item.occurred_at}`;
+      if (adds.has(key)) {
+        context.addIssue({
+          code: "custom",
+          message: "Duplicate ADD correction items are not allowed.",
+          path: [input.items ? "items" : "requested_punches", index]
+        });
+      }
+      adds.add(key);
+    }
+  }
+});
 
 export const attendanceRegularizationDecisionSchema = z.object({
   decision: z.enum(["approve", "reject", "return"]),

@@ -254,13 +254,17 @@ describe("app persistence flushing", () => {
       const employee = await loginAs(app, "E1");
       const punch = await app.inject({
         method: "POST", url: "/api/v1/attendance/punches", headers: { ...authHeader(employee.token), "idempotency-key": "attendance-test-key" },
-        payload: { event_type: "check_in", occurred_at: "2026-07-08T04:00:00.000Z", work_mode: "office", source: "web", metadata: {} },
+        payload: { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
       });
       expect(punch.statusCode).toBe(200);
       expect(domains).toEqual([]);
       const regularization = await app.inject({
         method: "POST", url: "/api/v1/attendance/regularizations", headers: authHeader(employee.token),
-        payload: { work_date: "2026-07-08", reason: "Missed checkout due to network issue", requested_punches: [] },
+        payload: {
+          work_date: "2026-07-08",
+          reason: "Missed checkout due to network issue",
+          requested_punches: [{ event_type: "check_out", occurred_at: "2026-07-08T12:00:00.000Z" }]
+        },
       });
       expect(regularization.statusCode).toBe(200);
       expect(domains).toEqual(["attendance"]);

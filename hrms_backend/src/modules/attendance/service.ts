@@ -5,6 +5,7 @@ import type {
   AttendancePunch,
   AttendancePunchEventType,
   AttendanceRegularizationRequest,
+  AttendanceRegularizationRequestItem,
   AuthUser,
   CoreUser,
   UUID,
@@ -89,6 +90,25 @@ export interface AttendancePageQuery {
   department_id?: UUID;
   status?: string;
   exception_type?: string;
+}
+
+type RegularizationItemInput = Pick<
+  AttendanceRegularizationRequestItem,
+  "operation" | "target_punch_event_id" | "event_type" | "occurred_at"
+>;
+
+interface RegularizationCreateInput {
+  work_date: string;
+  reason: string;
+  requested_punches?: Array<{
+    event_type: AttendancePunchEventType;
+    occurred_at: string;
+  }>;
+  items?: Array<
+    | { operation: "add"; event_type: AttendancePunchEventType; occurred_at: string }
+    | { operation: "replace"; target_punch_event_id: UUID; event_type: AttendancePunchEventType; occurred_at: string }
+    | { operation: "void"; target_punch_event_id: UUID }
+  >;
 }
 
 export interface AttendanceExportInput {
@@ -807,14 +827,7 @@ export class AttendanceService {
 
   createRegularization(
     actor: AuthUser,
-    input: {
-      work_date: string;
-      reason: string;
-      requested_punches: Array<{
-        event_type: AttendancePunchEventType;
-        occurred_at: string;
-      }>;
-    },
+    input: RegularizationCreateInput,
   ) {
     const companyId = this.resolveAttendanceCompanyContext(
       actor,
@@ -825,13 +838,21 @@ export class AttendanceService {
       manager && this.isUserInCompany(manager.id, companyId)
         ? manager
         : this.adminFallback(companyId);
+    const items = this.normalizeRegularizationItems(input);
+    this.validateRegularizationItems(
+      companyId,
+      actor.id,
+      input.work_date,
+      this.timezoneForUser(actor.id, companyId),
+      items,
+    );
     const request = this.repository.addRegularization({
       company_id: companyId,
       employee_user_id: actor.id,
       submitted_by_user_id: actor.id,
       work_date: input.work_date,
       reason: input.reason.trim(),
-      requested_punches: input.requested_punches,
+      items,
       status: AttendanceRegularizationStatuses.Pending,
       current_approver_user_id: approver?.id ?? null,
     });
@@ -1093,6 +1114,13 @@ export class AttendanceService {
         : input.decision === "reject"
           ? AttendanceRegularizationStatuses.Rejected
           : AttendanceRegularizationStatuses.Returned;
+    this.validateRegularizationItems(
+      companyId,
+      current.employee_user_id,
+      current.work_date,
+      this.timezoneForUser(current.employee_user_id, companyId),
+      current.items,
+    );
     const request = this.repository.updateRegularizationVersioned(
       id,
       new Set([companyId]),
@@ -1105,8 +1133,21 @@ export class AttendanceService {
         candidate.decided_at = nowIso();
       },
     );
-    if (input.decision === "approve" && request.requested_punches.length > 0) {
-      this.applyApprovedPunches(request, actor);
+    const action = this.repository.appendRegularizationAction({
+      company_id: companyId,
+      regularization_request_id: request.id,
+      actor_user_id: actor.id,
+      subject_employee_user_id: request.employee_user_id,
+      action_kind: nextStatus,
+      previous_state: previousStatus,
+      resulting_state: nextStatus,
+      remarks: request.decision_remarks,
+      resulting_version: request.version,
+      occurred_at: request.decided_at!,
+      migration_reconstructed: false,
+    });
+    if (input.decision === "approve") {
+      this.applyApprovedRegularizationItems(request, action.id, actor);
     }
     const requestTimeZone = this.timezoneForUser(
       request.employee_user_id,
@@ -1209,7 +1250,6 @@ export class AttendanceService {
       workDate: current.work_date,
       expectedVersion: input.expected_version,
       reason: current.reason,
-      requestedPunches: current.requested_punches,
       remarks: input.remarks?.trim() ?? null,
       decision: input.decision,
       timeZone,
@@ -1229,11 +1269,59 @@ export class AttendanceService {
     current.decided_at = result.decidedAt;
     current.version = result.version;
     current.updated_at = result.decidedAt;
+    for (const applied of result.applications) {
+      if (!this.store.attendanceRegularizationCorrectionApplications.some(
+        (application) => application.id === applied.id,
+      )) {
+        this.store.attendanceRegularizationCorrectionApplications.push({
+          id: applied.id,
+          company_id: companyId,
+          regularization_request_id: current.id,
+          regularization_request_item_id: applied.regularization_request_item_id,
+          regularization_action_id: applied.regularization_action_id,
+          operation: applied.operation,
+          target_punch_event_id: applied.target_punch_event_id,
+          replacement_punch_event_id: applied.replacement_punch_event_id,
+          attendance_event_id: applied.attendance_event_id,
+          applied_by_user_id: actor.id,
+          applied_at: applied.applied_at,
+        });
+      }
+      if (applied.replacement_punch && applied.replacement_punch_event_id &&
+          !this.store.attendancePunches.some((punch) => punch.id === applied.replacement_punch_event_id)) {
+        this.store.attendancePunches.push({
+          id: applied.replacement_punch_event_id,
+          company_id: companyId,
+          employee_user_id: current.employee_user_id,
+          actor_user_id: actor.id,
+          event_type: applied.replacement_punch.event_type as AttendancePunchEventType,
+          occurred_at: applied.replacement_punch.occurred_at as string,
+          work_mode: "office",
+          source: "admin",
+          origin: "approved_regularization",
+          regularization_request_id: current.id,
+          metadata: {
+            regularization_request_item_id: applied.regularization_request_item_id,
+            correction_operation: applied.operation,
+            target_punch_event_id: applied.target_punch_event_id,
+          },
+          created_at: result.decidedAt,
+          deleted_at: null,
+        });
+      }
+    }
+    const projectedDay = result.day as unknown as AttendanceDayRecord;
+    const storedDay = this.repository.dayRecord(companyId, current.employee_user_id, current.work_date);
+    if (storedDay) {
+      Object.assign(storedDay, projectedDay);
+    } else {
+      this.store.attendanceDayRecords.push(projectedDay);
+    }
     return {
       ...this.presentRegularization(current),
       previous_status: AttendanceRegularizationStatuses.Pending,
       next_status: nextStatus,
-      day_status: this.presentDay(result.day as unknown as AttendanceDayRecord, timeZone),
+      day_status: this.presentDay(projectedDay, timeZone),
     };
   }
 
@@ -2874,38 +2962,51 @@ export class AttendanceService {
     );
   }
 
-  private applyApprovedPunches(
+  private applyApprovedRegularizationItems(
     request: AttendanceRegularizationRequest,
+    regularizationActionId: UUID,
     actor: AuthUser,
   ): void {
     const timeZone = this.timezoneForUser(
       request.employee_user_id,
       request.company_id,
     );
-    for (const requested of request.requested_punches) {
-      const date = dateInTimeZone(requested.occurred_at, timeZone);
-      if (
-        requested.event_type === AttendancePunchEventTypes.CheckIn &&
-        date !== request.work_date
-      ) {
-        throw badRequest(
-          "Requested punch timestamps must fall on the regularization work_date.",
+    for (const item of request.items) {
+      let replacementPunchEventId: UUID | null = null;
+      if (item.operation !== "void") {
+        const result = this.recordHistoricalCorrectionInMemory(
+          actor,
+          request.company_id,
+          request.employee_user_id,
+          {
+            event_type: item.event_type!,
+            occurred_at: item.occurred_at!,
+            reason: request.reason,
+            work_mode: "office",
+            metadata: {
+              decided_by_user_id: actor.id,
+              regularization_request_item_id: item.id,
+              correction_operation: item.operation,
+              target_punch_event_id: item.target_punch_event_id,
+            },
+            linked_regularization_request_id: request.id,
+          },
+          "approved_regularization",
         );
+        replacementPunchEventId = result.punch_id as UUID;
       }
-      this.recordHistoricalCorrectionInMemory(
-        actor,
-        request.company_id,
-        request.employee_user_id,
-        {
-          event_type: requested.event_type,
-          occurred_at: requested.occurred_at,
-          reason: request.reason,
-          work_mode: "office",
-          metadata: { decided_by_user_id: actor.id },
-          linked_regularization_request_id: request.id,
-        },
-        "approved_regularization",
-      );
+      this.repository.addRegularizationCorrectionApplication({
+        company_id: request.company_id,
+        regularization_request_id: request.id,
+        regularization_request_item_id: item.id,
+        regularization_action_id: regularizationActionId,
+        operation: item.operation,
+        target_punch_event_id: item.target_punch_event_id,
+        replacement_punch_event_id: replacementPunchEventId,
+        attendance_event_id: null,
+        applied_by_user_id: actor.id,
+        applied_at: request.decided_at!,
+      });
     }
     this.recomputeDay(
       request.company_id,
@@ -2913,6 +3014,95 @@ export class AttendanceService {
       request.work_date,
       timeZone,
     );
+  }
+
+  private normalizeRegularizationItems(input: RegularizationCreateInput): RegularizationItemInput[] {
+    if (Boolean(input.items) === Boolean(input.requested_punches)) {
+      throw badRequest("Supply exactly one of items or requested_punches.");
+    }
+    const items: RegularizationItemInput[] = input.items
+      ? input.items.map((item) => ({
+          operation: item.operation,
+          target_punch_event_id: item.operation === "add" ? null : item.target_punch_event_id,
+          event_type: item.operation === "void" ? null : item.event_type,
+          occurred_at: item.operation === "void" ? null : item.occurred_at,
+        }))
+      : input.requested_punches!.map((punch) => ({
+          operation: "add",
+          target_punch_event_id: null,
+          event_type: punch.event_type,
+          occurred_at: punch.occurred_at,
+        }));
+    if (items.length === 0 || items.length > 20) {
+      throw badRequest("Regularization requests require between 1 and 20 correction items.");
+    }
+    return items;
+  }
+
+  private validateRegularizationItems(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+    timeZone: string,
+    items: RegularizationItemInput[],
+  ): void {
+    if (items.length === 0) {
+      throw badRequest("Attendance regularization request has no normalized items.");
+    }
+    const targets = new Set<UUID>();
+    const adds = new Set<string>();
+    for (const item of items) {
+      if (item.operation === "add" || item.operation === "replace") {
+        if (!item.event_type || !item.occurred_at) {
+          throw badRequest("ADD and REPLACE items require event_type and occurred_at.");
+        }
+        if (!([AttendancePunchEventTypes.CheckIn, AttendancePunchEventTypes.CheckOut] as string[]).includes(item.event_type)) {
+          throw badRequest("Regularization items support only check-in and check-out events.");
+        }
+        if (dateInTimeZone(item.occurred_at, timeZone) !== workDate) {
+          throw badRequest("Requested punch timestamps must fall on the regularization work_date.");
+        }
+        const logicalKey = `${item.event_type}:${item.occurred_at}`;
+        if (item.operation === "add" && adds.has(logicalKey)) {
+          throw badRequest("Duplicate ADD correction items are not allowed.");
+        }
+        if (item.operation === "add") adds.add(logicalKey);
+      }
+      if (item.operation === "add") {
+        if (item.target_punch_event_id) throw badRequest("ADD items cannot target an existing punch.");
+        continue;
+      }
+      if (!item.target_punch_event_id) {
+        throw badRequest("REPLACE and VOID items require target_punch_event_id.");
+      }
+      if (targets.has(item.target_punch_event_id)) {
+        throw badRequest("A target punch may be corrected only once per request.");
+      }
+      targets.add(item.target_punch_event_id);
+      const target = this.store.attendancePunches.find((punch) =>
+        punch.id === item.target_punch_event_id && !punch.deleted_at,
+      );
+      if (!target || target.company_id !== companyId) {
+        throw badRequest("Target punch does not belong to the active company.");
+      }
+      if (target.employee_user_id !== employeeUserId) {
+        throw badRequest("Target punch does not belong to the regularization employee.");
+      }
+      if (!([AttendancePunchEventTypes.CheckIn, AttendancePunchEventTypes.CheckOut] as string[]).includes(target.event_type)) {
+        throw badRequest("Target punch type is not eligible for regularization correction.");
+      }
+      if (dateInTimeZone(target.occurred_at, timeZone) !== workDate) {
+        throw badRequest("Target punch must belong to the regularization work_date.");
+      }
+      if (this.store.attendanceRegularizationCorrectionApplications.some(
+        (application) => application.target_punch_event_id === target.id,
+      )) {
+        throw conflict("Target punch was already replaced or voided.");
+      }
+      if (item.operation === "void" && (item.event_type || item.occurred_at)) {
+        throw badRequest("VOID items cannot include replacement event data.");
+      }
+    }
   }
 
   private presentPunch(punch: AttendancePunch, timeZone: string) {
@@ -2943,8 +3133,15 @@ export class AttendanceService {
           (candidate) => candidate.id === request.current_approver_user_id,
         )
       : undefined;
+    const items = [...request.items].sort((left, right) => left.ordinal - right.ordinal);
     return {
       ...request,
+      items,
+      requested_punches: items.flatMap((item) =>
+        item.event_type && item.occurred_at
+          ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+          : [],
+      ),
       employee: userLabel(user),
       approver: approver ? userLabel(approver) : null,
     };

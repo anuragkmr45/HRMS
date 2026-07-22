@@ -2266,18 +2266,66 @@ const attendanceDailyCalendarSchema = {
 const attendanceRegularizationCreateBody = {
   type: "object",
   required: ["work_date", "reason"],
+  oneOf: [
+    { required: ["items"], not: { required: ["requested_punches"] } },
+    { required: ["requested_punches"], not: { required: ["items"] } }
+  ],
   properties: {
     work_date: date("Regularization work date"),
     reason: { type: "string", minLength: 3, maxLength: 1000, example: "Forgot to punch out." },
     requested_punches: {
       type: "array",
+      deprecated: true,
+      description: "Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.",
+      minItems: 1,
+      maxItems: 20,
       items: {
         type: "object",
         required: ["event_type", "occurred_at"],
         properties: {
-          event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_out" },
+          event_type: { type: "string", enum: ["check_in", "check_out"], example: "check_out" },
           occurred_at: dateTime("Requested punch timestamp")
-        }
+        },
+        additionalProperties: false
+      }
+    },
+    items: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: {
+        oneOf: [
+          {
+            type: "object",
+            required: ["operation", "event_type", "occurred_at"],
+            properties: {
+              operation: { type: "string", enum: ["add"] },
+              event_type: { type: "string", enum: ["check_in", "check_out"] },
+              occurred_at: dateTime("Requested punch timestamp")
+            },
+            additionalProperties: false
+          },
+          {
+            type: "object",
+            required: ["operation", "target_punch_event_id", "event_type", "occurred_at"],
+            properties: {
+              operation: { type: "string", enum: ["replace"] },
+              target_punch_event_id: uuid("Target punch event UUID"),
+              event_type: { type: "string", enum: ["check_in", "check_out"] },
+              occurred_at: dateTime("Replacement punch timestamp")
+            },
+            additionalProperties: false
+          },
+          {
+            type: "object",
+            required: ["operation", "target_punch_event_id"],
+            properties: {
+              operation: { type: "string", enum: ["void"] },
+              target_punch_event_id: uuid("Target punch event UUID")
+            },
+            additionalProperties: false
+          }
+        ]
       }
     }
   },
@@ -2297,14 +2345,35 @@ const attendanceRegularizationDecisionBody = {
 
 const attendanceRegularizationSchema = {
   type: "object",
-  required: ["id", "employee_user_id", "submitted_by_user_id", "work_date", "reason", "status", "version"],
+  required: ["id", "employee_user_id", "submitted_by_user_id", "work_date", "reason", "items", "requested_punches", "status", "version"],
   properties: {
     id: uuid("Regularization request UUID"),
     employee_user_id: uuid("Employee user UUID"),
     submitted_by_user_id: uuid("Submitting actor user UUID"),
     work_date: date("Work date"),
     reason: { type: "string", example: "Forgot to punch out." },
-    requested_punches: { type: "array", items: { type: "object", additionalProperties: true } },
+    requested_punches: {
+      type: "array",
+      deprecated: true,
+      description: "Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations.",
+      items: { type: "object", additionalProperties: true }
+    },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "ordinal", "operation", "target_punch_event_id", "event_type", "occurred_at"],
+        properties: {
+          id: uuid("Regularization request item UUID"),
+          ordinal: { type: "integer", minimum: 0 },
+          operation: { type: "string", enum: ["add", "replace", "void"] },
+          target_punch_event_id: { ...uuid("Target punch event UUID"), nullable: true },
+          event_type: { type: "string", enum: ["check_in", "check_out"], nullable: true },
+          occurred_at: { ...dateTime("Requested punch timestamp"), nullable: true }
+        },
+        additionalProperties: true
+      }
+    },
     status: { type: "string", enum: ["pending", "approved", "returned", "rejected"], example: "pending" },
     current_approver_user_id: { ...uuid("Current approver user UUID"), nullable: true },
     decision_remarks: { type: "string", nullable: true },

@@ -6,7 +6,10 @@ import type {
   AssetRecord,
   AttendanceDayRecord,
   AttendancePunch,
+  AttendanceRegularizationAction,
+  AttendanceRegularizationCorrectionApplication,
   AttendanceRegularizationRequest,
+  AttendanceRegularizationRequestItem,
   CoreUser,
   Department,
   Designation,
@@ -44,6 +47,7 @@ import type {
   AdminSecuritySettingsRecord,
   AdminWorkflowConfigRecord,
   TimesheetSubmission,
+  UUID,
   WfhRequest
 } from "#shared";
 import {
@@ -153,6 +157,9 @@ const resetTables = [
   "attendance.location_evidence",
   "attendance.attendance_events",
   "attendance.sessions",
+  "attendance.regularization_correction_applications",
+  "attendance.regularization_actions",
+  "attendance.regularization_request_items",
   "attendance.regularization_requests",
   "attendance.daily_records",
   "attendance.punch_events",
@@ -302,6 +309,8 @@ function copyData(target: DataStore, source: DataStore): void {
   target.attendancePunches = source.attendancePunches;
   target.attendanceDayRecords = source.attendanceDayRecords;
   target.attendanceRegularizations = source.attendanceRegularizations;
+  target.attendanceRegularizationActions = source.attendanceRegularizationActions;
+  target.attendanceRegularizationCorrectionApplications = source.attendanceRegularizationCorrectionApplications;
   target.leaveRequests = source.leaveRequests;
   target.wfhRequests = source.wfhRequests;
   target.holidays = source.holidays;
@@ -463,6 +472,8 @@ class PostgresPersistence {
       loaded.attendancePunches = await this.loadAttendancePunches(client);
       loaded.attendanceDayRecords = await this.loadAttendanceDayRecords(client);
       loaded.attendanceRegularizations = await this.loadAttendanceRegularizations(client);
+      loaded.attendanceRegularizationActions = await this.loadAttendanceRegularizationActions(client);
+      loaded.attendanceRegularizationCorrectionApplications = await this.loadAttendanceRegularizationCorrectionApplications(client);
       loaded.leaveRequests = await this.loadLeaveRequests(client);
       loaded.wfhRequests = await this.loadWfhRequests(client);
       loaded.holidays = await this.loadHolidays(client);
@@ -1909,7 +1920,27 @@ class PostgresPersistence {
   }
 
   private async loadAttendanceRegularizations(client: PoolClient): Promise<AttendanceRegularizationRequest[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.regularization_requests ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT regularization_requests.*, work_date::text AS work_date FROM attendance.regularization_requests ORDER BY created_at, id",
+    );
+    const itemRows = (await client.query("SELECT * FROM attendance.regularization_request_items ORDER BY regularization_request_id, ordinal, id")).rows;
+    const itemsByRequest = new Map<UUID, AttendanceRegularizationRequestItem[]>();
+    for (const row of itemRows) {
+      const item: AttendanceRegularizationRequestItem = {
+        id: row.id,
+        company_id: row.company_id,
+        regularization_request_id: row.regularization_request_id,
+        ordinal: row.ordinal,
+        operation: row.operation,
+        target_punch_event_id: row.target_punch_event_id,
+        event_type: row.event_type,
+        occurred_at: asIsoOrNull(row.occurred_at),
+        created_at: asIso(row.created_at),
+      };
+      const existing = itemsByRequest.get(item.regularization_request_id) ?? [];
+      existing.push(item);
+      itemsByRequest.set(item.regularization_request_id, existing);
+    }
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -1917,7 +1948,12 @@ class PostgresPersistence {
       submitted_by_user_id: row.submitted_by_user_id ?? row.employee_user_id,
       work_date: asDate(row.work_date),
       reason: row.reason,
-      requested_punches: Array.isArray(row.requested_punches) ? row.requested_punches : [],
+      items: itemsByRequest.get(row.id) ?? [],
+      requested_punches: (itemsByRequest.get(row.id) ?? []).flatMap((item) =>
+        item.event_type && item.occurred_at
+          ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+          : [],
+      ),
       status: row.status,
       current_approver_user_id: row.current_approver_user_id,
       decision_remarks: row.decision_remarks,
@@ -1927,6 +1963,41 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at)
+    }));
+  }
+
+  private async loadAttendanceRegularizationActions(client: PoolClient): Promise<AttendanceRegularizationAction[]> {
+    const { rows } = await client.query("SELECT * FROM attendance.regularization_actions ORDER BY regularization_request_id, resulting_version, id");
+    return rows.map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      regularization_request_id: row.regularization_request_id,
+      actor_user_id: row.actor_user_id,
+      subject_employee_user_id: row.subject_employee_user_id,
+      action_kind: row.action_kind,
+      previous_state: row.previous_state,
+      resulting_state: row.resulting_state,
+      remarks: row.remarks,
+      resulting_version: row.resulting_version,
+      occurred_at: asIso(row.occurred_at),
+      migration_reconstructed: Boolean(row.migration_reconstructed),
+    }));
+  }
+
+  private async loadAttendanceRegularizationCorrectionApplications(client: PoolClient): Promise<AttendanceRegularizationCorrectionApplication[]> {
+    const { rows } = await client.query("SELECT * FROM attendance.regularization_correction_applications ORDER BY applied_at, id");
+    return rows.map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      regularization_request_id: row.regularization_request_id,
+      regularization_request_item_id: row.regularization_request_item_id,
+      regularization_action_id: row.regularization_action_id,
+      operation: row.operation,
+      target_punch_event_id: row.target_punch_event_id,
+      replacement_punch_event_id: row.replacement_punch_event_id,
+      attendance_event_id: row.attendance_event_id,
+      applied_by_user_id: row.applied_by_user_id,
+      applied_at: asIso(row.applied_at),
     }));
   }
 
@@ -2884,6 +2955,13 @@ class PostgresPersistence {
         ]
       );
     }
+    await client.query(
+      `SELECT setval(
+         pg_get_serial_sequence('platform.outbox_events', 'id'),
+         COALESCE((SELECT max(id) FROM platform.outbox_events), 1),
+         EXISTS (SELECT 1 FROM platform.outbox_events)
+       )`,
+    );
   }
 
   private async flushExpenses(client: PoolClient): Promise<void> {
@@ -4008,7 +4086,11 @@ class PostgresPersistence {
           request.submitted_by_user_id,
           request.work_date,
           request.reason,
-          JSON.stringify(request.requested_punches),
+          JSON.stringify(request.items.flatMap((item) =>
+            item.event_type && item.occurred_at
+              ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+              : [],
+          )),
           request.status,
           request.current_approver_user_id,
           request.decision_remarks,
@@ -4019,6 +4101,75 @@ class PostgresPersistence {
           request.updated_at,
           request.deleted_at
         ]
+      );
+    }
+    for (const request of this.store.attendanceRegularizations) {
+      for (const item of request.items) {
+        await client.query(
+          `INSERT INTO attendance.regularization_request_items (
+             id, company_id, regularization_request_id, ordinal, operation,
+             target_punch_event_id, event_type, occurred_at, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            item.id,
+            item.company_id,
+            item.regularization_request_id,
+            item.ordinal,
+            item.operation,
+            item.target_punch_event_id,
+            item.event_type,
+            item.occurred_at,
+            item.created_at,
+          ],
+        );
+      }
+    }
+    for (const action of this.store.attendanceRegularizationActions) {
+      await client.query(
+        `INSERT INTO attendance.regularization_actions (
+           id, company_id, regularization_request_id, actor_user_id,
+           subject_employee_user_id, action_kind, previous_state, resulting_state,
+           remarks, resulting_version, occurred_at, migration_reconstructed
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (regularization_request_id, resulting_version) DO NOTHING`,
+        [
+          action.id,
+          action.company_id,
+          action.regularization_request_id,
+          action.actor_user_id,
+          action.subject_employee_user_id,
+          action.action_kind,
+          action.previous_state,
+          action.resulting_state,
+          action.remarks,
+          action.resulting_version,
+          action.occurred_at,
+          action.migration_reconstructed,
+        ],
+      );
+    }
+    for (const application of this.store.attendanceRegularizationCorrectionApplications) {
+      await client.query(
+        `INSERT INTO attendance.regularization_correction_applications (
+           id, company_id, regularization_request_id, regularization_request_item_id,
+           regularization_action_id, operation, target_punch_event_id,
+           replacement_punch_event_id, attendance_event_id, applied_by_user_id, applied_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (regularization_request_item_id) DO NOTHING`,
+        [
+          application.id,
+          application.company_id,
+          application.regularization_request_id,
+          application.regularization_request_item_id,
+          application.regularization_action_id,
+          application.operation,
+          application.target_punch_event_id,
+          application.replacement_punch_event_id,
+          application.attendance_event_id,
+          application.applied_by_user_id,
+          application.applied_at,
+        ],
       );
     }
   }

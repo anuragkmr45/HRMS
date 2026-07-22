@@ -66780,6 +66780,18 @@
                         "employee_user_id",
                         "work_date",
                         "status",
+                        "day_classification",
+                        "presence_state",
+                        "punctuality_state",
+                        "evidence_state",
+                        "approval_kind",
+                        "approval_state",
+                        "payroll_state",
+                        "work_seconds",
+                        "break_seconds",
+                        "scheduled_seconds",
+                        "late_seconds",
+                        "early_departure_seconds",
                         "work_minutes",
                         "version"
                       ],
@@ -66814,7 +66826,92 @@
                             "holiday",
                             "future"
                           ],
+                          "description": "Legacy compatibility status derived from the canonical attendance dimensions.",
                           "example": "present"
+                        },
+                        "day_classification": {
+                          "type": "string",
+                          "enum": [
+                            "working_day",
+                            "weekend",
+                            "holiday",
+                            "leave",
+                            "wfh",
+                            "future",
+                            "unknown"
+                          ],
+                          "example": "working_day"
+                        },
+                        "presence_state": {
+                          "type": "string",
+                          "enum": [
+                            "not_started",
+                            "present",
+                            "partial",
+                            "incomplete",
+                            "absent",
+                            "not_applicable",
+                            "unknown"
+                          ],
+                          "example": "present"
+                        },
+                        "punctuality_state": {
+                          "type": "string",
+                          "enum": [
+                            "on_time",
+                            "late",
+                            "early_departure",
+                            "late_and_early_departure",
+                            "not_applicable",
+                            "unknown"
+                          ],
+                          "example": "on_time"
+                        },
+                        "evidence_state": {
+                          "type": "string",
+                          "enum": [
+                            "complete",
+                            "partial",
+                            "missing",
+                            "disputed",
+                            "not_applicable",
+                            "unknown"
+                          ],
+                          "example": "complete"
+                        },
+                        "approval_kind": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "regularization",
+                            "leave",
+                            "wfh",
+                            "multiple"
+                          ],
+                          "example": "none"
+                        },
+                        "approval_state": {
+                          "type": "string",
+                          "enum": [
+                            "not_required",
+                            "pending",
+                            "approved",
+                            "returned",
+                            "rejected",
+                            "mixed",
+                            "unknown"
+                          ],
+                          "example": "not_required"
+                        },
+                        "payroll_state": {
+                          "type": "string",
+                          "enum": [
+                            "unprocessed",
+                            "not_applicable",
+                            "unknown"
+                          ],
+                          "description": "Neutral attendance-to-payroll projection state; no payability decision is implied.",
+                          "example": "unprocessed"
                         },
                         "first_check_in": {
                           "type": "string",
@@ -66848,9 +66945,40 @@
                           "type": "string",
                           "example": "8h 00m"
                         },
+                        "work_seconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Canonical worked duration in whole seconds.",
+                          "example": 33000
+                        },
+                        "break_seconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Canonical break duration in whole seconds.",
+                          "example": 1800
+                        },
+                        "scheduled_seconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Effective shift duration in whole seconds.",
+                          "example": 28800
+                        },
+                        "late_seconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Late-arrival duration in whole seconds.",
+                          "example": 0
+                        },
+                        "early_departure_seconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Early-departure duration in whole seconds.",
+                          "example": 0
+                        },
                         "work_minutes": {
                           "type": "integer",
                           "minimum": 0,
+                          "description": "Legacy compatibility duration in whole minutes, derived by flooring work_seconds / 60.",
                           "example": 550
                         },
                         "target_work_minutes": {
@@ -66861,16 +66989,19 @@
                         "break_minutes": {
                           "type": "integer",
                           "minimum": 0,
+                          "description": "Legacy compatibility duration in whole minutes.",
                           "example": 30
                         },
                         "late_minutes": {
                           "type": "integer",
                           "minimum": 0,
+                          "description": "Legacy compatibility duration in whole minutes.",
                           "example": 0
                         },
                         "early_out_minutes": {
                           "type": "integer",
                           "minimum": 0,
+                          "description": "Legacy compatibility duration in whole minutes.",
                           "example": 0
                         },
                         "exception_type": {
@@ -66908,6 +67039,18 @@
                           "employee_user_id",
                           "work_date",
                           "status",
+                          "day_classification",
+                          "presence_state",
+                          "punctuality_state",
+                          "evidence_state",
+                          "approval_kind",
+                          "approval_state",
+                          "payroll_state",
+                          "work_seconds",
+                          "break_seconds",
+                          "scheduled_seconds",
+                          "late_seconds",
+                          "early_departure_seconds",
                           "work_minutes",
                           "version"
                         ],
@@ -66942,7 +67085,92 @@
                               "holiday",
                               "future"
                             ],
+                            "description": "Legacy compatibility status derived from the canonical attendance dimensions.",
                             "example": "present"
+                          },
+                          "day_classification": {
+                            "type": "string",
+                            "enum": [
+                              "working_day",
+                              "weekend",
+                              "holiday",
+                              "leave",
+                              "wfh",
+                              "future",
+                              "unknown"
+                            ],
+                            "example": "working_day"
+                          },
+                          "presence_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_started",
+                              "present",
+                              "partial",
+                              "incomplete",
+                              "absent",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "present"
+                          },
+                          "punctuality_state": {
+                            "type": "string",
+                            "enum": [
+                              "on_time",
+                              "late",
+                              "early_departure",
+                              "late_and_early_departure",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "on_time"
+                          },
+                          "evidence_state": {
+                            "type": "string",
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "missing",
+                              "disputed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "complete"
+                          },
+                          "approval_kind": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "regularization",
+                              "leave",
+                              "wfh",
+                              "multiple"
+                            ],
+                            "example": "none"
+                          },
+                          "approval_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_required",
+                              "pending",
+                              "approved",
+                              "returned",
+                              "rejected",
+                              "mixed",
+                              "unknown"
+                            ],
+                            "example": "not_required"
+                          },
+                          "payroll_state": {
+                            "type": "string",
+                            "enum": [
+                              "unprocessed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "description": "Neutral attendance-to-payroll projection state; no payability decision is implied.",
+                            "example": "unprocessed"
                           },
                           "first_check_in": {
                             "type": "string",
@@ -66976,9 +67204,40 @@
                             "type": "string",
                             "example": "8h 00m"
                           },
+                          "work_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical worked duration in whole seconds.",
+                            "example": 33000
+                          },
+                          "break_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical break duration in whole seconds.",
+                            "example": 1800
+                          },
+                          "scheduled_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Effective shift duration in whole seconds.",
+                            "example": 28800
+                          },
+                          "late_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Late-arrival duration in whole seconds.",
+                            "example": 0
+                          },
+                          "early_departure_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Early-departure duration in whole seconds.",
+                            "example": 0
+                          },
                           "work_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes, derived by flooring work_seconds / 60.",
                             "example": 550
                           },
                           "target_work_minutes": {
@@ -66989,16 +67248,19 @@
                           "break_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 30
                           },
                           "late_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "early_out_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "exception_type": {
@@ -67958,6 +68220,18 @@
                           "employee_user_id",
                           "work_date",
                           "status",
+                          "day_classification",
+                          "presence_state",
+                          "punctuality_state",
+                          "evidence_state",
+                          "approval_kind",
+                          "approval_state",
+                          "payroll_state",
+                          "work_seconds",
+                          "break_seconds",
+                          "scheduled_seconds",
+                          "late_seconds",
+                          "early_departure_seconds",
                           "work_minutes",
                           "version"
                         ],
@@ -67992,7 +68266,92 @@
                               "holiday",
                               "future"
                             ],
+                            "description": "Legacy compatibility status derived from the canonical attendance dimensions.",
                             "example": "present"
+                          },
+                          "day_classification": {
+                            "type": "string",
+                            "enum": [
+                              "working_day",
+                              "weekend",
+                              "holiday",
+                              "leave",
+                              "wfh",
+                              "future",
+                              "unknown"
+                            ],
+                            "example": "working_day"
+                          },
+                          "presence_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_started",
+                              "present",
+                              "partial",
+                              "incomplete",
+                              "absent",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "present"
+                          },
+                          "punctuality_state": {
+                            "type": "string",
+                            "enum": [
+                              "on_time",
+                              "late",
+                              "early_departure",
+                              "late_and_early_departure",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "on_time"
+                          },
+                          "evidence_state": {
+                            "type": "string",
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "missing",
+                              "disputed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "complete"
+                          },
+                          "approval_kind": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "regularization",
+                              "leave",
+                              "wfh",
+                              "multiple"
+                            ],
+                            "example": "none"
+                          },
+                          "approval_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_required",
+                              "pending",
+                              "approved",
+                              "returned",
+                              "rejected",
+                              "mixed",
+                              "unknown"
+                            ],
+                            "example": "not_required"
+                          },
+                          "payroll_state": {
+                            "type": "string",
+                            "enum": [
+                              "unprocessed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "description": "Neutral attendance-to-payroll projection state; no payability decision is implied.",
+                            "example": "unprocessed"
                           },
                           "first_check_in": {
                             "type": "string",
@@ -68026,9 +68385,40 @@
                             "type": "string",
                             "example": "8h 00m"
                           },
+                          "work_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical worked duration in whole seconds.",
+                            "example": 33000
+                          },
+                          "break_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical break duration in whole seconds.",
+                            "example": 1800
+                          },
+                          "scheduled_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Effective shift duration in whole seconds.",
+                            "example": 28800
+                          },
+                          "late_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Late-arrival duration in whole seconds.",
+                            "example": 0
+                          },
+                          "early_departure_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Early-departure duration in whole seconds.",
+                            "example": 0
+                          },
                           "work_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes, derived by flooring work_seconds / 60.",
                             "example": 550
                           },
                           "target_work_minutes": {
@@ -68039,16 +68429,19 @@
                           "break_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 30
                           },
                           "late_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "early_out_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "exception_type": {
@@ -68528,6 +68921,18 @@
                           "employee_user_id",
                           "work_date",
                           "status",
+                          "day_classification",
+                          "presence_state",
+                          "punctuality_state",
+                          "evidence_state",
+                          "approval_kind",
+                          "approval_state",
+                          "payroll_state",
+                          "work_seconds",
+                          "break_seconds",
+                          "scheduled_seconds",
+                          "late_seconds",
+                          "early_departure_seconds",
                           "work_minutes",
                           "version"
                         ],
@@ -68562,7 +68967,92 @@
                               "holiday",
                               "future"
                             ],
+                            "description": "Legacy compatibility status derived from the canonical attendance dimensions.",
                             "example": "present"
+                          },
+                          "day_classification": {
+                            "type": "string",
+                            "enum": [
+                              "working_day",
+                              "weekend",
+                              "holiday",
+                              "leave",
+                              "wfh",
+                              "future",
+                              "unknown"
+                            ],
+                            "example": "working_day"
+                          },
+                          "presence_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_started",
+                              "present",
+                              "partial",
+                              "incomplete",
+                              "absent",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "present"
+                          },
+                          "punctuality_state": {
+                            "type": "string",
+                            "enum": [
+                              "on_time",
+                              "late",
+                              "early_departure",
+                              "late_and_early_departure",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "on_time"
+                          },
+                          "evidence_state": {
+                            "type": "string",
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "missing",
+                              "disputed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "example": "complete"
+                          },
+                          "approval_kind": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "regularization",
+                              "leave",
+                              "wfh",
+                              "multiple"
+                            ],
+                            "example": "none"
+                          },
+                          "approval_state": {
+                            "type": "string",
+                            "enum": [
+                              "not_required",
+                              "pending",
+                              "approved",
+                              "returned",
+                              "rejected",
+                              "mixed",
+                              "unknown"
+                            ],
+                            "example": "not_required"
+                          },
+                          "payroll_state": {
+                            "type": "string",
+                            "enum": [
+                              "unprocessed",
+                              "not_applicable",
+                              "unknown"
+                            ],
+                            "description": "Neutral attendance-to-payroll projection state; no payability decision is implied.",
+                            "example": "unprocessed"
                           },
                           "first_check_in": {
                             "type": "string",
@@ -68596,9 +69086,40 @@
                             "type": "string",
                             "example": "8h 00m"
                           },
+                          "work_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical worked duration in whole seconds.",
+                            "example": 33000
+                          },
+                          "break_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Canonical break duration in whole seconds.",
+                            "example": 1800
+                          },
+                          "scheduled_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Effective shift duration in whole seconds.",
+                            "example": 28800
+                          },
+                          "late_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Late-arrival duration in whole seconds.",
+                            "example": 0
+                          },
+                          "early_departure_seconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Early-departure duration in whole seconds.",
+                            "example": 0
+                          },
                           "work_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes, derived by flooring work_seconds / 60.",
                             "example": 550
                           },
                           "target_work_minutes": {
@@ -68609,16 +69130,19 @@
                           "break_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 30
                           },
                           "late_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "early_out_minutes": {
                             "type": "integer",
                             "minimum": 0,
+                            "description": "Legacy compatibility duration in whole minutes.",
                             "example": 0
                           },
                           "exception_type": {
@@ -68985,6 +69509,28 @@
                   "work_date",
                   "reason"
                 ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "items"
+                    ],
+                    "not": {
+                      "required": [
+                        "requested_punches"
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "requested_punches"
+                    ],
+                    "not": {
+                      "required": [
+                        "items"
+                      ]
+                    }
+                  }
+                ],
                 "properties": {
                   "work_date": {
                     "type": "string",
@@ -69000,6 +69546,10 @@
                   },
                   "requested_punches": {
                     "type": "array",
+                    "deprecated": true,
+                    "description": "Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.",
+                    "minItems": 1,
+                    "maxItems": 20,
                     "items": {
                       "type": "object",
                       "required": [
@@ -69011,8 +69561,6 @@
                           "type": "string",
                           "enum": [
                             "check_in",
-                            "break_start",
-                            "break_end",
                             "check_out"
                           ],
                           "example": "check_out"
@@ -69023,7 +69571,106 @@
                           "description": "Requested punch timestamp",
                           "example": "2026-05-04T10:00:00.000Z"
                         }
-                      }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "operation",
+                            "event_type",
+                            "occurred_at"
+                          ],
+                          "properties": {
+                            "operation": {
+                              "type": "string",
+                              "enum": [
+                                "add"
+                              ]
+                            },
+                            "event_type": {
+                              "type": "string",
+                              "enum": [
+                                "check_in",
+                                "check_out"
+                              ]
+                            },
+                            "occurred_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Requested punch timestamp",
+                              "example": "2026-05-04T10:00:00.000Z"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "operation",
+                            "target_punch_event_id",
+                            "event_type",
+                            "occurred_at"
+                          ],
+                          "properties": {
+                            "operation": {
+                              "type": "string",
+                              "enum": [
+                                "replace"
+                              ]
+                            },
+                            "target_punch_event_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "Target punch event UUID",
+                              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                            },
+                            "event_type": {
+                              "type": "string",
+                              "enum": [
+                                "check_in",
+                                "check_out"
+                              ]
+                            },
+                            "occurred_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Replacement punch timestamp",
+                              "example": "2026-05-04T10:00:00.000Z"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "operation",
+                            "target_punch_event_id"
+                          ],
+                          "properties": {
+                            "operation": {
+                              "type": "string",
+                              "enum": [
+                                "void"
+                              ]
+                            },
+                            "target_punch_event_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "Target punch event UUID",
+                              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   }
                 },
@@ -69053,6 +69700,8 @@
                     "submitted_by_user_id",
                     "work_date",
                     "reason",
+                    "items",
+                    "requested_punches",
                     "status",
                     "version"
                   ],
@@ -69087,8 +69736,67 @@
                     },
                     "requested_punches": {
                       "type": "array",
+                      "deprecated": true,
+                      "description": "Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations.",
                       "items": {
                         "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "ordinal",
+                          "operation",
+                          "target_punch_event_id",
+                          "event_type",
+                          "occurred_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Regularization request item UUID",
+                            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                          },
+                          "ordinal": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "operation": {
+                            "type": "string",
+                            "enum": [
+                              "add",
+                              "replace",
+                              "void"
+                            ]
+                          },
+                          "target_punch_event_id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Target punch event UUID",
+                            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                            "nullable": true
+                          },
+                          "event_type": {
+                            "type": "string",
+                            "enum": [
+                              "check_in",
+                              "check_out"
+                            ],
+                            "nullable": true
+                          },
+                          "occurred_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Requested punch timestamp",
+                            "example": "2026-05-04T10:00:00.000Z",
+                            "nullable": true
+                          }
+                        },
                         "additionalProperties": true
                       }
                     },
@@ -69564,6 +70272,8 @@
                           "submitted_by_user_id",
                           "work_date",
                           "reason",
+                          "items",
+                          "requested_punches",
                           "status",
                           "version"
                         ],
@@ -69598,8 +70308,67 @@
                           },
                           "requested_punches": {
                             "type": "array",
+                            "deprecated": true,
+                            "description": "Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations.",
                             "items": {
                               "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "id",
+                                "ordinal",
+                                "operation",
+                                "target_punch_event_id",
+                                "event_type",
+                                "occurred_at"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "description": "Regularization request item UUID",
+                                  "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                                },
+                                "ordinal": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "operation": {
+                                  "type": "string",
+                                  "enum": [
+                                    "add",
+                                    "replace",
+                                    "void"
+                                  ]
+                                },
+                                "target_punch_event_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "description": "Target punch event UUID",
+                                  "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                                  "nullable": true
+                                },
+                                "event_type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check_in",
+                                    "check_out"
+                                  ],
+                                  "nullable": true
+                                },
+                                "occurred_at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "Requested punch timestamp",
+                                  "example": "2026-05-04T10:00:00.000Z",
+                                  "nullable": true
+                                }
+                              },
                               "additionalProperties": true
                             }
                           },
@@ -70094,6 +70863,8 @@
                           "submitted_by_user_id",
                           "work_date",
                           "reason",
+                          "items",
+                          "requested_punches",
                           "status",
                           "version"
                         ],
@@ -70128,8 +70899,67 @@
                           },
                           "requested_punches": {
                             "type": "array",
+                            "deprecated": true,
+                            "description": "Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations.",
                             "items": {
                               "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "id",
+                                "ordinal",
+                                "operation",
+                                "target_punch_event_id",
+                                "event_type",
+                                "occurred_at"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "description": "Regularization request item UUID",
+                                  "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                                },
+                                "ordinal": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "operation": {
+                                  "type": "string",
+                                  "enum": [
+                                    "add",
+                                    "replace",
+                                    "void"
+                                  ]
+                                },
+                                "target_punch_event_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "description": "Target punch event UUID",
+                                  "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                                  "nullable": true
+                                },
+                                "event_type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check_in",
+                                    "check_out"
+                                  ],
+                                  "nullable": true
+                                },
+                                "occurred_at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "Requested punch timestamp",
+                                  "example": "2026-05-04T10:00:00.000Z",
+                                  "nullable": true
+                                }
+                              },
                               "additionalProperties": true
                             }
                           },

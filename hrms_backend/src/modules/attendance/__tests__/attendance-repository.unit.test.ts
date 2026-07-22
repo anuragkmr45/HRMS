@@ -87,7 +87,12 @@ describe("AttendanceRepository tenancy", () => {
       submitted_by_user_id: seedIds.employee1,
       work_date: "2026-07-08",
       reason: "Missed punch",
-      requested_punches: [],
+      items: [{
+        operation: "add" as const,
+        target_punch_event_id: null,
+        event_type: "check_in" as const,
+        occurred_at: "2026-07-08T04:00:00.000Z",
+      }],
       status: "pending" as const,
       current_approver_user_id: seedIds.manager,
     };
@@ -110,7 +115,12 @@ describe("AttendanceRepository tenancy", () => {
         submitted_by_user_id: seedIds.employee1,
         work_date: "2026-07-08",
         reason: "Missed punch",
-        requested_punches: [],
+        items: [{
+          operation: "add" as const,
+          target_punch_event_id: null,
+          event_type: "check_in" as const,
+          occurred_at: "2026-07-08T04:00:00.000Z",
+        }],
         status: "pending" as const,
         current_approver_user_id: seedIds.manager,
       },

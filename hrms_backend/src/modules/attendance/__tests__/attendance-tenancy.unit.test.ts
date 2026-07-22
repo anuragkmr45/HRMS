@@ -120,7 +120,7 @@ describe("AttendanceService company tenancy", () => {
     const request = service.createRegularization(employeeB, {
       work_date: "2026-07-08",
       reason: "Missed punch",
-      requested_punches: [],
+      requested_punches: [{ event_type: "check_in", occurred_at: "2026-07-08T04:00:00.000Z" }],
     });
 
     expect(() =>
