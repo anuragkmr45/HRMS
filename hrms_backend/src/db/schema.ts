@@ -1,13 +1,16 @@
 import {
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
   jsonb,
   numeric,
+  primaryKey,
   pgSchema,
   text,
+  time,
   timestamp,
   uniqueIndex,
   uuid
@@ -202,12 +205,19 @@ export const idempotencyKeys = platform.table(
     requestHash: text("request_hash").notNull(),
     responseHash: text("response_hash"),
     status: text("status").notNull(),
+    resourceType: text("resource_type"),
+    resourceId: uuid("resource_id"),
+    responseStatus: integer("response_status"),
     createdAt,
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true })
   },
   (table) => [
     uniqueIndex("platform_idempotency_scope_actor_uq").on(table.scope, table.idempotencyKey, table.actorUserId),
-    index("platform_idempotency_expires_idx").on(table.expiresAt)
+    index("platform_idempotency_expires_idx").on(table.expiresAt),
+    index("platform_idempotency_resource_idx")
+      .on(table.resourceType, table.resourceId)
+      .where(sql`${table.resourceId} is not null`)
   ]
 );
 
@@ -440,44 +450,123 @@ export const adminSecuritySettings = platform.table(
   (table) => [uniqueIndex("platform_admin_security_settings_key_uq").on(table.settingsKey)]
 );
 
-export const processedEvents = platform.table("processed_events", {
-  consumerName: text("consumer_name").notNull(),
-  eventId: uuid("event_id").notNull(),
-  processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
-});
+export const processedEvents = platform.table(
+  "processed_events",
+  {
+    consumerName: text("consumer_name").notNull(),
+    eventId: uuid("event_id").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [primaryKey({ columns: [table.consumerName, table.eventId] })]
+);
 
 export const attendancePunchEvents = attendance.table(
   "punch_events",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
     eventType: text("event_type").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     workMode: text("work_mode").notNull().default("office"),
     source: text("source").notNull().default("web"),
+    origin: text("origin").notNull().default("employee_manual_now"),
+    regularizationRequestId: uuid("regularization_request_id"),
     metadata: jsonb("metadata").notNull().default({}),
     createdAt,
     deletedAt
   },
   (table) => [
-    index("attendance_punch_employee_occurred_idx").on(table.employeeUserId, table.occurredAt),
+    index("attendance_punch_company_employee_occurred_idx").on(table.companyId, table.employeeUserId, table.occurredAt),
     index("attendance_punch_event_type_idx").on(table.eventType, table.occurredAt)
   ]
+);
+
+export const attendanceSessions = attendance.table(
+  "sessions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    status: text("status").notNull(),
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    lastTransitionAt: timestamp("last_transition_at", { withTimezone: true }).notNull(),
+    workMode: text("work_mode").notNull(),
+    source: text("source").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    version,
+    createdAt,
+    updatedAt,
+    deletedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_sessions_id_company_uq").on(table.id, table.companyId),
+    uniqueIndex("attendance_sessions_single_open_idx").on(table.companyId, table.employeeUserId).where(sql`${table.closedAt} IS NULL AND ${table.deletedAt} IS NULL`),
+    index("attendance_sessions_employee_history_idx").on(table.companyId, table.employeeUserId, table.checkedInAt),
+    index("attendance_sessions_work_date_idx").on(table.companyId, table.workDate, table.employeeUserId)
+  ]
+);
+
+export const attendanceBreakSegments = attendance.table(
+  "break_segments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    sessionId: uuid("session_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_break_segments_single_active_idx").on(table.companyId, table.sessionId).where(sql`${table.endedAt} IS NULL`),
+    index("attendance_break_segments_session_history_idx").on(table.companyId, table.sessionId, table.startedAt)
+  ]
+);
+
+export const attendanceEmployeeCommandStates = attendance.table(
+  "employee_command_states",
+  {
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    state: text("state").notNull().default("not_checked_in"),
+    currentSessionId: uuid("current_session_id"),
+    version,
+    createdAt,
+    updatedAt
+  },
+  (table) => [primaryKey({ columns: [table.companyId, table.employeeUserId] })]
 );
 
 export const attendanceDailyRecords = attendance.table(
   "daily_records",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
     workDate: date("work_date").notNull(),
     status: text("status").notNull(),
+    dayClassification: text("day_classification").notNull().default("unknown"),
+    presenceState: text("presence_state").notNull().default("unknown"),
+    punctualityState: text("punctuality_state").notNull().default("unknown"),
+    evidenceState: text("evidence_state").notNull().default("unknown"),
+    approvalKind: text("approval_kind").notNull().default("none"),
+    approvalState: text("approval_state").notNull().default("not_required"),
+    payrollState: text("payroll_state").notNull().default("unprocessed"),
     firstCheckIn: timestamp("first_check_in", { withTimezone: true }),
     lastCheckOut: timestamp("last_check_out", { withTimezone: true }),
     workMinutes: integer("work_minutes").notNull().default(0),
     breakMinutes: integer("break_minutes").notNull().default(0),
     lateMinutes: integer("late_minutes").notNull().default(0),
     earlyOutMinutes: integer("early_out_minutes").notNull().default(0),
+    workSeconds: integer("work_seconds").notNull().default(0),
+    breakSeconds: integer("break_seconds").notNull().default(0),
+    scheduledSeconds: integer("scheduled_seconds").notNull().default(0),
+    lateSeconds: integer("late_seconds").notNull().default(0),
+    earlyDepartureSeconds: integer("early_departure_seconds").notNull().default(0),
     workMode: text("work_mode"),
     note: text("note"),
     exceptionType: text("exception_type"),
@@ -488,9 +577,19 @@ export const attendanceDailyRecords = attendance.table(
     deletedAt
   },
   (table) => [
-    uniqueIndex("attendance_daily_employee_date_uq").on(table.employeeUserId, table.workDate),
+    uniqueIndex("attendance_daily_company_employee_date_uq").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_daily_status_date_idx").on(table.status, table.workDate),
-    index("attendance_daily_exception_idx").on(table.exceptionType, table.workDate)
+    index("attendance_daily_classification_date_idx").on(table.dayClassification, table.workDate),
+    index("attendance_daily_presence_date_idx").on(table.presenceState, table.workDate),
+    index("attendance_daily_exception_idx").on(table.exceptionType, table.workDate),
+    check("attendance_daily_day_classification_check", sql`${table.dayClassification} IN ('working_day', 'weekend', 'holiday', 'leave', 'wfh', 'future', 'unknown')`),
+    check("attendance_daily_presence_state_check", sql`${table.presenceState} IN ('not_started', 'present', 'partial', 'incomplete', 'absent', 'not_applicable', 'unknown')`),
+    check("attendance_daily_punctuality_state_check", sql`${table.punctualityState} IN ('on_time', 'late', 'early_departure', 'late_and_early_departure', 'not_applicable', 'unknown')`),
+    check("attendance_daily_evidence_state_check", sql`${table.evidenceState} IN ('complete', 'partial', 'missing', 'disputed', 'not_applicable', 'unknown')`),
+    check("attendance_daily_approval_kind_check", sql`${table.approvalKind} IN ('none', 'regularization', 'leave', 'wfh', 'multiple')`),
+    check("attendance_daily_approval_state_check", sql`${table.approvalState} IN ('not_required', 'pending', 'approved', 'returned', 'rejected', 'mixed', 'unknown')`),
+    check("attendance_daily_payroll_state_check", sql`${table.payrollState} IN ('unprocessed', 'not_applicable', 'unknown')`),
+    check("attendance_daily_seconds_nonnegative_check", sql`${table.workSeconds} >= 0 AND ${table.breakSeconds} >= 0 AND ${table.scheduledSeconds} >= 0 AND ${table.lateSeconds} >= 0 AND ${table.earlyDepartureSeconds} >= 0`)
   ]
 );
 
@@ -498,7 +597,9 @@ export const attendanceRegularizationRequests = attendance.table(
   "regularization_requests",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
     employeeUserId: uuid("employee_user_id").notNull(),
+    submittedByUserId: uuid("submitted_by_user_id").notNull(),
     workDate: date("work_date").notNull(),
     reason: text("reason").notNull(),
     requestedPunches: jsonb("requested_punches").notNull().default([]),
@@ -513,8 +614,181 @@ export const attendanceRegularizationRequests = attendance.table(
     deletedAt
   },
   (table) => [
-    index("attendance_regularizations_employee_date_idx").on(table.employeeUserId, table.workDate),
+    index("attendance_regularizations_company_employee_date_idx").on(table.companyId, table.employeeUserId, table.workDate),
     index("attendance_regularizations_queue_idx").on(table.status, table.currentApproverUserId, table.createdAt)
+  ]
+);
+
+export const attendancePolicies = attendance.table(
+  "policies",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyKey: text("policy_key").notNull(),
+    name: text("name").notNull(),
+    label: text("label").notNull(),
+    status: text("status").notNull().default("active"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    uniqueIndex("attendance_policies_company_key_uq")
+      .on(table.companyId, table.policyKey, table.name)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_policies_company_status_idx")
+      .on(table.companyId, table.status, table.policyKey)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendancePolicyVersions = attendance.table(
+  "policy_versions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyId: uuid("policy_id").notNull(),
+    versionNumber: integer("version_number").notNull(),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    config: jsonb("config").notNull().default({}),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_policy_versions_policy_number_uq").on(table.policyId, table.versionNumber),
+    index("attendance_policy_versions_lookup_idx").on(table.companyId, table.policyId, table.effectiveFrom, table.effectiveUntil)
+  ]
+);
+
+export const attendancePolicyAssignments = attendance.table(
+  "policy_assignments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    policyId: uuid("policy_id").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: uuid("scope_id"),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    status: text("status").notNull().default("active"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    index("attendance_policy_assignments_lookup_idx")
+      .on(table.companyId, table.scopeType, table.scopeId, table.status, table.effectiveFrom, table.effectiveUntil)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendanceShiftTemplates = attendance.table(
+  "shift_templates",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    code: text("code").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: text("status").notNull().default("active"),
+    isCompanyDefault: boolean("is_company_default").notNull().default(false),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    uniqueIndex("attendance_shift_templates_company_code_uq")
+      .on(table.companyId, table.code)
+      .where(sql`${table.deletedAt} IS NULL`),
+    uniqueIndex("attendance_shift_templates_one_default_idx")
+      .on(table.companyId)
+      .where(sql`${table.isCompanyDefault} = true AND ${table.status} = 'active' AND ${table.deletedAt} IS NULL`),
+    index("attendance_shift_templates_company_status_idx")
+      .on(table.companyId, table.status, table.name)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendanceShiftTemplateVersions = attendance.table(
+  "shift_template_versions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    templateId: uuid("template_id").notNull(),
+    versionNumber: integer("version_number").notNull(),
+    effectiveFrom: date("effective_from").notNull(),
+    effectiveUntil: date("effective_until"),
+    localStartTime: time("local_start_time").notNull(),
+    localEndTime: time("local_end_time").notNull(),
+    endDayOffset: integer("end_day_offset").notNull().default(0),
+    timezoneStrategy: text("timezone_strategy").notNull(),
+    fixedTimezone: text("fixed_timezone"),
+    eligibilityOpenBeforeStartMinutes: integer("eligibility_open_before_start_minutes").notNull().default(120),
+    eligibilityCloseAfterEndMinutes: integer("eligibility_close_after_end_minutes").notNull().default(240),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_shift_versions_template_number_uq").on(table.templateId, table.versionNumber),
+    index("attendance_shift_versions_lookup_idx").on(table.companyId, table.templateId, table.effectiveFrom, table.effectiveUntil)
+  ]
+);
+
+export const attendanceShiftAssignments = attendance.table(
+  "shift_assignments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    templateId: uuid("template_id").notNull(),
+    effectiveFrom: date("effective_from").notNull(),
+    effectiveUntil: date("effective_until"),
+    status: text("status").notNull().default("active"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    index("attendance_shift_assignments_lookup_idx")
+      .on(table.companyId, table.employeeUserId, table.status, table.effectiveFrom, table.effectiveUntil)
+      .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendanceShiftInstances = attendance.table(
+  "shift_instances",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    templateId: uuid("template_id").notNull(),
+    templateVersionId: uuid("template_version_id").notNull(),
+    assignmentId: uuid("assignment_id"),
+    resolvedTimezone: text("resolved_timezone").notNull(),
+    scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+    scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+    eligibilityStartAt: timestamp("eligibility_start_at", { withTimezone: true }).notNull(),
+    eligibilityEndAt: timestamp("eligibility_end_at", { withTimezone: true }).notNull(),
+    generationSource: text("generation_source").notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_shift_instances_employee_date_uq")
+      .on(table.companyId, table.employeeUserId, table.workDate)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_shift_instances_template_version_idx")
+      .on(table.companyId, table.templateVersionId, table.workDate)
+      .where(sql`${table.deletedAt} IS NULL`)
   ]
 );
 
@@ -583,6 +857,7 @@ export const holidays = leaveWfh.table(
   "holidays",
   {
     id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id"),
     name: text("name").notNull(),
     holidayDate: date("holiday_date").notNull(),
     region: text("region").notNull().default("All"),
@@ -593,8 +868,8 @@ export const holidays = leaveWfh.table(
     deletedAt
   },
   (table) => [
-    uniqueIndex("holidays_region_date_name_uq").on(table.region, table.holidayDate, table.name),
-    index("holidays_date_idx").on(table.holidayDate)
+    uniqueIndex("holidays_company_region_date_name_uq").on(table.companyId, table.region, table.holidayDate, table.name),
+    index("holidays_company_date_idx").on(table.companyId, table.holidayDate)
   ]
 );
 
@@ -1512,6 +1787,19 @@ export const schema = {
   adminMasterDataItems,
   adminSecuritySettings,
   processedEvents,
+  attendancePunchEvents,
+  attendanceSessions,
+  attendanceBreakSegments,
+  attendanceEmployeeCommandStates,
+  attendanceDailyRecords,
+  attendanceRegularizationRequests,
+  attendancePolicies,
+  attendancePolicyVersions,
+  attendancePolicyAssignments,
+  attendanceShiftTemplates,
+  attendanceShiftTemplateVersions,
+  attendanceShiftAssignments,
+  attendanceShiftInstances,
   expenseTickets,
   expenseLineItems,
   expenseApprovals,
