@@ -234,6 +234,7 @@ describe("PostgreSQL attendance runtime lock", () => {
 
   it("persists one break segment and completes the runtime state after checkout", async () => {
     const employee = await loginAs(app, "E1");
+    const companyId = companyIdFor(app, employee.user.id);
     const headers = (idempotencyKey: string) => ({
       ...authHeader(employee.token),
       "idempotency-key": idempotencyKey,
@@ -249,41 +250,100 @@ describe("PostgreSQL attendance runtime lock", () => {
         payload: { ...punchPayload, event_type },
       });
 
-    expect((await punch("check_in", "attendance-break-chain-in-001")).statusCode).toBe(200);
+    const checkIn = await punch("check_in", "attendance-break-chain-in-001");
+    expect(checkIn.statusCode).toBe(200);
+    const sessionId = checkIn.json().session_id;
     const breakStart = await punch("break_start", "attendance-break-chain-start-001");
     expect(breakStart.statusCode).toBe(200);
     expect((await punch("break_end", "attendance-break-chain-end-001")).statusCode).toBe(200);
     expect((await punch("check_out", "attendance-break-chain-out-001")).statusCode).toBe(200);
-    const repeatedCheckIn = await punch("check_in", "attendance-break-chain-repeat-in-001");
-    expect(repeatedCheckIn.statusCode).toBe(409);
-    expect(repeatedCheckIn.json()).toMatchObject({
-      details: { reason_code: "attendance_cycle_completed" },
-    });
+
+    const completedCycleRejections = [
+      ["check_in", "attendance-break-chain-repeat-in-001"],
+      ["break_start", "attendance-break-chain-repeat-start-001"],
+      ["break_end", "attendance-break-chain-repeat-end-001"],
+      ["check_out", "attendance-break-chain-repeat-out-001"],
+    ] as const;
+    for (const [eventType, key] of completedCycleRejections) {
+      const rejected = await punch(eventType, key);
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({
+        message: "The attendance cycle is already completed.",
+        details: { reason_code: "attendance_cycle_completed" },
+      });
+    }
 
     const state = await app.store.pgPool!.query<{
       state: string;
       current_session_id: string;
+      status: string;
       closed_at: Date | null;
+      open_sessions: string;
       active_breaks: string;
       break_segments: string;
+      punches: string;
+      denied_punches: string;
+      denied_outbox_events: string;
+      punch_outbox_events: string;
     }>(
       `SELECT runtime.state, runtime.current_session_id, session.closed_at,
+          session.status,
+          (SELECT count(*) FROM attendance.sessions open_session
+            WHERE open_session.company_id = runtime.company_id
+              AND open_session.employee_user_id = runtime.employee_user_id
+              AND open_session.closed_at IS NULL
+              AND open_session.deleted_at IS NULL) AS open_sessions,
           (SELECT count(*) FROM attendance.break_segments break_segment
             WHERE break_segment.company_id = session.company_id
               AND break_segment.session_id = session.id
               AND break_segment.ended_at IS NULL) AS active_breaks,
           (SELECT count(*) FROM attendance.break_segments break_segment
             WHERE break_segment.company_id = session.company_id
-              AND break_segment.session_id = session.id) AS break_segments
+              AND break_segment.session_id = session.id) AS break_segments,
+          (SELECT count(*) FROM attendance.punch_events punch
+            WHERE punch.company_id = session.company_id
+              AND punch.employee_user_id = runtime.employee_user_id
+              AND punch.session_id = session.id
+              AND punch.deleted_at IS NULL) AS punches,
+          (SELECT count(*) FROM attendance.punch_events punch
+            JOIN attendance.command_executions command
+              ON command.id = punch.command_execution_id
+            WHERE command.company_id = runtime.company_id
+              AND command.employee_user_id = runtime.employee_user_id
+              AND command.idempotency_key = ANY($4::text[])) AS denied_punches,
+          (SELECT count(*) FROM platform.outbox_events outbox
+            JOIN attendance.command_executions command
+              ON command.id::text = outbox.payload ->> 'command_id'
+            WHERE command.company_id = runtime.company_id
+              AND command.employee_user_id = runtime.employee_user_id
+              AND command.idempotency_key = ANY($4::text[])) AS denied_outbox_events,
+          (SELECT count(*) FROM platform.outbox_events outbox
+            WHERE outbox.aggregate_type = 'attendance'
+              AND outbox.event_type = 'attendance.punch.recorded'
+              AND outbox.payload ->> 'session_id' = session.id::text) AS punch_outbox_events
         FROM attendance.employee_command_states runtime
         JOIN attendance.sessions session ON session.id = runtime.current_session_id
-        WHERE runtime.employee_user_id = $1`,
-      [employee.user.id],
+        WHERE runtime.company_id = $1
+          AND runtime.employee_user_id = $2
+          AND runtime.current_session_id = $3`,
+      [
+        companyId,
+        employee.user.id,
+        sessionId,
+        completedCycleRejections.map(([, key]) => key),
+      ],
     );
     expect(state.rows[0]).toMatchObject({
       state: "completed",
+      current_session_id: sessionId,
+      status: "closed",
+      open_sessions: "0",
       active_breaks: "0",
       break_segments: "1",
+      punches: "4",
+      denied_punches: "0",
+      denied_outbox_events: "0",
+      punch_outbox_events: "4",
     });
     expect(state.rows[0]?.closed_at).toBeInstanceOf(Date);
   });

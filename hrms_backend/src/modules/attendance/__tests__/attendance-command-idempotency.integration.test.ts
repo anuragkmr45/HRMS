@@ -152,16 +152,21 @@ describe("PostgreSQL attendance command idempotency", () => {
       evidence: string;
       sessions: string;
       punches: string;
+      daily_records: string;
       outbox_events: string;
     }>(
       `SELECT
       (SELECT count(*)
        FROM platform.idempotency_keys
-       WHERE idempotency_key = $1) AS platform_keys,
+       WHERE scope = $8
+         AND actor_user_id = $6
+         AND idempotency_key = $1) AS platform_keys,
 
       (SELECT count(*)
        FROM attendance.command_executions
-       WHERE idempotency_key = $1) AS commands,
+       WHERE company_id = $5
+         AND employee_user_id = $6
+         AND idempotency_key = $1) AS commands,
 
       (SELECT count(*)
        FROM attendance.command_decisions
@@ -177,20 +182,36 @@ describe("PostgreSQL attendance command idempotency", () => {
 
       (SELECT count(*)
        FROM attendance.sessions
-       WHERE id = $3) AS sessions,
+       WHERE id = $3
+         AND company_id = $5
+         AND employee_user_id = $6) AS sessions,
 
       (SELECT count(*)
        FROM attendance.punch_events
-       WHERE command_execution_id = $2) AS punches,
+       WHERE command_execution_id = $2
+         AND company_id = $5
+         AND employee_user_id = $6) AS punches,
+
+      (SELECT count(*)
+       FROM attendance.daily_records
+       WHERE company_id = $5
+         AND employee_user_id = $6
+         AND work_date = $7::date
+         AND deleted_at IS NULL) AS daily_records,
 
       (SELECT count(*)
        FROM platform.outbox_events
-       WHERE aggregate_id = $4) AS outbox_events`,
+       WHERE aggregate_id = $4
+         AND event_type = 'attendance.punch.recorded') AS outbox_events`,
       [
         idempotencyKey,
         first.json().command_id,
         first.json().session_id,
         first.json().punch_id,
+        first.json().punch.company_id,
+        employee.user.id,
+        first.json().day_status.work_date,
+        `attendance.punch:employee_manual_now:${first.json().punch.company_id}`,
       ],
     );
 
@@ -202,6 +223,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       evidence: "1",
       sessions: "1",
       punches: "1",
+      daily_records: "1",
       outbox_events: "1",
     });
 
@@ -863,17 +885,92 @@ describe("PostgreSQL attendance command idempotency", () => {
       }),
     ]);
     expect(sameResults.map((result) => result.statusCode)).toEqual([200, 200]);
-    expect(sameResults[0].json().command_id).toBe(
-      sameResults[1].json().command_id,
+    expect(sameResults[1].json()).toMatchObject({
+      command_id: sameResults[0].json().command_id,
+      decision_id: sameResults[0].json().decision_id,
+      session_id: sameResults[0].json().session_id,
+      punch_id: sameResults[0].json().punch_id,
+      punch: {
+        occurred_at: sameResults[0].json().punch.occurred_at,
+      },
+      day_status: sameResults[0].json().day_status,
+    });
+
+    const sameArtifactCounts = await app.store.pgPool!.query<{
+      platform_keys: string;
+      commands: string;
+      decisions: string;
+      audit_decisions: string;
+      evidence: string;
+      sessions: string;
+      punches: string;
+      daily_records: string;
+      outbox_events: string;
+    }>(
+      `SELECT
+        (SELECT count(*)
+         FROM platform.idempotency_keys
+         WHERE scope = $8
+           AND actor_user_id = $6
+           AND idempotency_key = $1) AS platform_keys,
+        (SELECT count(*)
+         FROM attendance.command_executions
+         WHERE id = $2
+           AND company_id = $5
+           AND employee_user_id = $6
+           AND idempotency_key = $1) AS commands,
+        (SELECT count(*)
+         FROM attendance.command_decisions
+         WHERE command_execution_id = $2) AS decisions,
+        (SELECT count(*)
+         FROM attendance.attendance_decisions
+         WHERE command_execution_id = $2) AS audit_decisions,
+        (SELECT count(*)
+         FROM attendance.attendance_events
+         WHERE command_execution_id = $2) AS evidence,
+        (SELECT count(*)
+         FROM attendance.sessions
+         WHERE id = $3
+           AND company_id = $5
+           AND employee_user_id = $6) AS sessions,
+        (SELECT count(*)
+         FROM attendance.punch_events
+         WHERE id = $4
+           AND command_execution_id = $2
+           AND company_id = $5
+           AND employee_user_id = $6) AS punches,
+        (SELECT count(*)
+         FROM attendance.daily_records
+         WHERE company_id = $5
+           AND employee_user_id = $6
+           AND work_date = $7::date
+           AND deleted_at IS NULL) AS daily_records,
+        (SELECT count(*)
+         FROM platform.outbox_events
+         WHERE aggregate_id = $4
+           AND event_type = 'attendance.punch.recorded') AS outbox_events`,
+      [
+        sameKey,
+        sameResults[0].json().command_id,
+        sameResults[0].json().session_id,
+        sameResults[0].json().punch_id,
+        sameResults[0].json().punch.company_id,
+        employee.user.id,
+        sameResults[0].json().day_status.work_date,
+        `attendance.punch:employee_manual_now:${sameResults[0].json().punch.company_id}`,
+      ],
     );
-    const replayOutbox = await app.store.pgPool!.query<{ count: string }>(
-      `SELECT count(*)
-       FROM platform.outbox_events
-       WHERE aggregate_id = $1
-         AND event_type = 'attendance.punch.recorded'`,
-      [sameResults[0].json().punch_id],
-    );
-    expect(replayOutbox.rows[0]?.count).toBe("1");
+    expect(sameArtifactCounts.rows[0]).toEqual({
+      platform_keys: "1",
+      commands: "1",
+      decisions: "1",
+      audit_decisions: "1",
+      evidence: "1",
+      sessions: "1",
+      punches: "1",
+      daily_records: "1",
+      outbox_events: "1",
+    });
 
     const changedKey = "attendance-idempotency-concurrent-changed-001";
     const changedHeaders = {
