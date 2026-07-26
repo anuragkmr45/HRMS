@@ -1,13 +1,28 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys, queryTimings } from "@/shared/query";
 import { attendanceApi } from "./api";
+import { employeeAttendanceContextFromSummary } from "./context";
+import { currentLocalMonth } from "./live";
 import type {
   AttendanceExportBody,
   AttendancePunchBody,
+  AttendancePunchEventType,
   AttendanceQuery,
   AttendanceRegularizationBody,
   AttendanceRegularizationDecisionBody,
 } from "./api";
+
+const employeeContextQuery = () => ({
+  month: currentLocalMonth(),
+  page: 1,
+  page_size: 50,
+});
+
+export interface ManualAttendanceMutationInput {
+  action: AttendancePunchEventType;
+  idempotencyKey: string;
+  sourceView: "attendance_page" | "dashboard";
+}
 
 export function useMyAttendanceSummary(query: AttendanceQuery = {}, enabled = true) {
   return useQuery({
@@ -16,6 +31,18 @@ export function useMyAttendanceSummary(query: AttendanceQuery = {}, enabled = tr
     enabled,
     staleTime: queryTimings.realtimeStaleMs,
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useEmployeeAttendanceContext(enabled = true) {
+  const query = employeeContextQuery();
+  return useQuery({
+    queryKey: queryKeys.list("attendance", "summary-my", query),
+    queryFn: () => attendanceApi.mySummary(query),
+    select: employeeAttendanceContextFromSummary,
+    enabled,
+    staleTime: queryTimings.realtimeStaleMs,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -96,6 +123,22 @@ export function useAttendancePunchMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: AttendancePunchBody) => attendanceApi.punch(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.domain("attendance") }),
+  });
+}
+
+export function useManualAttendanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, idempotencyKey, sourceView }: ManualAttendanceMutationInput) =>
+      attendanceApi.punch(
+        {
+          event_type: action,
+          source: "web",
+          metadata: { source_view: sourceView },
+        },
+        { idempotencyKey },
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.domain("attendance") }),
   });
 }
