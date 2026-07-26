@@ -42,11 +42,16 @@ export interface AttendanceExportBody extends ApiRecord {
   format?: "csv" | "xlsx" | "json";
 }
 
+export interface AttendanceCommandOptions {
+  idempotencyKey?: string;
+}
+
 export const attendanceApi = {
-  punch(input: AttendancePunchBody) {
+  punch(input: AttendancePunchBody, options: AttendanceCommandOptions = {}) {
     return apiRequest<ApiRecord>("/api/v1/attendance/punches", {
       method: "POST",
       body: input,
+      headers: options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : undefined,
     });
   },
   listMyPunches(query: AttendanceQuery = {}) {
