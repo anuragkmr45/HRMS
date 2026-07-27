@@ -969,7 +969,10 @@ export const attendanceGeofenceVersions = attendance.table(
     createdByUserId: uuid("created_by_user_id"),
     createdAt,
     publishedByUserId: uuid("published_by_user_id"),
-    publishedAt: timestamp("published_at", { withTimezone: true })
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    canonicalHash: text("canonical_hash")
   },
   (table) => [
     uniqueIndex("attendance_geofence_versions_company_geofence_number_uq")
@@ -978,6 +981,9 @@ export const attendanceGeofenceVersions = attendance.table(
       .on(table.id, table.companyId, table.geofenceId),
     index("attendance_geofence_versions_geofence_status_idx")
       .on(table.companyId, table.geofenceId, table.versionStatus, table.versionNumber),
+    index("attendance_geofence_versions_effective_lookup_idx")
+      .on(table.companyId, table.geofenceId, table.versionStatus, table.effectiveFrom, table.effectiveUntil)
+      .where(sql`${table.versionStatus} = 'published'`),
     index("attendance_geofence_versions_published_circles_gist_idx")
       .using("gist", sql`(${table.shape}::geography)`)
       .where(sql`${table.shapeType} = 'circle' AND ${table.versionStatus} = 'published'`),
@@ -988,7 +994,8 @@ export const attendanceGeofenceVersions = attendance.table(
     check("attendance_geofence_versions_status_check", sql`${table.versionStatus} IN ('draft', 'published')`),
     check("attendance_geofence_versions_shape_type_check", sql`${table.shapeType} IN ('circle', 'polygon')`),
     check("attendance_geofence_versions_shape_metadata_object_check", sql`jsonb_typeof(${table.shapeMetadata}) = 'object'`),
-    check("attendance_geofence_versions_publication_fields_check", sql`(${table.versionStatus} = 'draft' AND ${table.publishedAt} IS NULL AND ${table.publishedByUserId} IS NULL) OR (${table.versionStatus} = 'published' AND ${table.publishedAt} IS NOT NULL AND ${table.publishedByUserId} IS NOT NULL)`),
+    check("attendance_geofence_versions_publication_fields_check", sql`(${table.versionStatus} = 'draft' AND ${table.publishedAt} IS NULL AND ${table.publishedByUserId} IS NULL AND ${table.canonicalHash} IS NULL) OR (${table.versionStatus} = 'published' AND ${table.publishedAt} IS NOT NULL AND ${table.publishedByUserId} IS NOT NULL AND ${table.effectiveFrom} IS NOT NULL AND ${table.canonicalHash} ~ '^[0-9a-f]{64}$')`),
+    check("attendance_geofence_versions_effective_period_check", sql`${table.effectiveUntil} IS NULL OR (${table.effectiveFrom} IS NOT NULL AND ${table.effectiveFrom} < ${table.effectiveUntil})`),
     check("attendance_geofence_versions_spatial_shape_check", sql`NOT ST_IsEmpty(${table.shape}) AND ST_SRID(${table.shape}) = 4326 AND ST_CoordDim(${table.shape}) = 2 AND ((${table.shapeType} = 'circle' AND ST_GeometryType(${table.shape}) = 'ST_Point' AND ${table.circleRadiusMeters} IS NOT NULL AND ${table.circleRadiusMeters} > 0 AND CASE WHEN ST_GeometryType(${table.shape}) = 'ST_Point' THEN ST_X(${table.shape}) BETWEEN -180 AND 180 AND ST_Y(${table.shape}) BETWEEN -90 AND 90 ELSE false END) OR (${table.shapeType} = 'polygon' AND ST_GeometryType(${table.shape}) IN ('ST_Polygon', 'ST_MultiPolygon') AND ${table.circleRadiusMeters} IS NULL AND ST_IsValid(${table.shape})))`),
     foreignKey({
       name: "attendance_geofence_versions_geofence_company_fk",

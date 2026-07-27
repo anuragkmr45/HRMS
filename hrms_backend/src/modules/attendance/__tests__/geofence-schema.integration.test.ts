@@ -92,6 +92,8 @@ async function createCircleVersion(
     status: "draft" | "published";
     longitude: number;
     latitude: number;
+    effectiveFrom: string;
+    effectiveUntil: string | null;
   }> = {},
 ): Promise<VersionFixture> {
   const geofence =
@@ -103,27 +105,48 @@ async function createCircleVersion(
         }
       : await createGeofence(app, { companyId: input.companyId });
   const published = input.status === "published";
+  const versionNumber = input.versionNumber ?? 1;
+  const effectiveFrom =
+    input.effectiveFrom ??
+    `2026-01-${String(versionNumber).padStart(2, "0")}T00:00:00.000Z`;
+  const effectiveUntil =
+    input.effectiveUntil === undefined
+      ? `2026-01-${String(versionNumber + 1).padStart(2, "0")}T00:00:00.000Z`
+      : input.effectiveUntil;
   const result = await app.store.pgPool!.query<{ id: string }>(
     `INSERT INTO attendance.geofence_versions (
       company_id, geofence_id, version_number, version_status,
       shape_type, shape, circle_radius_meters, shape_metadata,
-      created_by_user_id, published_by_user_id, published_at
+      created_by_user_id, published_by_user_id, published_at,
+      effective_from, effective_until, canonical_hash
     ) VALUES (
       $1, $2, $3, $4, 'circle',
       ST_SetSRID(ST_MakePoint($5, $6), 4326),
-      $7, '{}'::jsonb, $8, $9, ${published ? "now()" : "NULL"}
+      $7, '{}'::jsonb, $8, $9, ${published ? "now()" : "NULL"},
+      $10::timestamptz, $11::timestamptz,
+      CASE
+        WHEN $4 = 'published'
+          THEN attendance.geofence_shape_canonical_hash(
+            'circle',
+            ST_SetSRID(ST_MakePoint($5, $6), 4326),
+            $7
+          )
+        ELSE NULL
+      END
     )
     RETURNING id`,
     [
       geofence.companyId,
       geofence.geofenceId,
-      input.versionNumber ?? 1,
+      versionNumber,
       input.status ?? "draft",
       input.longitude ?? 77.594566,
       input.latitude ?? 12.971599,
       input.radius ?? 100,
       randomUUID(),
       published ? randomUUID() : null,
+      published ? effectiveFrom : null,
+      published ? effectiveUntil : null,
     ],
   );
   const versionId = result.rows[0]?.id;
@@ -140,6 +163,8 @@ async function createPolygonVersion(
     versionNumber: number;
     status: "draft" | "published";
     wkt: string;
+    effectiveFrom: string;
+    effectiveUntil: string | null;
   }> = {},
 ): Promise<VersionFixture> {
   const geofence =
@@ -151,26 +176,49 @@ async function createPolygonVersion(
         }
       : await createGeofence(app, { companyId: input.companyId });
   const published = input.status === "published";
+  const versionNumber = input.versionNumber ?? 1;
+  const effectiveFrom =
+    input.effectiveFrom ??
+    `2026-01-${String(versionNumber).padStart(2, "0")}T00:00:00.000Z`;
+  const effectiveUntil =
+    input.effectiveUntil === undefined
+      ? `2026-01-${String(versionNumber + 1).padStart(2, "0")}T00:00:00.000Z`
+      : input.effectiveUntil;
+  const wkt =
+    input.wkt ??
+    "POLYGON((77.594 12.971,77.596 12.971,77.596 12.973,77.594 12.973,77.594 12.971))";
   const result = await app.store.pgPool!.query<{ id: string }>(
     `INSERT INTO attendance.geofence_versions (
       company_id, geofence_id, version_number, version_status,
       shape_type, shape, shape_metadata,
-      created_by_user_id, published_by_user_id, published_at
+      created_by_user_id, published_by_user_id, published_at,
+      effective_from, effective_until, canonical_hash
     ) VALUES (
       $1, $2, $3, $4, 'polygon',
       ST_GeomFromText($5, 4326),
-      '{}'::jsonb, $6, $7, ${published ? "now()" : "NULL"}
+      '{}'::jsonb, $6, $7, ${published ? "now()" : "NULL"},
+      $8::timestamptz, $9::timestamptz,
+      CASE
+        WHEN $4 = 'published'
+          THEN attendance.geofence_shape_canonical_hash(
+            'polygon',
+            ST_GeomFromText($5, 4326),
+            NULL
+          )
+        ELSE NULL
+      END
     )
     RETURNING id`,
     [
       geofence.companyId,
       geofence.geofenceId,
-      input.versionNumber ?? 1,
+      versionNumber,
       input.status ?? "draft",
-      input.wkt ??
-        "POLYGON((77.594 12.971,77.596 12.971,77.596 12.973,77.594 12.973,77.594 12.971))",
+      wkt,
       randomUUID(),
       published ? randomUUID() : null,
+      published ? effectiveFrom : null,
+      published ? effectiveUntil : null,
     ],
   );
   const versionId = result.rows[0]?.id;
@@ -277,6 +325,124 @@ describe("PostgreSQL geofence schema", () => {
     await expect(
       createCircleVersion(app, { versionNumber: 1 }),
     ).resolves.toBeTruthy();
+  });
+
+  it("backfills a pre-GEO-S12-003 published row while preserving immutability", async () => {
+    const geofence = await createGeofence(app);
+    const client = await app.store.pgPool!.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `ALTER TABLE attendance.geofence_versions
+           DROP CONSTRAINT attendance_geofence_versions_publication_fields_check,
+           DROP CONSTRAINT attendance_geofence_versions_effective_period_check`,
+      );
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO attendance.geofence_versions (
+          company_id, geofence_id, version_number, version_status,
+          shape_type, shape, circle_radius_meters, shape_metadata,
+          created_by_user_id, created_at, published_by_user_id, published_at
+        ) VALUES (
+          $1, $2, 42, 'published',
+          'circle', ST_SetSRID(ST_MakePoint(77.594566, 12.971599), 4326),
+          100, '{"source":"pre-0043"}'::jsonb,
+          $3, '2026-09-01T00:00:00.000Z',
+          $4, '2026-10-01T00:00:00.000Z'
+        )
+        RETURNING id`,
+        [geofence.companyId, geofence.geofenceId, randomUUID(), randomUUID()],
+      );
+      const versionId = inserted.rows[0]!.id;
+
+      await client.query("LOCK TABLE attendance.geofence_versions IN ACCESS EXCLUSIVE MODE");
+      await client.query(
+        `ALTER TABLE attendance.geofence_versions
+           DISABLE TRIGGER attendance_geofence_versions_immutability_trg`,
+      );
+      await client.query(
+        `UPDATE attendance.geofence_versions
+         SET effective_from = COALESCE(effective_from, published_at, created_at),
+             canonical_hash = attendance.geofence_shape_canonical_hash(
+               shape_type,
+               shape,
+               circle_radius_meters
+             )
+         WHERE version_status = 'published'
+           AND (effective_from IS NULL OR canonical_hash IS NULL)`,
+      );
+      await client.query(
+        `ALTER TABLE attendance.geofence_versions
+           ENABLE TRIGGER attendance_geofence_versions_immutability_trg`,
+      );
+
+      const backfilled = await client.query<{
+        version_status: string;
+        effective_from: Date | null;
+        canonical_hash: string | null;
+        shape_wkt: string;
+        circle_radius_meters: string;
+        shape_metadata: unknown;
+        published_by_user_id: string | null;
+        published_at: Date | null;
+        trigger_enabled: string;
+      }>(
+        `SELECT version.version_status, version.effective_from,
+            version.canonical_hash, ST_AsText(version.shape) AS shape_wkt,
+            version.circle_radius_meters::text, version.shape_metadata,
+            version.published_by_user_id, version.published_at,
+            trigger.tgenabled AS trigger_enabled
+         FROM attendance.geofence_versions version
+         CROSS JOIN pg_trigger trigger
+         WHERE version.id = $1
+           AND trigger.tgrelid = 'attendance.geofence_versions'::regclass
+           AND trigger.tgname = 'attendance_geofence_versions_immutability_trg'`,
+        [versionId],
+      );
+      expect(backfilled.rows[0]).toMatchObject({
+        version_status: "published",
+        canonical_hash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        shape_wkt: "POINT(77.594566 12.971599)",
+        circle_radius_meters: "100.00",
+        shape_metadata: { source: "pre-0043" },
+        trigger_enabled: "O",
+      });
+      expect(backfilled.rows[0]?.effective_from?.toISOString()).toBe(
+        "2026-10-01T00:00:00.000Z",
+      );
+      expect(backfilled.rows[0]?.published_at?.toISOString()).toBe(
+        "2026-10-01T00:00:00.000Z",
+      );
+      expect(backfilled.rows[0]?.published_by_user_id).toBeTruthy();
+
+      await client.query("SAVEPOINT published_update_check");
+      await expect(
+        client.query(
+          `UPDATE attendance.geofence_versions
+           SET shape_metadata = '{"tamper":true}'::jsonb
+           WHERE id = $1`,
+          [versionId],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "attendance_geofence_versions_published_immutable",
+      });
+      await client.query("ROLLBACK TO SAVEPOINT published_update_check");
+
+      await client.query("SAVEPOINT published_delete_check");
+      await expect(
+        client.query(
+          "DELETE FROM attendance.geofence_versions WHERE id = $1",
+          [versionId],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "attendance_geofence_versions_published_immutable",
+      });
+      await client.query("ROLLBACK TO SAVEPOINT published_delete_check");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
   });
 
   it("validates timezone names and JSON object metadata", async () => {
@@ -478,6 +644,11 @@ describe("PostgreSQL geofence schema", () => {
       app.store.pgPool!.query(
         `UPDATE attendance.geofence_versions
          SET version_status = 'published',
+             effective_from = '2026-02-01T00:00:00.000Z',
+             effective_until = '2026-02-02T00:00:00.000Z',
+             canonical_hash = attendance.geofence_shape_canonical_hash(
+               shape_type, shape, circle_radius_meters
+             ),
              published_at = now(),
              published_by_user_id = $2
          WHERE id = $1`,
@@ -490,6 +661,11 @@ describe("PostgreSQL geofence schema", () => {
       app.store.pgPool!.query(
         `UPDATE attendance.geofence_versions
          SET version_status = 'published',
+             effective_from = '2026-02-03T00:00:00.000Z',
+             effective_until = '2026-02-04T00:00:00.000Z',
+             canonical_hash = attendance.geofence_shape_canonical_hash(
+               shape_type, shape, circle_radius_meters
+             ),
              published_at = now(),
              published_by_user_id = $2,
              circle_radius_meters = 130
@@ -527,6 +703,9 @@ describe("PostgreSQL geofence schema", () => {
       app.store.pgPool!.query(
         `UPDATE attendance.geofence_versions
          SET version_status = 'draft',
+             effective_from = NULL,
+             effective_until = NULL,
+             canonical_hash = NULL,
              published_at = NULL,
              published_by_user_id = NULL
          WHERE id = $1`,
@@ -633,6 +812,11 @@ describe("PostgreSQL geofence schema", () => {
       await client.query(
         `UPDATE attendance.geofence_versions
          SET version_status = 'published',
+             effective_from = '2026-03-01T00:00:00.000Z',
+             effective_until = '2026-03-02T00:00:00.000Z',
+             canonical_hash = attendance.geofence_shape_canonical_hash(
+               shape_type, shape, circle_radius_meters
+             ),
              published_at = now(),
              published_by_user_id = $2
          WHERE id = $1`,

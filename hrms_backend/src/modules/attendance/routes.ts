@@ -6,12 +6,17 @@ import {
   attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
   attendanceRegularizationDecisionSchema,
+  isoDateTimeSchema,
   paginationQuerySchema,
 } from "#shared";
 import { unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
+const geofencePublishParamSchema = z.object({
+  geofenceId: z.uuid(),
+  versionId: z.uuid(),
+});
 const employeeParamSchema = z.object({ employeeUserId: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
@@ -45,6 +50,10 @@ const attendanceExportSchema = z.object({
   columns: z.array(z.string().min(1).max(80)).max(80).optional(),
   format: z.enum(["csv", "xlsx", "json"]).optional(),
 });
+const geofenceVersionPublishSchema = z.object({
+  effectiveFrom: isoDateTimeSchema,
+  effectiveUntil: isoDateTimeSchema.nullish(),
+}).strict();
 
 export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/punches", async (request) => {
@@ -176,6 +185,23 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       return service.decideRegularizationPostgres(request.actor, params.id, input);
     }
     return service.decideRegularization(request.actor, params.id, input);
+  });
+
+  fastify.post("/geofences/:geofenceId/versions/:versionId/publish", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = geofencePublishParamSchema.parse(request.params);
+    const input = geofenceVersionPublishSchema.parse(request.body);
+    return new AttendanceService(fastify.store).publishGeofenceVersion(
+      request.actor,
+      params.geofenceId,
+      params.versionId,
+      {
+        effectiveFrom: input.effectiveFrom,
+        effectiveUntil: input.effectiveUntil ?? null,
+      },
+    );
   });
 
   fastify.get("/exceptions", async (request) => {

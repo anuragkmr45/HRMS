@@ -58,10 +58,12 @@ import {
   assertCanCreateHistoricalCorrection,
   assertCanSeeAttendanceUser,
   assertCanUseSelfAttendance,
+  canManageAllAttendance,
   canSeeAllAttendance,
   canSeeAttendanceUser,
 } from "./policy.js";
 import { AttendanceRepository } from "./repository.js";
+import { PostgresGeofenceRepository } from "./geofence-repository.js";
 import {
   AttendanceCommandService,
   canonicalAttendanceRequestHash,
@@ -2394,6 +2396,35 @@ export class AttendanceService {
       source: input.source === "mobile" || input.source === "kiosk" ? input.source : "web",
       idempotency_key: idempotencyKey,
     });
+  }
+
+  async publishGeofenceVersion(
+    actor: AuthUser,
+    geofenceId: UUID,
+    versionId: UUID,
+    input: { effectiveFrom: string; effectiveUntil?: string | null },
+  ): Promise<Record<string, unknown>> {
+    const context = this.resolveAttendanceCompanyContext(
+      actor,
+      "attendance.geofence.publish",
+    );
+    if (!canManageAllAttendance(actor)) {
+      throw forbidden("Only HR or Admin can publish geofence versions.");
+    }
+    if (!this.store.pgPool) {
+      throw conflict("Geofence publish service is unavailable.");
+    }
+    const version = await new PostgresGeofenceRepository(
+      this.store.pgPool,
+    ).publishDraftVersion({
+      companyId: context.companyId,
+      actorUserId: actor.id,
+      geofenceId,
+      versionId,
+      effectiveFrom: input.effectiveFrom,
+      effectiveUntil: input.effectiveUntil ?? null,
+    });
+    return { version };
   }
 
   async recordManagerAssistedCurrentPunchPostgres(

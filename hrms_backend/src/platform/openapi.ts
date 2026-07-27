@@ -2147,6 +2147,62 @@ const attendanceEmployeeParamSchema = {
   additionalProperties: false
 };
 
+const attendanceGeofencePublishParamSchema = {
+  type: "object",
+  required: ["geofenceId", "versionId"],
+  properties: {
+    geofenceId: uuid("Geofence UUID"),
+    versionId: uuid("Geofence version UUID")
+  },
+  additionalProperties: false
+};
+
+const attendanceGeofencePublishBody = {
+  type: "object",
+  required: ["effectiveFrom"],
+  properties: {
+    effectiveFrom: dateTime("Inclusive effective start timestamp"),
+    effectiveUntil: { ...dateTime("Exclusive effective end timestamp"), nullable: true }
+  },
+  additionalProperties: false
+};
+
+const attendanceGeofencePublishedVersionSchema = {
+  type: "object",
+  required: [
+    "id",
+    "company_id",
+    "geofence_id",
+    "version_number",
+    "version_status",
+    "shape_type",
+    "effective_from",
+    "canonical_hash",
+    "published_at",
+    "published_by_user_id"
+  ],
+  properties: {
+    id: uuid("Geofence version UUID"),
+    company_id: uuid("Company UUID"),
+    geofence_id: uuid("Geofence UUID"),
+    version_number: { type: "integer", minimum: 1, example: 2 },
+    version_status: { type: "string", enum: ["published"], example: "published" },
+    shape_type: { type: "string", enum: ["circle", "polygon"], example: "polygon" },
+    circle_radius_meters: { type: "string", nullable: true, example: "100.00" },
+    effective_from: dateTime("Inclusive effective start timestamp"),
+    effective_until: { ...dateTime("Exclusive effective end timestamp"), nullable: true },
+    canonical_hash: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      example: "3f786850e387550fdab836ed7e6dc881de23001b"
+    },
+    published_at: dateTime("Publication timestamp"),
+    published_by_user_id: uuid("Publishing actor UUID"),
+    geometry_diagnostics: { type: "object", additionalProperties: true }
+  },
+  additionalProperties: true
+};
+
 const attendancePunchSchema = {
   type: "object",
   required: ["id", "employee_user_id", "event_type", "occurred_at", "work_date", "time"],
@@ -4442,6 +4498,21 @@ const routeDocs: Record<string, RouteSchema> = {
     "Decide attendance regularization",
     "Approves, returns, or rejects an attendance regularization request with optimistic concurrency. Reject/return require remarks and self-processing is blocked.",
     { params: idParamSchema, body: attendanceRegularizationDecisionBody, response200: { type: "object", additionalProperties: true } }
+  ),
+  "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish": operation(
+    "Attendance",
+    "Publish geofence version",
+    "Publishes an existing draft geofence version for the active company. The server validates the persisted PostGIS shape, computes the geometry-only canonical hash, enforces half-open effective periods, and updates the latest published pointer in one transaction.",
+    {
+      params: attendanceGeofencePublishParamSchema,
+      body: attendanceGeofencePublishBody,
+      response200: {
+        type: "object",
+        required: ["version"],
+        properties: { version: attendanceGeofencePublishedVersionSchema },
+        additionalProperties: true
+      }
+    }
   ),
   "GET /api/v1/attendance/exceptions": operation(
     "Attendance",

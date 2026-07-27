@@ -256,7 +256,8 @@ function isTransactionOwnedMutationRoute(routeKey: string): boolean {
     /^POST \/api\/v1\/attendance\/employees\/[^/]+\/(?:assisted-current-punches|historical-corrections)$/u.test(
       routeKey,
     ) ||
-    /^POST \/api\/v1\/attendance\/regularizations\/[^/]+\/decision$/u.test(routeKey)
+    /^POST \/api\/v1\/attendance\/regularizations\/[^/]+\/decision$/u.test(routeKey) ||
+    /^POST \/api\/v1\/attendance\/geofences\/[^/]+\/versions\/[^/]+\/publish$/u.test(routeKey)
   );
 }
 
