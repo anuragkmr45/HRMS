@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 245
+Documented operations: 248
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -9118,14 +9118,15 @@ Backend-owned API group.
 
 | Field | Contract |
 |---|---|
-| Purpose | Record punch |
-| Frontend use | Record punch |
+| Purpose | Record employee manual-now punch |
+| Frontend use | Record employee manual-now punch |
 | Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
 | Roles/scope | Backend RBAC/ABAC decides access. |
 
 **Path/query parameters**
-
-No path or query parameters.
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `idempotency-key` | header | yes | string | minLength 8 |
 
 **Request body**
 
@@ -9136,10 +9137,111 @@ Required: yes
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
-| `occurred_at` | string<date-time> | optional | Punch timestamp |
 | `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
-| `source` | string enum("web", "mobile", "kiosk", "admin") | optional | default "web" |
+| `source` | string enum("web", "mobile", "kiosk") | optional | default "web" |
 | `metadata` | object | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches
+
+| Field | Contract |
+|---|---|
+| Purpose | Record manager-assisted current punch |
+| Frontend use | Record manager-assisted current punch |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `employeeUserId` | path | yes | string<uuid> | - |
+| `idempotency-key` | header | yes | string | minLength 8 |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
+| `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
+| `metadata` | object | optional | - |
+| `reason` | string | optional | minLength 3 |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections
+
+| Field | Contract |
+|---|---|
+| Purpose | Record historical attendance correction |
+| Frontend use | Record historical attendance correction |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `employeeUserId` | path | yes | string<uuid> | - |
+| `idempotency-key` | header | yes | string | minLength 8 |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
+| `occurred_at` | string<date-time> | required | Past effective occurrence time |
+| `reason` | string | required | minLength 3 |
+| `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
+| `metadata` | object | optional | - |
+| `linked_regularization_request_id` | string<uuid> | optional | Linked regularization request UUID |
 
 **Responses**
 | Status | Meaning |
@@ -9475,7 +9577,8 @@ Required: yes
 |---|---|---|---|
 | `work_date` | string<date> | required | Regularization work date |
 | `reason` | string | required | minLength 3 |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | optional | Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.; minItems 1 |
+| `items` | array of unknown | optional | minItems 1 |
 
 **Responses**
 | Status | Meaning |
@@ -9495,9 +9598,11 @@ Success body highlights:
 |---|---|---|---|
 | `id` | string<uuid> | required | Regularization request UUID |
 | `employee_user_id` | string<uuid> | required | Employee user UUID |
+| `submitted_by_user_id` | string<uuid> | required | Submitting actor user UUID |
 | `work_date` | string<date> | required | Work date |
 | `reason` | string | required | - |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | required | Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations. |
+| `items` | array of object | required | - |
 | `status` | string enum("pending", "approved", "returned", "rejected") | required | - |
 | `current_approver_user_id` | string<uuid> | optional, nullable | Current approver user UUID |
 | `decision_remarks` | string | optional, nullable | - |
@@ -13717,6 +13822,38 @@ Success body highlights:
 - Display backend `message` and retain `request_id` for support.
 - Treat `401` as authentication failure and `403` as real permission denial.
 - Paginated list: send `page` and `page_size`; do not fetch unbounded lists.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+## Untagged
+
+Backend-owned API group.
+
+### GET /api/v1/locations/india
+
+| Field | Contract |
+|---|---|
+| Purpose | Backend operation |
+| Frontend use | Frontend API integration. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Default Response |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
 ## Notifications
