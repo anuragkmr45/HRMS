@@ -26,6 +26,7 @@ import {
   useAttendancePunchMutation,
   useMyAttendanceSummary,
   useTeamAttendanceSummary,
+  EmployeeRegularizationForm,
   type AttendancePunchEventType,
 } from "@/domains/attendance";
 import { currentLocalMonth, localIsoDate, liveAttendanceToday } from "@/domains/attendance/live";
@@ -442,6 +443,8 @@ function EmployeeView() {
           tone={numberValue(summary.absent) > 0 ? "destructive" : "success"}
         />
       </div>
+
+      <EmployeeRegularizationForm />
 
       <DataCard title="Late & absent history" description="Last 30 days">
         {query.isLoading ? (
