@@ -2,7 +2,9 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -34,6 +36,11 @@ const createdAt = timestamp("created_at", { withTimezone: true }).notNull().defa
 const updatedAt = timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 const deletedAt = timestamp("deleted_at", { withTimezone: true });
 const version = integer("version").notNull().default(1);
+const geometryShape = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return "geometry(Geometry,4326)";
+  }
+});
 
 export const departments = core.table(
   "departments",
@@ -865,6 +872,129 @@ export const attendanceShiftInstances = attendance.table(
     index("attendance_shift_instances_template_version_idx")
       .on(table.companyId, table.templateVersionId, table.workDate)
       .where(sql`${table.deletedAt} IS NULL`)
+  ]
+);
+
+export const attendanceWorkSites = attendance.table(
+  "work_sites",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    siteCode: text("site_code").notNull(),
+    name: text("name").notNull(),
+    siteType: text("site_type").notNull(),
+    timezone: text("timezone").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdByUserId: uuid("created_by_user_id"),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    uniqueIndex("attendance_work_sites_company_code_uq")
+      .on(table.companyId, table.siteCode)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_work_sites_company_active_name_idx")
+      .on(table.companyId, table.isActive, table.name)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_work_sites_company_type_idx")
+      .on(table.companyId, table.siteType, table.name)
+      .where(sql`${table.deletedAt} IS NULL`),
+    uniqueIndex("attendance_work_sites_id_company_uq").on(table.id, table.companyId),
+    check("attendance_work_sites_site_code_not_blank_check", sql`btrim(${table.siteCode}) <> ''`),
+    check("attendance_work_sites_name_not_blank_check", sql`btrim(${table.name}) <> ''`),
+    check("attendance_work_sites_site_type_not_blank_check", sql`btrim(${table.siteType}) <> ''`),
+    check("attendance_work_sites_timezone_not_blank_check", sql`btrim(${table.timezone}) <> ''`),
+    check("attendance_work_sites_metadata_object_check", sql`jsonb_typeof(${table.metadata}) = 'object'`),
+    check("attendance_work_sites_version_positive_check", sql`${table.version} > 0`)
+  ]
+);
+
+export const attendanceGeofences = attendance.table(
+  "geofences",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    workSiteId: uuid("work_site_id").notNull(),
+    geofenceCode: text("geofence_code").notNull(),
+    name: text("name").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    currentPublishedVersionId: uuid("current_published_version_id"),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdByUserId: uuid("created_by_user_id"),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt,
+    updatedAt,
+    deletedAt,
+    version
+  },
+  (table) => [
+    uniqueIndex("attendance_geofences_site_code_uq")
+      .on(table.companyId, table.workSiteId, table.geofenceCode)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_geofences_company_site_active_idx")
+      .on(table.companyId, table.workSiteId, table.isActive, table.name)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("attendance_geofences_current_version_idx")
+      .on(table.companyId, table.currentPublishedVersionId)
+      .where(sql`${table.currentPublishedVersionId} IS NOT NULL AND ${table.deletedAt} IS NULL`),
+    uniqueIndex("attendance_geofences_id_company_uq").on(table.id, table.companyId),
+    check("attendance_geofences_code_not_blank_check", sql`btrim(${table.geofenceCode}) <> ''`),
+    check("attendance_geofences_name_not_blank_check", sql`btrim(${table.name}) <> ''`),
+    check("attendance_geofences_metadata_object_check", sql`jsonb_typeof(${table.metadata}) = 'object'`),
+    check("attendance_geofences_version_positive_check", sql`${table.version} > 0`),
+    foreignKey({
+      name: "attendance_geofences_work_site_company_fk",
+      columns: [table.workSiteId, table.companyId],
+      foreignColumns: [attendanceWorkSites.id, attendanceWorkSites.companyId]
+    }).onUpdate("restrict").onDelete("restrict")
+  ]
+);
+
+export const attendanceGeofenceVersions = attendance.table(
+  "geofence_versions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    geofenceId: uuid("geofence_id").notNull(),
+    versionNumber: integer("version_number").notNull(),
+    versionStatus: text("version_status").notNull().default("draft"),
+    shapeType: text("shape_type").notNull(),
+    shape: geometryShape("shape").notNull(),
+    circleRadiusMeters: numeric("circle_radius_meters", { precision: 12, scale: 2 }),
+    shapeMetadata: jsonb("shape_metadata").notNull().default({}),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt,
+    publishedByUserId: uuid("published_by_user_id"),
+    publishedAt: timestamp("published_at", { withTimezone: true })
+  },
+  (table) => [
+    uniqueIndex("attendance_geofence_versions_company_geofence_number_uq")
+      .on(table.companyId, table.geofenceId, table.versionNumber),
+    uniqueIndex("attendance_geofence_versions_id_company_geofence_uq")
+      .on(table.id, table.companyId, table.geofenceId),
+    index("attendance_geofence_versions_geofence_status_idx")
+      .on(table.companyId, table.geofenceId, table.versionStatus, table.versionNumber),
+    index("attendance_geofence_versions_published_circles_gist_idx")
+      .using("gist", sql`(${table.shape}::geography)`)
+      .where(sql`${table.shapeType} = 'circle' AND ${table.versionStatus} = 'published'`),
+    index("attendance_geofence_versions_published_polygons_gist_idx")
+      .using("gist", table.shape)
+      .where(sql`${table.shapeType} = 'polygon' AND ${table.versionStatus} = 'published'`),
+    check("attendance_geofence_versions_version_number_check", sql`${table.versionNumber} > 0`),
+    check("attendance_geofence_versions_status_check", sql`${table.versionStatus} IN ('draft', 'published')`),
+    check("attendance_geofence_versions_shape_type_check", sql`${table.shapeType} IN ('circle', 'polygon')`),
+    check("attendance_geofence_versions_shape_metadata_object_check", sql`jsonb_typeof(${table.shapeMetadata}) = 'object'`),
+    check("attendance_geofence_versions_publication_fields_check", sql`(${table.versionStatus} = 'draft' AND ${table.publishedAt} IS NULL AND ${table.publishedByUserId} IS NULL) OR (${table.versionStatus} = 'published' AND ${table.publishedAt} IS NOT NULL AND ${table.publishedByUserId} IS NOT NULL)`),
+    check("attendance_geofence_versions_spatial_shape_check", sql`NOT ST_IsEmpty(${table.shape}) AND ST_SRID(${table.shape}) = 4326 AND ST_CoordDim(${table.shape}) = 2 AND ((${table.shapeType} = 'circle' AND ST_GeometryType(${table.shape}) = 'ST_Point' AND ${table.circleRadiusMeters} IS NOT NULL AND ${table.circleRadiusMeters} > 0 AND CASE WHEN ST_GeometryType(${table.shape}) = 'ST_Point' THEN ST_X(${table.shape}) BETWEEN -180 AND 180 AND ST_Y(${table.shape}) BETWEEN -90 AND 90 ELSE false END) OR (${table.shapeType} = 'polygon' AND ST_GeometryType(${table.shape}) IN ('ST_Polygon', 'ST_MultiPolygon') AND ${table.circleRadiusMeters} IS NULL AND ST_IsValid(${table.shape})))`),
+    foreignKey({
+      name: "attendance_geofence_versions_geofence_company_fk",
+      columns: [table.geofenceId, table.companyId],
+      foreignColumns: [attendanceGeofences.id, attendanceGeofences.companyId]
+    }).onUpdate("restrict").onDelete("restrict")
   ]
 );
 
@@ -1879,6 +2009,9 @@ export const schema = {
   attendanceShiftTemplateVersions,
   attendanceShiftAssignments,
   attendanceShiftInstances,
+  attendanceWorkSites,
+  attendanceGeofences,
+  attendanceGeofenceVersions,
   expenseTickets,
   expenseLineItems,
   expenseApprovals,
