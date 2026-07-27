@@ -18,6 +18,7 @@ import {
 import type { Role } from "@/lib/mock/roles";
 import {
   EmployeeManualAttendanceWidget,
+  EmployeeRegularizationForm,
   useMyAttendanceSummary,
   useTeamAttendanceSummary,
 } from "@/domains/attendance";
@@ -279,6 +280,8 @@ function EmployeeView() {
           tone={numberValue(summary.absent) > 0 ? "destructive" : "success"}
         />
       </div>
+
+      <EmployeeRegularizationForm />
 
       <DataCard title="Late & absent history" description="Last 30 days">
         {query.isError ? (
