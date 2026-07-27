@@ -1,5 +1,5 @@
-import type { AuthUser, CoreUser, ExpenseTicket, LeaveRequest, TimesheetSubmission, UUID, WfhRequest } from "#shared";
-import { AssetStatuses, AttendanceDayStatuses, EmploymentStatuses, ExpenseStatuses, LeaveRequestStatuses, Roles, TimesheetStatuses } from "#shared";
+import type { AttendanceDayRecord, AuthUser, CoreUser, ExpenseTicket, LeaveRequest, TimesheetSubmission, UUID, WfhRequest } from "#shared";
+import { AssetStatuses, AttendanceEvidenceStates, AttendancePresenceStates, AttendancePunctualityStates, EmploymentStatuses, ExpenseStatuses, LeaveRequestStatuses, Roles, TimesheetStatuses } from "#shared";
 import type { MemoryDataStore, WorkSegment } from "../../platform/data-store.js";
 import { nowIso } from "../../platform/data-store.js";
 
@@ -281,12 +281,18 @@ export class DashboardService {
     return requests.filter((request) => visibleUserIds.has(request.employee_user_id) || request.current_approver_user_id === actor.id);
   }
 
-  private attendanceExceptionCount(records: Array<{ exception_type: string | null; status: string }>): number {
+  private attendanceExceptionCount(
+    records: Array<Pick<AttendanceDayRecord, "exception_type" | "evidence_state" | "presence_state" | "punctuality_state">>,
+  ): number {
     return records.filter(
       (record) =>
         record.exception_type ||
-        record.status === AttendanceDayStatuses.Absent ||
-        record.status === AttendanceDayStatuses.Late
+        record.evidence_state === AttendanceEvidenceStates.Missing ||
+        record.evidence_state === AttendanceEvidenceStates.Partial ||
+        record.evidence_state === AttendanceEvidenceStates.Disputed ||
+        record.presence_state === AttendancePresenceStates.Absent ||
+        record.punctuality_state === AttendancePunctualityStates.Late ||
+        record.punctuality_state === AttendancePunctualityStates.LateAndEarlyDeparture
     ).length;
   }
 
