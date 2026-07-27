@@ -16,7 +16,7 @@ function restoreDatabaseUrl(): void {
 describe("expanded expense reports", () => {
   let app: FastifyInstance;
 
-  beforeEach(async () => {
+  beforeEach(async () => { 
     app = await buildRealApp();
     await app.ready();
   });
