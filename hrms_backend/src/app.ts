@@ -245,6 +245,21 @@ const domainMutationPrefixes: Array<{ prefix: string; domain: PersistenceDomain 
   { prefix: "/api/v1/webhooks", domain: "platform" }
 ];
 
+// This command owns its PostgreSQL transaction (including outbox).  Keeping
+// this list exact prevents accidentally bypassing persistence for unmigrated
+// attendance mutations such as regularization.
+const transactionOwnedMutationRoutes = new Set(["POST /api/v1/attendance/punches"]);
+
+function isTransactionOwnedMutationRoute(routeKey: string): boolean {
+  return (
+    transactionOwnedMutationRoutes.has(routeKey) ||
+    /^POST \/api\/v1\/attendance\/employees\/[^/]+\/(?:assisted-current-punches|historical-corrections)$/u.test(
+      routeKey,
+    ) ||
+    /^POST \/api\/v1\/attendance\/regularizations\/[^/]+\/decision$/u.test(routeKey)
+  );
+}
+
 function persistenceFlushTarget(method: string, url: string, statusCode: number): PersistenceFlushTarget {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) {
     return { kind: "none" };
@@ -255,6 +270,9 @@ function persistenceFlushTarget(method: string, url: string, statusCode: number)
   const path = url.split("?")[0] ?? url;
   const routeKey = `${method.toUpperCase()} ${path}`;
   if (sessionOnlyMutationRoutes.has(routeKey)) {
+    return { kind: "none" };
+  }
+  if (isTransactionOwnedMutationRoute(routeKey)) {
     return { kind: "none" };
   }
   if (authOnlyMutationRoutes.has(routeKey)) {

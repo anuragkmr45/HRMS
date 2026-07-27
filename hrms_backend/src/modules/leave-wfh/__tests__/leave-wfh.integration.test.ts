@@ -4,6 +4,8 @@ import type { FastifyInstance } from "fastify";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
+const originalDatabaseUrl = process.env.DATABASE_URL;
+
 describe("leave / WFH / holidays", () => {
   let app: FastifyInstance;
 
@@ -13,7 +15,15 @@ describe("leave / WFH / holidays", () => {
   });
 
   afterEach(async () => {
-    await app?.close();
+    try {
+      await app?.close();
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+    }
   });
 
   it("submits leave, approves with manager scope, updates balances and attendance", async () => {
@@ -106,7 +116,14 @@ describe("leave / WFH / holidays", () => {
     });
     expect(calendar.statusCode).toBe(200);
     const leaveDay = calendar.json().calendar_days.find((item: { work_date: string }) => item.work_date === "2026-05-26");
-    expect(leaveDay).toMatchObject({ status: "leave", detail: "Approved leave" });
+    expect(leaveDay).toMatchObject({
+      status: "leave",
+      day_classification: "leave",
+      presence_state: "not_applicable",
+      approval_kind: "leave",
+      approval_state: "approved",
+      detail: "Approved leave"
+    });
 
     const overlap = await app.inject({
       method: "POST",
@@ -160,6 +177,23 @@ describe("leave / WFH / holidays", () => {
     });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ previous_status: "pending_manager", next_status: "approved" });
+
+    const attendance = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/calendar/monthly?month=2026-05",
+      headers: authHeader(employee.token)
+    });
+    const wfhDay = attendance.json().calendar_days.find(
+      (item: { work_date: string }) => item.work_date === "2026-05-28"
+    );
+    expect(wfhDay).toMatchObject({
+      status: "wfh",
+      day_classification: "wfh",
+      presence_state: "not_started",
+      approval_kind: "wfh",
+      approval_state: "approved",
+      work_seconds: 0
+    });
 
     const monitor = await app.inject({
       method: "GET",
