@@ -118,7 +118,7 @@ export const workflowKeyParamSchema = z.object({
   workflow_key: z.enum(AdminWorkflowKeys)
 });
 
-const policyConfigValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const policyConfigValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.string())]);
 
 export const adminPolicyUpdateSchema = z.object({
   label: z.string().min(2).max(160).optional(),

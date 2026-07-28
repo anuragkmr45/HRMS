@@ -6,7 +6,10 @@ import type {
   AssetRecord,
   AttendanceDayRecord,
   AttendancePunch,
+  AttendanceRegularizationAction,
+  AttendanceRegularizationCorrectionApplication,
   AttendanceRegularizationRequest,
+  AttendanceRegularizationRequestItem,
   CoreUser,
   Department,
   Designation,
@@ -44,6 +47,7 @@ import type {
   AdminSecuritySettingsRecord,
   AdminWorkflowConfigRecord,
   TimesheetSubmission,
+  UUID,
   WfhRequest
 } from "#shared";
 import {
@@ -73,6 +77,7 @@ import {
 } from "./data-store.js";
 import type { EmailDeliveryRecord, EmailEventRecord } from "./email/types.js";
 import { CloudinaryObjectStorage } from "./object-storage.js";
+import { normalizeAttendancePolicyConfig } from "../modules/attendance/policy-config.js";
 
 function optionalSet(values: readonly string[] | undefined): ReadonlySet<string> | undefined {
   return values?.length ? new Set(values) : undefined;
@@ -136,6 +141,25 @@ const resetTables = [
   "leave_wfh.holidays",
   "leave_wfh.wfh_requests",
   "leave_wfh.leave_requests",
+  "attendance.shift_instances",
+  "attendance.shift_assignments",
+  "attendance.shift_template_versions",
+  "attendance.shift_templates",
+  "attendance.policy_assignments",
+  "attendance.policy_versions",
+  "attendance.policies",
+  "attendance.break_segments",
+  "attendance.employee_command_states",
+  "attendance.command_decisions",
+  "attendance.command_executions",
+  "attendance.decision_reasons",
+  "attendance.attendance_decisions",
+  "attendance.location_evidence",
+  "attendance.attendance_events",
+  "attendance.sessions",
+  "attendance.regularization_correction_applications",
+  "attendance.regularization_actions",
+  "attendance.regularization_request_items",
   "attendance.regularization_requests",
   "attendance.daily_records",
   "attendance.punch_events",
@@ -285,6 +309,8 @@ function copyData(target: DataStore, source: DataStore): void {
   target.attendancePunches = source.attendancePunches;
   target.attendanceDayRecords = source.attendanceDayRecords;
   target.attendanceRegularizations = source.attendanceRegularizations;
+  target.attendanceRegularizationActions = source.attendanceRegularizationActions;
+  target.attendanceRegularizationCorrectionApplications = source.attendanceRegularizationCorrectionApplications;
   target.leaveRequests = source.leaveRequests;
   target.wfhRequests = source.wfhRequests;
   target.holidays = source.holidays;
@@ -319,7 +345,12 @@ function migrationSql(): string {
 export async function resetPostgresDatabase(databaseUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
+  let schemaLockAcquired = false;
   try {
+    await client.query(
+      "SELECT pg_advisory_lock(hashtext('hrms_postgres_schema_reset'))",
+    );
+    schemaLockAcquired = true;
     await client.query(migrationSql());
     await client.query("BEGIN");
     await client.query(`TRUNCATE ${resetTables.join(", ")} RESTART IDENTITY`);
@@ -328,6 +359,11 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
+    if (schemaLockAcquired) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext('hrms_postgres_schema_reset'))")
+        .catch(() => undefined);
+    }
     client.release();
     await pool.end();
   }
@@ -436,6 +472,8 @@ class PostgresPersistence {
       loaded.attendancePunches = await this.loadAttendancePunches(client);
       loaded.attendanceDayRecords = await this.loadAttendanceDayRecords(client);
       loaded.attendanceRegularizations = await this.loadAttendanceRegularizations(client);
+      loaded.attendanceRegularizationActions = await this.loadAttendanceRegularizationActions(client);
+      loaded.attendanceRegularizationCorrectionApplications = await this.loadAttendanceRegularizationCorrectionApplications(client);
       loaded.leaveRequests = await this.loadLeaveRequests(client);
       loaded.wfhRequests = await this.loadWfhRequests(client);
       loaded.holidays = await this.loadHolidays(client);
@@ -1829,11 +1867,15 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM attendance.punch_events ORDER BY occurred_at, id");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      actor_user_id: row.actor_user_id ?? row.employee_user_id,
       event_type: row.event_type,
       occurred_at: asIso(row.occurred_at),
       work_mode: row.work_mode,
       source: row.source,
+      origin: row.origin ?? "employee_manual_now",
+      regularization_request_id: row.regularization_request_id ?? null,
       metadata: json(row.metadata),
       created_at: asIso(row.created_at),
       deleted_at: asIsoOrNull(row.deleted_at)
@@ -1844,15 +1886,28 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM attendance.daily_records ORDER BY work_date, employee_user_id");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
       work_date: asDate(row.work_date),
       status: row.status,
+      day_classification: row.day_classification,
+      presence_state: row.presence_state,
+      punctuality_state: row.punctuality_state,
+      evidence_state: row.evidence_state,
+      approval_kind: row.approval_kind,
+      approval_state: row.approval_state,
+      payroll_state: row.payroll_state,
       first_check_in: asIsoOrNull(row.first_check_in),
       last_check_out: asIsoOrNull(row.last_check_out),
       work_minutes: row.work_minutes,
       break_minutes: row.break_minutes,
       late_minutes: row.late_minutes,
       early_out_minutes: row.early_out_minutes,
+      work_seconds: row.work_seconds,
+      break_seconds: row.break_seconds,
+      scheduled_seconds: row.scheduled_seconds,
+      late_seconds: row.late_seconds,
+      early_departure_seconds: row.early_departure_seconds,
       work_mode: row.work_mode,
       note: row.note,
       exception_type: row.exception_type,
@@ -1865,13 +1920,40 @@ class PostgresPersistence {
   }
 
   private async loadAttendanceRegularizations(client: PoolClient): Promise<AttendanceRegularizationRequest[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.regularization_requests ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT regularization_requests.*, work_date::text AS work_date FROM attendance.regularization_requests ORDER BY created_at, id",
+    );
+    const itemRows = (await client.query("SELECT * FROM attendance.regularization_request_items ORDER BY regularization_request_id, ordinal, id")).rows;
+    const itemsByRequest = new Map<UUID, AttendanceRegularizationRequestItem[]>();
+    for (const row of itemRows) {
+      const item: AttendanceRegularizationRequestItem = {
+        id: row.id,
+        company_id: row.company_id,
+        regularization_request_id: row.regularization_request_id,
+        ordinal: row.ordinal,
+        operation: row.operation,
+        target_punch_event_id: row.target_punch_event_id,
+        event_type: row.event_type,
+        occurred_at: asIsoOrNull(row.occurred_at),
+        created_at: asIso(row.created_at),
+      };
+      const existing = itemsByRequest.get(item.regularization_request_id) ?? [];
+      existing.push(item);
+      itemsByRequest.set(item.regularization_request_id, existing);
+    }
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       employee_user_id: row.employee_user_id,
+      submitted_by_user_id: row.submitted_by_user_id ?? row.employee_user_id,
       work_date: asDate(row.work_date),
       reason: row.reason,
-      requested_punches: Array.isArray(row.requested_punches) ? row.requested_punches : [],
+      items: itemsByRequest.get(row.id) ?? [],
+      requested_punches: (itemsByRequest.get(row.id) ?? []).flatMap((item) =>
+        item.event_type && item.occurred_at
+          ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+          : [],
+      ),
       status: row.status,
       current_approver_user_id: row.current_approver_user_id,
       decision_remarks: row.decision_remarks,
@@ -1881,6 +1963,41 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at)
+    }));
+  }
+
+  private async loadAttendanceRegularizationActions(client: PoolClient): Promise<AttendanceRegularizationAction[]> {
+    const { rows } = await client.query("SELECT * FROM attendance.regularization_actions ORDER BY regularization_request_id, resulting_version, id");
+    return rows.map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      regularization_request_id: row.regularization_request_id,
+      actor_user_id: row.actor_user_id,
+      subject_employee_user_id: row.subject_employee_user_id,
+      action_kind: row.action_kind,
+      previous_state: row.previous_state,
+      resulting_state: row.resulting_state,
+      remarks: row.remarks,
+      resulting_version: row.resulting_version,
+      occurred_at: asIso(row.occurred_at),
+      migration_reconstructed: Boolean(row.migration_reconstructed),
+    }));
+  }
+
+  private async loadAttendanceRegularizationCorrectionApplications(client: PoolClient): Promise<AttendanceRegularizationCorrectionApplication[]> {
+    const { rows } = await client.query("SELECT * FROM attendance.regularization_correction_applications ORDER BY applied_at, id");
+    return rows.map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      regularization_request_id: row.regularization_request_id,
+      regularization_request_item_id: row.regularization_request_item_id,
+      regularization_action_id: row.regularization_action_id,
+      operation: row.operation,
+      target_punch_event_id: row.target_punch_event_id,
+      replacement_punch_event_id: row.replacement_punch_event_id,
+      attendance_event_id: row.attendance_event_id,
+      applied_by_user_id: row.applied_by_user_id,
+      applied_at: asIso(row.applied_at),
     }));
   }
 
@@ -1939,6 +2056,7 @@ class PostgresPersistence {
     const { rows } = await client.query("SELECT * FROM leave_wfh.holidays ORDER BY holiday_date, name");
     return rows.map((row) => ({
       id: row.id,
+      company_id: row.company_id,
       name: row.name,
       holiday_date: asDate(row.holiday_date),
       region: row.region,
@@ -2354,6 +2472,7 @@ class PostgresPersistence {
           policy.version
         ]
       );
+      await this.publishAttendanceAdminPolicyVersion(client, policy);
     }
     for (const template of this.store.adminEmailTemplates) {
       await client.query(
@@ -2693,6 +2812,117 @@ class PostgresPersistence {
     await this.flushOutbox(client);
   }
 
+  private async publishAttendanceAdminPolicyVersion(
+    client: PoolClient,
+    policy: AdminPolicyConfigRecord
+  ): Promise<void> {
+    if (policy.policy_key !== "attendance" || !policy.company_id || policy.deleted_at) {
+      return;
+    }
+    const effectiveFrom = policy.updated_at ?? policy.created_at;
+    const normalizedConfig = normalizeAttendancePolicyConfig(policy.config);
+    await client.query(
+      `INSERT INTO attendance.policies (
+          id, company_id, policy_key, name, label, status,
+          created_at, updated_at, deleted_at, version
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (id) DO UPDATE
+        SET policy_key = EXCLUDED.policy_key,
+            name = EXCLUDED.name,
+            label = EXCLUDED.label,
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at,
+            deleted_at = EXCLUDED.deleted_at,
+            version = EXCLUDED.version`,
+      [
+        policy.id,
+        policy.company_id,
+        policy.policy_key,
+        policy.policy_key,
+        policy.label,
+        policy.status === "inactive" ? "inactive" : "active",
+        policy.created_at,
+        policy.updated_at,
+        policy.deleted_at,
+        policy.version
+      ]
+    );
+
+    const openVersion = (await client.query<{ id: string; version_number: number }>(
+      `SELECT id, version_number
+        FROM attendance.policy_versions
+        WHERE company_id = $1
+          AND policy_id = $2
+          AND effective_until IS NULL
+        ORDER BY version_number DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [policy.company_id, policy.id]
+    )).rows[0];
+    if (openVersion && openVersion.version_number < policy.version) {
+      await client.query(
+        `UPDATE attendance.policy_versions
+          SET effective_until = $3
+          WHERE id = $1
+            AND company_id = $2
+            AND effective_until IS NULL`,
+        [openVersion.id, policy.company_id, effectiveFrom]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO attendance.policy_versions (
+          company_id, policy_id, version_number, effective_from, config, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5::jsonb, $4)
+        ON CONFLICT (policy_id, version_number) DO NOTHING`,
+      [
+        policy.company_id,
+        policy.id,
+        Math.max(1, policy.version),
+        effectiveFrom,
+        JSON.stringify(normalizedConfig)
+      ]
+    );
+
+    const existingAssignment = (await client.query<{ id: string }>(
+      `SELECT id
+        FROM attendance.policy_assignments
+        WHERE company_id = $1
+          AND policy_id = $2
+          AND scope_type = 'company'
+          AND scope_id IS NULL
+          AND deleted_at IS NULL
+        ORDER BY created_at
+        LIMIT 1
+        FOR UPDATE`,
+      [policy.company_id, policy.id]
+    )).rows[0];
+    const assignmentStatus = policy.status === "active" ? "active" : "inactive";
+    if (existingAssignment) {
+      await client.query(
+        `UPDATE attendance.policy_assignments
+          SET status = $3,
+              updated_at = $4,
+              version = version + 1
+          WHERE id = $1
+            AND company_id = $2`,
+        [existingAssignment.id, policy.company_id, assignmentStatus, effectiveFrom]
+      );
+      return;
+    }
+
+    await client.query(
+      `INSERT INTO attendance.policy_assignments (
+          company_id, policy_id, scope_type, scope_id, effective_from, status,
+          created_at, updated_at
+        )
+        VALUES ($1, $2, 'company', NULL, $3, $4, $3, $3)`,
+      [policy.company_id, policy.id, effectiveFrom, assignmentStatus]
+    );
+  }
+
   private async flushOutbox(client: PoolClient, aggregateIds?: ReadonlySet<string>): Promise<void> {
     for (const event of this.store.outbox) {
       if (aggregateIds && !aggregateIds.has(event.aggregate_id)) continue;
@@ -2725,6 +2955,13 @@ class PostgresPersistence {
         ]
       );
     }
+    await client.query(
+      `SELECT setval(
+         pg_get_serial_sequence('platform.outbox_events', 'id'),
+         COALESCE((SELECT max(id) FROM platform.outbox_events), 1),
+         EXISTS (SELECT 1 FROM platform.outbox_events)
+       )`,
+    );
   }
 
   private async flushExpenses(client: PoolClient): Promise<void> {
@@ -3713,24 +3950,32 @@ class PostgresPersistence {
     for (const punch of this.store.attendancePunches) {
       await client.query(
         `INSERT INTO attendance.punch_events (
-          id, employee_user_id, event_type, occurred_at, work_mode, source,
-          metadata, created_at, deleted_at
+          id, company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode, source,
+          origin, regularization_request_id, metadata, created_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         ON CONFLICT (id) DO UPDATE
-        SET event_type = EXCLUDED.event_type,
+        SET company_id = EXCLUDED.company_id,
+            event_type = EXCLUDED.event_type,
             occurred_at = EXCLUDED.occurred_at,
             work_mode = EXCLUDED.work_mode,
-            source = EXCLUDED.source,
+             source = EXCLUDED.source,
+             actor_user_id = EXCLUDED.actor_user_id,
+             origin = EXCLUDED.origin,
+             regularization_request_id = EXCLUDED.regularization_request_id,
             metadata = EXCLUDED.metadata,
             deleted_at = EXCLUDED.deleted_at`,
         [
           punch.id,
+          punch.company_id,
           punch.employee_user_id,
+          punch.actor_user_id,
           punch.event_type,
           punch.occurred_at,
           punch.work_mode,
           punch.source,
+          punch.origin,
+          punch.regularization_request_id,
           JSON.stringify(punch.metadata),
           punch.created_at,
           punch.deleted_at
@@ -3740,21 +3985,37 @@ class PostgresPersistence {
     for (const day of this.store.attendanceDayRecords) {
       await client.query(
         `INSERT INTO attendance.daily_records (
-          id, employee_user_id, work_date, status, first_check_in, last_check_out,
-          work_minutes, break_minutes, late_minutes, early_out_minutes, work_mode,
-          note, exception_type, regularization_status, version, created_at, updated_at, deleted_at
+          id, company_id, employee_user_id, work_date, status, day_classification,
+          presence_state, punctuality_state, evidence_state, approval_kind, approval_state,
+          payroll_state, first_check_in, last_check_out, work_minutes, break_minutes,
+          late_minutes, early_out_minutes, work_seconds, break_seconds, scheduled_seconds,
+          late_seconds, early_departure_seconds, work_mode, note, exception_type,
+          regularization_status, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
         ON CONFLICT (id) DO UPDATE
-        SET employee_user_id = EXCLUDED.employee_user_id,
+        SET company_id = EXCLUDED.company_id,
+            employee_user_id = EXCLUDED.employee_user_id,
             work_date = EXCLUDED.work_date,
             status = EXCLUDED.status,
+            day_classification = EXCLUDED.day_classification,
+            presence_state = EXCLUDED.presence_state,
+            punctuality_state = EXCLUDED.punctuality_state,
+            evidence_state = EXCLUDED.evidence_state,
+            approval_kind = EXCLUDED.approval_kind,
+            approval_state = EXCLUDED.approval_state,
+            payroll_state = EXCLUDED.payroll_state,
             first_check_in = EXCLUDED.first_check_in,
             last_check_out = EXCLUDED.last_check_out,
             work_minutes = EXCLUDED.work_minutes,
             break_minutes = EXCLUDED.break_minutes,
             late_minutes = EXCLUDED.late_minutes,
             early_out_minutes = EXCLUDED.early_out_minutes,
+            work_seconds = EXCLUDED.work_seconds,
+            break_seconds = EXCLUDED.break_seconds,
+            scheduled_seconds = EXCLUDED.scheduled_seconds,
+            late_seconds = EXCLUDED.late_seconds,
+            early_departure_seconds = EXCLUDED.early_departure_seconds,
             work_mode = EXCLUDED.work_mode,
             note = EXCLUDED.note,
             exception_type = EXCLUDED.exception_type,
@@ -3764,15 +4025,28 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           day.id,
+          day.company_id,
           day.employee_user_id,
           day.work_date,
           day.status,
+          day.day_classification,
+          day.presence_state,
+          day.punctuality_state,
+          day.evidence_state,
+          day.approval_kind,
+          day.approval_state,
+          day.payroll_state,
           day.first_check_in,
           day.last_check_out,
           day.work_minutes,
           day.break_minutes,
           day.late_minutes,
           day.early_out_minutes,
+          day.work_seconds,
+          day.break_seconds,
+          day.scheduled_seconds,
+          day.late_seconds,
+          day.early_departure_seconds,
           day.work_mode,
           day.note,
           day.exception_type,
@@ -3787,13 +4061,15 @@ class PostgresPersistence {
     for (const request of this.store.attendanceRegularizations) {
       await client.query(
         `INSERT INTO attendance.regularization_requests (
-          id, employee_user_id, work_date, reason, requested_punches, status,
+          id, company_id, employee_user_id, submitted_by_user_id, work_date, reason, requested_punches, status,
           current_approver_user_id, decision_remarks, decided_by_user_id,
           decided_at, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (id) DO UPDATE
-        SET reason = EXCLUDED.reason,
+        SET company_id = EXCLUDED.company_id,
+             reason = EXCLUDED.reason,
+             submitted_by_user_id = EXCLUDED.submitted_by_user_id,
             requested_punches = EXCLUDED.requested_punches,
             status = EXCLUDED.status,
             current_approver_user_id = EXCLUDED.current_approver_user_id,
@@ -3805,10 +4081,16 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           request.id,
+          request.company_id,
           request.employee_user_id,
+          request.submitted_by_user_id,
           request.work_date,
           request.reason,
-          JSON.stringify(request.requested_punches),
+          JSON.stringify(request.items.flatMap((item) =>
+            item.event_type && item.occurred_at
+              ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
+              : [],
+          )),
           request.status,
           request.current_approver_user_id,
           request.decision_remarks,
@@ -3819,6 +4101,75 @@ class PostgresPersistence {
           request.updated_at,
           request.deleted_at
         ]
+      );
+    }
+    for (const request of this.store.attendanceRegularizations) {
+      for (const item of request.items) {
+        await client.query(
+          `INSERT INTO attendance.regularization_request_items (
+             id, company_id, regularization_request_id, ordinal, operation,
+             target_punch_event_id, event_type, occurred_at, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            item.id,
+            item.company_id,
+            item.regularization_request_id,
+            item.ordinal,
+            item.operation,
+            item.target_punch_event_id,
+            item.event_type,
+            item.occurred_at,
+            item.created_at,
+          ],
+        );
+      }
+    }
+    for (const action of this.store.attendanceRegularizationActions) {
+      await client.query(
+        `INSERT INTO attendance.regularization_actions (
+           id, company_id, regularization_request_id, actor_user_id,
+           subject_employee_user_id, action_kind, previous_state, resulting_state,
+           remarks, resulting_version, occurred_at, migration_reconstructed
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (regularization_request_id, resulting_version) DO NOTHING`,
+        [
+          action.id,
+          action.company_id,
+          action.regularization_request_id,
+          action.actor_user_id,
+          action.subject_employee_user_id,
+          action.action_kind,
+          action.previous_state,
+          action.resulting_state,
+          action.remarks,
+          action.resulting_version,
+          action.occurred_at,
+          action.migration_reconstructed,
+        ],
+      );
+    }
+    for (const application of this.store.attendanceRegularizationCorrectionApplications) {
+      await client.query(
+        `INSERT INTO attendance.regularization_correction_applications (
+           id, company_id, regularization_request_id, regularization_request_item_id,
+           regularization_action_id, operation, target_punch_event_id,
+           replacement_punch_event_id, attendance_event_id, applied_by_user_id, applied_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (regularization_request_item_id) DO NOTHING`,
+        [
+          application.id,
+          application.company_id,
+          application.regularization_request_id,
+          application.regularization_request_item_id,
+          application.regularization_action_id,
+          application.operation,
+          application.target_punch_event_id,
+          application.replacement_punch_event_id,
+          application.attendance_event_id,
+          application.applied_by_user_id,
+          application.applied_at,
+        ],
       );
     }
   }
@@ -3927,9 +4278,9 @@ class PostgresPersistence {
     for (const holiday of this.store.holidays) {
       await client.query(
         `INSERT INTO leave_wfh.holidays (
-          id, name, holiday_date, region, optional, version, created_at, updated_at, deleted_at
+          id, company_id, name, holiday_date, region, optional, version, created_at, updated_at, deleted_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
         SET name = EXCLUDED.name,
             holiday_date = EXCLUDED.holiday_date,
@@ -3940,6 +4291,7 @@ class PostgresPersistence {
             deleted_at = EXCLUDED.deleted_at`,
         [
           holiday.id,
+          holiday.company_id,
           holiday.name,
           holiday.holiday_date,
           holiday.region,
