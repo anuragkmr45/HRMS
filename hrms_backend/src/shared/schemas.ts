@@ -302,6 +302,11 @@ const attendanceLocationPermissionStateValues = [
   AttendanceLocationPermissionStates.Unknown
 ] as const;
 
+const attendanceLocationFailureStateValues = [
+  AttendanceLocationPermissionStates.Denied,
+  AttendanceLocationPermissionStates.Unavailable
+] as const;
+
 const attendanceLocationProviderValues = [
   AttendanceLocationProviders.Browser,
   AttendanceLocationProviders.Device,
@@ -309,20 +314,36 @@ const attendanceLocationProviderValues = [
   AttendanceLocationProviders.Unknown
 ] as const;
 
-export const attendanceLocationEvidenceSchema = z.object({
+const attendanceCoordinateEvidenceSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   accuracy_meters: z.number().min(0),
   captured_at: isoDateTimeSchema,
   age_ms: z.number().int().min(0).optional(),
   provider: z.enum(attendanceLocationProviderValues).optional(),
-  permission_state: z.enum(attendanceLocationPermissionStateValues).default(
+  permission_state: z.enum([
+    AttendanceLocationPermissionStates.Granted,
+    AttendanceLocationPermissionStates.Unknown
+  ]).default(
     AttendanceLocationPermissionStates.Unknown
   ),
   altitude_meters: z.number().optional(),
   is_mocked: z.boolean().optional(),
   integrity_status: z.string().trim().min(1).max(80).optional()
 }).strict();
+
+const attendanceLocationFailureEvidenceSchema = z.object({
+  captured_at: isoDateTimeSchema.optional(),
+  age_ms: z.number().int().min(0).optional(),
+  provider: z.enum(attendanceLocationProviderValues).optional(),
+  permission_state: z.enum(attendanceLocationFailureStateValues),
+  integrity_status: z.string().trim().min(1).max(80).optional()
+}).strict();
+
+export const attendanceLocationEvidenceSchema = z.union([
+  attendanceCoordinateEvidenceSchema,
+  attendanceLocationFailureEvidenceSchema
+]);
 
 export type AttendanceLocationEvidenceRequest = z.infer<typeof attendanceLocationEvidenceSchema>;
 
@@ -348,6 +369,7 @@ export const attendanceAssistedCurrentPunchSchema = z.object({
   ]),
   work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  location: attendanceLocationEvidenceSchema.optional(),
   reason: z.string().trim().min(3).max(1000).optional()
 }).strict();
 

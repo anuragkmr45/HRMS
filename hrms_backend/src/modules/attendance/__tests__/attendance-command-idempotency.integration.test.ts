@@ -5,7 +5,10 @@ import { buildRealApp } from "../../../__tests__/real-infra.js";
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
-async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
+async function clearAttendanceRuntimeFixtures(
+  app: TestApp,
+  options: { includePolicyFixtures?: boolean } = {},
+): Promise<void> {
   const pool = app.store.pgPool;
 
   if (!pool) {
@@ -24,6 +27,10 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
       attendance.employee_command_states,
       attendance.break_segments,
       attendance.sessions
+      ${options.includePolicyFixtures ? `,
+      attendance.policy_assignments,
+      attendance.policy_versions,
+      attendance.policies` : ""}
     RESTART IDENTITY CASCADE
   `);
 
@@ -65,7 +72,7 @@ describe("PostgreSQL attendance command idempotency", () => {
   afterEach(async () => {
     try {
       if (app) {
-        await clearAttendanceRuntimeFixtures(app);
+        await clearAttendanceRuntimeFixtures(app, { includePolicyFixtures: true });
       }
     } finally {
       try {
@@ -657,7 +664,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       provider: "browser",
       coordinates_expire_at: null,
       location_rows: "1",
-      reason_rows: "0",
+      reason_rows: "1",
     });
     expect(row.age_ms).toBe(
       Math.max(0, row.command_at.getTime() - Date.parse(capturedAt)),
@@ -972,7 +979,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       decisions: "1",
       audit_decisions: "1",
       evidence: "1",
-      reasons: "1",
+      reasons: "2",
       platform_keys: "1",
       punch_events: "0",
       outbox_events: "0",

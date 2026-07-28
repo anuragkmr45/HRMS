@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 248
+Documented operations: 249
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2198,6 +2198,34 @@ Success body highlights:
 - Display backend `message` and retain `request_id` for support.
 - Treat `401` as authentication failure and `403` as real permission denial.
 - Paginated list: send `page` and `page_size`; do not fetch unbounded lists.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### GET /api/v1/locations/india
+
+| Field | Contract |
+|---|---|
+| Purpose | Search India location reference data |
+| Frontend use | Employee directory, hierarchy, selectors, and audit context. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/HR/Auditor broad read; other users scoped to self or own hierarchy. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Default Response |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
 ## Dashboard
@@ -9775,6 +9803,56 @@ Schema: `object`.
 - OCC mutation: send `expected_version`; on `409`, refetch latest object/version and ask the user to retry.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
+### POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish
+
+| Field | Contract |
+|---|---|
+| Purpose | Publish geofence version |
+| Frontend use | Publish geofence version |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `geofenceId` | path | yes | string<uuid> | - |
+| `versionId` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `effectiveFrom` | string<date-time> | required | Inclusive effective start timestamp |
+| `effectiveUntil` | string<date-time> | optional, nullable | Exclusive effective end timestamp |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `version` | object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
 ### GET /api/v1/attendance/exceptions
 
 | Field | Contract |
@@ -13822,38 +13900,6 @@ Success body highlights:
 - Display backend `message` and retain `request_id` for support.
 - Treat `401` as authentication failure and `403` as real permission denial.
 - Paginated list: send `page` and `page_size`; do not fetch unbounded lists.
-- Respect `429` and `Retry-After`; never build tight retry loops.
-
-## Untagged
-
-Backend-owned API group.
-
-### GET /api/v1/locations/india
-
-| Field | Contract |
-|---|---|
-| Purpose | Backend operation |
-| Frontend use | Frontend API integration. |
-| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
-| Roles/scope | Backend RBAC/ABAC decides access. |
-
-**Path/query parameters**
-
-No path or query parameters.
-
-**Request body**
-
-No request body.
-
-**Responses**
-| Status | Meaning |
-|---|---|
-| `200` | Default Response |
-
-**Frontend behavior notes**
-
-- Display backend `message` and retain `request_id` for support.
-- Treat `401` as authentication failure and `403` as real permission denial.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
 ## Notifications

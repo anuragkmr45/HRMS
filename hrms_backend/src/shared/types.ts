@@ -405,16 +405,28 @@ export interface AttendancePunch {
   deleted_at: ISODateTime | null;
 }
 
-export interface AttendanceLocationEvidenceInput {
+export type AttendanceLocationEvidenceInput =
+  | AttendanceCoordinateLocationEvidenceInput
+  | AttendanceUnavailableLocationEvidenceInput;
+
+export interface AttendanceCoordinateLocationEvidenceInput {
   latitude: number;
   longitude: number;
   accuracy_meters: number;
   captured_at: ISODateTime;
   age_ms?: number;
   provider?: AttendanceLocationProvider;
-  permission_state: AttendanceLocationPermissionState;
+  permission_state: Extract<AttendanceLocationPermissionState, "granted" | "unknown">;
   altitude_meters?: number;
   is_mocked?: boolean;
+  integrity_status?: string;
+}
+
+export interface AttendanceUnavailableLocationEvidenceInput {
+  captured_at?: ISODateTime;
+  age_ms?: number;
+  provider?: AttendanceLocationProvider;
+  permission_state: "denied" | "unavailable";
   integrity_status?: string;
 }
 

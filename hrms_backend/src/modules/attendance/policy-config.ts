@@ -1,7 +1,19 @@
 import type { UUID } from "#shared";
 
-export type AttendanceMode = "manual_only" | "geo_optional" | "geo_required";
+export const InvalidAttendanceMode = "__invalid_attendance_mode";
+export const InvalidAttendanceGeoPolicyAction = "__invalid_geo_policy_action";
+
+export type AttendanceMode =
+  | "manual_only"
+  | "geo_optional"
+  | "geo_required"
+  | "geo_preferred"
+  | typeof InvalidAttendanceMode;
 export type AttendanceApprovalMode = "disabled" | "approval_required";
+export type AttendanceGeoPolicyAction = "allow" | "deny" | "manual_fallback";
+export type NormalizedAttendanceGeoPolicyAction =
+  | AttendanceGeoPolicyAction
+  | typeof InvalidAttendanceGeoPolicyAction;
 export type AttendancePolicySource = "assignment" | "built_in";
 export type AttendanceAssignmentScopeType = "employee" | "department" | "company" | "built_in";
 
@@ -21,6 +33,10 @@ export interface NormalizedAttendancePolicyConfig {
   attendanceMode: AttendanceMode;
   fallbackApprovalMode: AttendanceApprovalMode;
   regularizationMode: AttendanceApprovalMode;
+  locationUnavailableAction: NormalizedAttendanceGeoPolicyAction;
+  permissionDeniedAction: NormalizedAttendanceGeoPolicyAction;
+  outsideFenceAction: NormalizedAttendanceGeoPolicyAction;
+  effectiveGeofenceId: UUID | null;
 }
 
 export interface EffectiveAttendancePolicy extends NormalizedAttendancePolicyConfig, Record<string, unknown> {
@@ -61,6 +77,10 @@ const defaultAttendancePolicyConfig: NormalizedAttendancePolicyConfig = {
   attendanceMode: "manual_only",
   fallbackApprovalMode: "disabled",
   regularizationMode: "approval_required",
+  locationUnavailableAction: "allow",
+  permissionDeniedAction: "allow",
+  outsideFenceAction: "allow",
+  effectiveGeofenceId: null,
 };
 
 export function normalizeAttendancePolicyConfig(
@@ -85,7 +105,7 @@ export function normalizeAttendancePolicyConfig(
     autoPunchOutEnabled: booleanConfig(config, "autoPunchOutEnabled", defaultAttendancePolicyConfig.autoPunchOutEnabled),
     autoPunchOutTime: timeConfig(config, "autoPunchOutTime", defaultAttendancePolicyConfig.autoPunchOutTime),
     allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", defaultAttendancePolicyConfig.allowOffDayPunches),
-    attendanceMode: enumConfig(config, "attendanceMode", ["manual_only", "geo_optional", "geo_required"], defaultAttendancePolicyConfig.attendanceMode),
+    attendanceMode: attendanceModeConfig(config),
     fallbackApprovalMode: enumConfig(config, "fallbackApprovalMode", ["disabled", "approval_required"], defaultAttendancePolicyConfig.fallbackApprovalMode),
     regularizationMode: enumConfig(
       config,
@@ -93,6 +113,25 @@ export function normalizeAttendancePolicyConfig(
       ["disabled", "approval_required"],
       allowRegularization ? "approval_required" : "disabled",
     ),
+    locationUnavailableAction: geoActionConfig(
+      config,
+      "locationUnavailableAction",
+      "location_unavailable_action",
+      actionDefault(config, "locationUnavailableAction", "location_unavailable_action"),
+    ),
+    permissionDeniedAction: geoActionConfig(
+      config,
+      "permissionDeniedAction",
+      "permission_denied_action",
+      actionDefault(config, "permissionDeniedAction", "permission_denied_action"),
+    ),
+    outsideFenceAction: geoActionConfig(
+      config,
+      "outsideFenceAction",
+      "outside_fence_action",
+      actionDefault(config, "outsideFenceAction", "outside_fence_action"),
+    ),
+    effectiveGeofenceId: uuidConfig(config, "effectiveGeofenceId", "effective_geofence_id"),
   };
 }
 
@@ -142,4 +181,55 @@ function enumConfig<T extends string>(
 ): T {
   const value = config[key];
   return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
+}
+
+function geoActionConfig(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+  fallback: AttendanceGeoPolicyAction,
+): NormalizedAttendanceGeoPolicyAction {
+  const value = config[camelKey] ?? config[snakeKey];
+  if (camelKey in config || snakeKey in config) {
+    return typeof value === "string" && ["allow", "deny", "manual_fallback"].includes(value)
+      ? (value as AttendanceGeoPolicyAction)
+      : InvalidAttendanceGeoPolicyAction;
+  }
+  return typeof value === "string" && ["allow", "deny", "manual_fallback"].includes(value)
+    ? (value as AttendanceGeoPolicyAction)
+    : fallback;
+}
+
+function attendanceModeConfig(config: Record<string, unknown>): AttendanceMode {
+  if (!("attendanceMode" in config)) return defaultAttendancePolicyConfig.attendanceMode;
+  const value = config["attendanceMode"];
+  return typeof value === "string" && ["manual_only", "geo_optional", "geo_required", "geo_preferred"].includes(value)
+    ? (value as AttendanceMode)
+    : InvalidAttendanceMode;
+}
+
+function actionDefault(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): AttendanceGeoPolicyAction {
+  if (camelKey in config || snakeKey in config) return "deny";
+  const mode = enumConfig(
+    config,
+    "attendanceMode",
+    ["manual_only", "geo_optional", "geo_required", "geo_preferred"],
+    defaultAttendancePolicyConfig.attendanceMode,
+  );
+  return mode === "geo_required" || mode === "geo_preferred" ? "deny" : "allow";
+}
+
+function uuidConfig(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): UUID | null {
+  const value = config[camelKey] ?? config[snakeKey];
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+    ? value
+    : null;
 }

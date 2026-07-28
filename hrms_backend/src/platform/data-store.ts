@@ -950,6 +950,10 @@ export function buildDefaultAdminPolicies(
         attendanceMode: "manual_only",
         fallbackApprovalMode: "disabled",
         regularizationMode: "approval_required",
+        locationUnavailableAction: "allow",
+        permissionDeniedAction: "allow",
+        outsideFenceAction: "allow",
+        effectiveGeofenceId: null,
       },
     },
     {

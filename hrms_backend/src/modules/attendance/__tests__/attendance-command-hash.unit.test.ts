@@ -3,7 +3,12 @@ import {
   canonicalAttendanceRequestHash,
   canonicalAttendanceResponseHash,
 } from "../command-service.js";
+import type { CreateAttendanceDecisionInput } from "../command-repository.js";
 import { attendanceLocationEvidenceSchema } from "#shared";
+
+function acceptCommandDecisionReason(
+  _reasonCode: CreateAttendanceDecisionInput["reasonCode"],
+): void {}
 
 describe("attendance command request hashing", () => {
   const command = {
@@ -115,6 +120,17 @@ describe("attendance command request hashing", () => {
   });
 });
 
+describe("attendance command decision reason typing", () => {
+  it("accepts stable command and geo reason codes only", () => {
+    acceptCommandDecisionReason("geo_evidence_missing");
+    acceptCommandDecisionReason("policy_window_rejected");
+    acceptCommandDecisionReason(null);
+
+    // @ts-expect-error arbitrary reason codes must not cross the repository boundary.
+    acceptCommandDecisionReason("arbitrary_reason");
+  });
+});
+
 describe("attendance location evidence request schema", () => {
   const point = {
     latitude: 12.971599,
@@ -152,5 +168,21 @@ describe("attendance location evidence request schema", () => {
         permission_state: "unavailable",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts denied or unavailable location evidence without coordinates", () => {
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        permission_state: "denied",
+        provider: "browser",
+      }).success,
+    ).toBe(true);
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        permission_state: "unavailable",
+        captured_at: "2026-07-14T04:00:00.000Z",
+        age_ms: 60_000,
+      }).success,
+    ).toBe(true);
   });
 });

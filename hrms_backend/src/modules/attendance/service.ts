@@ -69,7 +69,11 @@ import {
   AttendanceCommandService,
   canonicalAttendanceRequestHash,
 } from "./command-service.js";
-import { normalizeAttendancePolicyConfig } from "./policy-config.js";
+import {
+  normalizeAttendancePolicyConfig,
+  type AttendanceMode,
+  type NormalizedAttendanceGeoPolicyAction,
+} from "./policy-config.js";
 import { resolveEmployeeShift } from "./shift-resolver.js";
 import {
   deriveLegacyAttendanceStatus,
@@ -340,9 +344,13 @@ interface AttendancePunchPolicy {
   autoPunchOutEnabled: boolean;
   autoPunchOutTime: string;
   allowOffDayPunches: boolean;
-  attendanceMode: "manual_only" | "geo_optional" | "geo_required";
+  attendanceMode: AttendanceMode;
   fallbackApprovalMode: "disabled" | "approval_required";
   regularizationMode: "disabled" | "approval_required";
+  locationUnavailableAction: NormalizedAttendanceGeoPolicyAction;
+  permissionDeniedAction: NormalizedAttendanceGeoPolicyAction;
+  outsideFenceAction: NormalizedAttendanceGeoPolicyAction;
+  effectiveGeofenceId: UUID | null;
   policyVersion: string;
 }
 
@@ -545,6 +553,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       work_mode: "office" | "remote" | "wfh" | "field";
       metadata: Record<string, unknown>;
+      location?: AttendanceLocationEvidenceInput;
       reason?: string;
     },
   ) {
@@ -560,7 +569,7 @@ export class AttendanceService {
     assertCanAssistCurrentPunch(actor, subject);
     return this.recordPunchInMemory(
       actor,
-      { event_type: input.event_type, work_mode: input.work_mode, metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) }, occurred_at: nowIso(), source: "admin" },
+      { event_type: input.event_type, work_mode: input.work_mode, metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) }, occurred_at: nowIso(), source: "admin", location: input.location },
       subject.id,
       "manager_assisted_now",
     );
@@ -1645,6 +1654,10 @@ export class AttendanceService {
       attendance_mode: availability.policy.attendanceMode,
       fallback_approval_mode: availability.policy.fallbackApprovalMode,
       regularization_mode: availability.policy.regularizationMode,
+      location_unavailable_action: availability.policy.locationUnavailableAction,
+      permission_denied_action: availability.policy.permissionDeniedAction,
+      outside_fence_action: availability.policy.outsideFenceAction,
+      effective_geofence_id: availability.policy.effectiveGeofenceId,
       is_company_working_day: availability.is_company_working_day,
       local_time: availability.local_time,
       can_punch_now: availability.next_allowed_actions.length > 0,
@@ -2438,6 +2451,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       work_mode: "office" | "remote" | "wfh" | "field";
       metadata: Record<string, unknown>;
+      location?: AttendanceLocationEvidenceInput;
       reason?: string;
     },
     idempotencyKey: string,
@@ -2465,6 +2479,7 @@ export class AttendanceService {
         work_mode: input.work_mode,
         source: "admin",
         metadata: { ...input.metadata, ...(input.reason ? { assisted_reason: input.reason } : {}) },
+        location: input.location,
       },
       isWorkingDayFor: (workDate) => this.isWorkingDay(context.companyId, workDate),
     });

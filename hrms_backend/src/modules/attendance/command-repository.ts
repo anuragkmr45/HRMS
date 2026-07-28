@@ -9,6 +9,18 @@ import type {
   AttendanceCommandState,
   AttendanceDecisionReasonCode,
 } from "./session-transition.js";
+import { conflict } from "../../platform/errors.js";
+import type {
+  AttendanceGeoDecisionReasonCode,
+  AttendanceGeoFenceReference,
+} from "./geo-policy.js";
+
+export type AttendanceCommandDecisionReasonCode =
+  | AttendanceDecisionReasonCode
+  | AttendanceGeoDecisionReasonCode
+  | "policy_window_rejected"
+  | "invalid_chronology"
+  | "invalid_state_transition";
 
 export interface AttendanceEmployeeCommandStateRecord {
   company_id: UUID;
@@ -79,7 +91,7 @@ export interface AttendanceCommandDecisionRecord {
   company_id: UUID;
   employee_user_id: UUID;
   outcome: "allowed" | "denied";
-  reason_code: AttendanceDecisionReasonCode | null;
+  reason_code: AttendanceCommandDecisionReasonCode | null;
   reason_detail: string | null;
   previous_state: AttendanceCommandState;
   next_state: AttendanceCommandState;
@@ -100,6 +112,18 @@ export interface AttendanceLocationEvidenceRecord {
   id: UUID;
 }
 
+interface EffectiveGeofenceEvaluationRow {
+  geofence_id: UUID;
+  geofence_version_id: UUID;
+  work_site_id: UUID;
+  version_number: number;
+  shape_type: "circle" | "polygon";
+  effective_from: Date;
+  effective_until: Date | null;
+  canonical_hash: string;
+  inside: boolean;
+}
+
 export interface CreateAttendanceCommandInput {
   companyId: UUID;
   actorUserId: UUID;
@@ -118,7 +142,7 @@ export interface CreateAttendanceDecisionInput {
   companyId: UUID;
   employeeUserId: UUID;
   outcome: "allowed" | "denied";
-  reasonCode: AttendanceDecisionReasonCode | null;
+  reasonCode: AttendanceCommandDecisionReasonCode | null;
   reasonDetail: string | null;
   previousState: AttendanceCommandState;
   nextState: AttendanceCommandState;
@@ -676,12 +700,12 @@ export class AttendanceCommandTransactionRepository {
         input.employeeUserId,
         input.capturedAt,
         input.receivedAt,
-        input.location.latitude,
-        input.location.longitude,
-        input.location.accuracy_meters,
-        input.location.altitude_meters ?? null,
+        "latitude" in input.location ? input.location.latitude : null,
+        "longitude" in input.location ? input.location.longitude : null,
+        "accuracy_meters" in input.location ? input.location.accuracy_meters : null,
+        "altitude_meters" in input.location ? input.location.altitude_meters ?? null : null,
         input.location.provider ?? null,
-        input.location.is_mocked ?? null,
+        "is_mocked" in input.location ? input.location.is_mocked ?? null : null,
         input.location.integrity_status ?? null,
         JSON.stringify(input.rawPayload),
         input.ageMs,
@@ -694,10 +718,75 @@ export class AttendanceCommandTransactionRepository {
     return evidence;
   }
 
+  async evaluateEffectiveGeofence(input: {
+    companyId: UUID;
+    geofenceId: UUID;
+    asOf: string;
+    latitude: number;
+    longitude: number;
+  }): Promise<{ configured: false } | { configured: true; inside: boolean; reference: AttendanceGeoFenceReference }> {
+    const result = await this.client.query<EffectiveGeofenceEvaluationRow>(
+      `WITH point AS (
+          SELECT ST_SetSRID(ST_MakePoint($4, $5), 4326) AS geom
+        )
+        SELECT
+          geofence.id AS geofence_id,
+          version.id AS geofence_version_id,
+          geofence.work_site_id,
+          version.version_number,
+          version.shape_type,
+          version.effective_from,
+          version.effective_until,
+          version.canonical_hash,
+          CASE
+            WHEN version.shape_type = 'circle'
+              THEN ST_DWithin(point.geom::geography, version.shape::geography, version.circle_radius_meters)
+            ELSE ST_Covers(version.shape, point.geom)
+          END AS inside
+        FROM attendance.geofences geofence
+        JOIN attendance.geofence_versions version
+          ON version.geofence_id = geofence.id
+         AND version.company_id = geofence.company_id
+        CROSS JOIN point
+        WHERE geofence.company_id = $1
+          AND geofence.id = $2
+          AND geofence.is_active = true
+          AND geofence.deleted_at IS NULL
+          AND version.version_status = 'published'
+          AND version.effective_from <= $3::timestamptz
+          AND (version.effective_until IS NULL OR $3::timestamptz < version.effective_until)
+        ORDER BY version.effective_from DESC, version.published_at DESC, version.version_number DESC`,
+      [input.companyId, input.geofenceId, input.asOf, input.longitude, input.latitude],
+    );
+    if (result.rows.length === 0) return { configured: false };
+    if (result.rows.length > 1) {
+      throw conflict("Geofence has multiple effective published versions.", {
+        code: "geofence_ambiguous_active_versions",
+        geofence_id: input.geofenceId,
+        geofence_version_ids: result.rows.map((row) => row.geofence_version_id),
+      });
+    }
+    const row = result.rows[0]!;
+    return {
+      configured: true,
+      inside: row.inside,
+      reference: {
+        geofenceId: row.geofence_id,
+        geofenceVersionId: row.geofence_version_id,
+        workSiteId: row.work_site_id,
+        versionNumber: row.version_number,
+        shapeType: row.shape_type,
+        effectiveFrom: row.effective_from.toISOString(),
+        effectiveUntil: row.effective_until?.toISOString() ?? null,
+        canonicalHash: row.canonical_hash,
+      },
+    };
+  }
+
   async createAttendanceDecisionReason(input: {
     attendanceDecisionId: UUID;
     companyId: UUID;
-    reasonCode: string;
+    reasonCode: AttendanceCommandDecisionReasonCode;
     category: string;
     severity: string;
     ordinal: number;

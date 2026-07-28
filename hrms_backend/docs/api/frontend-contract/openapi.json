@@ -71642,6 +71642,462 @@
         }
       }
     },
+    "/api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish": {
+      "post": {
+        "summary": "Publish geofence version",
+        "tags": [
+          "Attendance"
+        ],
+        "description": "Publishes an existing draft geofence version for the active company. The server validates the persisted PostGIS shape, computes the geometry-only canonical hash, enforces half-open effective periods, and updates the latest published pointer in one transaction.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "effectiveFrom"
+                ],
+                "properties": {
+                  "effectiveFrom": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Inclusive effective start timestamp",
+                    "example": "2026-05-04T10:00:00.000Z"
+                  },
+                  "effectiveUntil": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Exclusive effective end timestamp",
+                    "example": "2026-05-04T10:00:00.000Z",
+                    "nullable": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+            },
+            "in": "path",
+            "name": "geofenceId",
+            "required": true,
+            "description": "Geofence UUID"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+            },
+            "in": "path",
+            "name": "versionId",
+            "required": true,
+            "description": "Geofence version UUID"
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "version"
+                  ],
+                  "properties": {
+                    "version": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "company_id",
+                        "geofence_id",
+                        "version_number",
+                        "version_status",
+                        "shape_type",
+                        "effective_from",
+                        "canonical_hash",
+                        "published_at",
+                        "published_by_user_id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Geofence version UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "company_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Company UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "geofence_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Geofence UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "version_number": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 2
+                        },
+                        "version_status": {
+                          "type": "string",
+                          "enum": [
+                            "published"
+                          ],
+                          "example": "published"
+                        },
+                        "shape_type": {
+                          "type": "string",
+                          "enum": [
+                            "circle",
+                            "polygon"
+                          ],
+                          "example": "polygon"
+                        },
+                        "circle_radius_meters": {
+                          "type": "string",
+                          "nullable": true,
+                          "example": "100.00"
+                        },
+                        "effective_from": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Inclusive effective start timestamp",
+                          "example": "2026-05-04T10:00:00.000Z"
+                        },
+                        "effective_until": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Exclusive effective end timestamp",
+                          "example": "2026-05-04T10:00:00.000Z",
+                          "nullable": true
+                        },
+                        "canonical_hash": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$",
+                          "example": "3f786850e387550fdab836ed7e6dc881de23001b"
+                        },
+                        "published_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Publication timestamp",
+                          "example": "2026-05-04T10:00:00.000Z"
+                        },
+                        "published_by_user_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Publishing actor UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "geometry_diagnostics": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or invalid business request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "VALIDATION_FAILED",
+                  "message": "Request validation failed",
+                  "details": {
+                    "formErrors": [
+                      "Invalid input: expected object, received undefined"
+                    ],
+                    "fieldErrors": {}
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated actor is not allowed to perform this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "WORKFLOW_CONFLICT"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "The ticket was modified by another actor. Refresh and retry."
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the documented delay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "TOO_MANY_REQUESTS"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Too many requests. Please wait and try again."
+                    },
+                    "details": {
+                      "type": "object",
+                      "required": [
+                        "retry_after_seconds"
+                      ],
+                      "properties": {
+                        "retry_after_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 60
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "TOO_MANY_REQUESTS",
+                  "message": "Too many requests. Please wait and try again.",
+                  "details": {
+                    "retry_after_seconds": 60
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/attendance/exceptions": {
       "get": {
         "summary": "Attendance exceptions",
@@ -105870,6 +106326,15 @@
     },
     "/api/v1/locations/india": {
       "get": {
+        "summary": "Search India location reference data",
+        "tags": [
+          "Core / Employees & Hierarchy"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response"

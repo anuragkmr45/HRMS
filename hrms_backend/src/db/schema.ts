@@ -588,9 +588,9 @@ export const attendanceLocationEvidence = attendance.table(
     employeeUserId: uuid("employee_user_id").notNull(),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
-    latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
-    longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
-    accuracyMeters: numeric("accuracy_meters", { precision: 10, scale: 2 }).notNull(),
+    latitude: numeric("latitude", { precision: 9, scale: 6 }),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }),
+    accuracyMeters: numeric("accuracy_meters", { precision: 10, scale: 2 }),
     altitudeMeters: numeric("altitude_meters", { precision: 10, scale: 2 }),
     provider: text("provider"),
     isMocked: boolean("is_mocked"),
@@ -611,6 +611,24 @@ export const attendanceLocationEvidence = attendance.table(
     check("location_evidence_permission_state_check", sql`${table.permissionState} IN ('granted', 'denied', 'unavailable', 'unknown')`),
     check("location_evidence_provider_check", sql`${table.provider} IS NULL OR ${table.provider} IN ('browser', 'device', 'network', 'unknown')`),
     check("location_evidence_coordinates_expire_after_received_check", sql`${table.coordinatesExpireAt} IS NULL OR ${table.coordinatesExpireAt} > ${table.receivedAt}`),
+    check("location_evidence_coordinates_by_permission_check", sql`(
+      (
+        ${table.permissionState} IN ('granted', 'unknown')
+        AND ${table.latitude} IS NOT NULL
+        AND ${table.longitude} IS NOT NULL
+        AND ${table.accuracyMeters} IS NOT NULL
+      )
+      OR
+      (
+        ${table.permissionState} IN ('denied', 'unavailable')
+        AND ${table.latitude} IS NULL
+        AND ${table.longitude} IS NULL
+        AND ${table.accuracyMeters} IS NULL
+        AND ${table.altitudeMeters} IS NULL
+        AND ${table.isMocked} IS NULL
+        AND ${table.coordinatesExpireAt} IS NULL
+      )
+    )`),
     foreignKey({
       name: "location_evidence_event_company_fk",
       columns: [table.attendanceEventId, table.companyId],

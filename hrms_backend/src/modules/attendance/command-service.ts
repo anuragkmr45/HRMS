@@ -17,6 +17,7 @@ import { isWorkingDate } from "../../platform/work-schedule.js";
 import {
   PostgresAttendanceCommandRepository,
   type AttendanceCommandTransactionRepository,
+  type AttendanceCommandDecisionReasonCode,
   type PlatformIdempotencyKeyRecord,
   type AttendanceSessionRecord,
 } from "./command-repository.js";
@@ -25,6 +26,10 @@ import {
   buildRegularizationDecisionEvent,
 } from "./events.js";
 import type { EffectiveAttendancePolicy } from "./policy-config.js";
+import {
+  evaluateAttendanceGeoPolicy,
+  type AttendanceGeoDecision,
+} from "./geo-policy.js";
 import { resolveEffectiveAttendancePolicy } from "./policy-resolver.js";
 import { decideAttendanceTransition } from "./session-transition.js";
 import {
@@ -85,11 +90,11 @@ interface PersistedLocationEvidence {
   sourceChannel: AttendanceCommandInput["source"];
   provider: string | null;
   permissionState: string;
-  accuracyMeters: number;
+  accuracyMeters: number | null;
 }
 
 interface AttendanceAuditDecisionReasonInput {
-  reasonCode: string;
+  reasonCode: AttendanceCommandDecisionReasonCode;
   category: string;
   severity: string;
   details: Record<string, unknown>;
@@ -204,13 +209,46 @@ function locationEvidenceDecisionContext(
   };
 }
 
+function hasCoordinateEvidence(
+  location: AttendanceLocationEvidenceInput,
+): location is AttendanceLocationEvidenceInput & {
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number;
+  captured_at: string;
+} {
+  return "latitude" in location && "longitude" in location && "accuracy_meters" in location;
+}
+
+function geoDecisionSnapshot(decision: AttendanceGeoDecision): Record<string, unknown> {
+  return {
+    factual_outcome: decision.factualOutcome,
+    selected_action: decision.selectedAction,
+    fallback_used: decision.fallbackUsed,
+    allowed: decision.allowed,
+    reason_code: decision.reasonCode,
+    geofence_id: decision.geofence?.geofenceId ?? null,
+    geofence_version_id: decision.geofence?.geofenceVersionId ?? null,
+    work_site_id: decision.geofence?.workSiteId ?? null,
+    geofence_version_number: decision.geofence?.versionNumber ?? null,
+    geofence_shape_type: decision.geofence?.shapeType ?? null,
+    geofence_canonical_hash: decision.geofence?.canonicalHash ?? null,
+  };
+}
+
 function buildAttendanceAuditDecisionReasons(input: {
   denied: boolean;
-  reasonCode: string;
+  reasonCode: AttendanceCommandDecisionReasonCode;
   reasonDetail: string;
   policyReason: boolean;
+  geoDecision: AttendanceGeoDecision;
 }): AttendanceAuditDecisionReasonInput[] {
-  const reasons: AttendanceAuditDecisionReasonInput[] = [];
+  const reasons: AttendanceAuditDecisionReasonInput[] = input.geoDecision.reasons.map((reason) => ({
+    reasonCode: reason.reasonCode,
+    category: reason.category,
+    severity: reason.severity,
+    details: reason.details,
+  }));
   if (input.denied) {
     reasons.push({
       reasonCode: input.reasonCode,
@@ -219,13 +257,25 @@ function buildAttendanceAuditDecisionReasons(input: {
       details: { reason_detail: input.reasonDetail },
     });
   }
-  return reasons;
+  return dedupeAttendanceAuditDecisionReasons(reasons);
+}
+
+function dedupeAttendanceAuditDecisionReasons(
+  reasons: AttendanceAuditDecisionReasonInput[],
+): AttendanceAuditDecisionReasonInput[] {
+  const seen = new Set<AttendanceCommandDecisionReasonCode>();
+  return reasons.filter((reason) => {
+    if (seen.has(reason.reasonCode)) return false;
+    seen.add(reason.reasonCode);
+    return true;
+  });
 }
 
 function assertLocationCapturedAtWithinFutureSkew(
   location: AttendanceLocationEvidenceInput,
   receivedAt: string,
 ): void {
+  if (!hasCoordinateEvidence(location)) return;
   if (
     location.permission_state !== "granted" &&
     location.permission_state !== "unknown"
@@ -386,6 +436,30 @@ export class AttendanceCommandService {
                 subjectEmployeeUserId,
                 workDate,
               );
+          const geoLocationStatus = !commandInput.location
+            ? { kind: "missing" as const }
+            : commandInput.location.permission_state === "denied"
+              ? { kind: "permission_denied" as const }
+              : commandInput.location.permission_state === "unavailable"
+                ? { kind: "location_unavailable" as const }
+                : hasCoordinateEvidence(commandInput.location)
+                  ? {
+                      kind: "coordinates" as const,
+                      fence: policy.effectiveGeofenceId
+                        ? await tx.evaluateEffectiveGeofence({
+                            companyId: input.companyId,
+                            geofenceId: policy.effectiveGeofenceId,
+                            asOf: occurredAt,
+                            latitude: commandInput.location.latitude,
+                            longitude: commandInput.location.longitude,
+                          })
+                        : { configured: false as const },
+                    }
+                  : { kind: "location_unavailable" as const };
+          const geoDecision = evaluateAttendanceGeoPolicy({
+            policy,
+            locationStatus: geoLocationStatus,
+          });
           const derived = deriveAttendanceRuntimeState(open, activeBreak, completed);
           const priorCompletedSession =
             state.state === "completed" && state.current_session_id
@@ -446,6 +520,7 @@ export class AttendanceCommandService {
           );
           const denied =
             !stateDecision.allowed ||
+            !geoDecision.allowed ||
             Boolean(policyReason) ||
             Boolean(
               open?.last_transition_at &&
@@ -453,13 +528,17 @@ export class AttendanceCommandService {
             );
           const reason = !stateDecision.allowed
             ? (stateDecision.reason_detail ?? "Attendance command was denied.")
-            : (policyReason ??
-              "Attendance timestamp precedes the previous session transition.");
-          const code = !stateDecision.allowed
+            : !geoDecision.allowed
+              ? geoDecision.reasonDetail
+              : (policyReason ??
+                "Attendance timestamp precedes the previous session transition.");
+          const code: AttendanceCommandDecisionReasonCode = !stateDecision.allowed
             ? (stateDecision.reason_code ?? "invalid_state_transition")
-            : policyReason
-              ? "policy_window_rejected"
-              : "invalid_chronology";
+            : !geoDecision.allowed
+              ? geoDecision.reasonCode
+              : policyReason
+                ? "policy_window_rejected"
+                : "invalid_chronology";
           const auditDecision = await tx.createAttendanceAuditDecision({
             companyId: input.companyId,
             employeeUserId: subjectEmployeeUserId,
@@ -483,6 +562,7 @@ export class AttendanceCommandService {
               occurred_at: occurredAt,
               work_date: workDate,
               location_evidence: locationContext,
+              geo_policy: geoDecisionSnapshot(geoDecision),
             },
           });
           const auditReasons = buildAttendanceAuditDecisionReasons({
@@ -490,6 +570,7 @@ export class AttendanceCommandService {
             reasonCode: code,
             reasonDetail: reason,
             policyReason: Boolean(policyReason),
+            geoDecision,
           });
           for (const [ordinal, auditReason] of auditReasons.entries()) {
             await tx.createAttendanceDecisionReason({
@@ -509,7 +590,7 @@ export class AttendanceCommandService {
               companyId: input.companyId,
               employeeUserId: subjectEmployeeUserId,
               outcome: "denied",
-              reasonCode: code as never,
+              reasonCode: code,
               reasonDetail: reason,
               previousState: previous,
               nextState: previous,
@@ -523,6 +604,7 @@ export class AttendanceCommandService {
                 attendance_event_id: evidence.id,
                 evidence_payload_hash: evidencePayloadHash,
                 location_evidence: locationEvidence,
+                geo_policy: geoDecisionSnapshot(geoDecision),
                 open_session_id: open?.id ?? null,
                 occurred_at: occurredAt,
               },
@@ -535,6 +617,7 @@ export class AttendanceCommandService {
               reason_detail: reason,
               next_allowed_actions: allowedActions(previous),
               punch_policy: policy,
+              geo_policy: geoDecisionSnapshot(geoDecision),
             };
             await tx.completeCommand({
               commandExecutionId: command.id,
@@ -571,6 +654,7 @@ export class AttendanceCommandService {
               evidence_payload_hash: evidencePayloadHash,
               open_session_id: open?.id ?? null,
               occurred_at: occurredAt,
+              geo_policy: geoDecisionSnapshot(geoDecision),
             },
           });
           let session: AttendanceSessionRecord;
@@ -669,6 +753,7 @@ export class AttendanceCommandService {
             next_allowed_action:
               allowedActions(stateDecision.next_state)[0] ?? null,
             punch_policy: policy,
+            geo_policy: geoDecisionSnapshot(geoDecision),
           };
           await tx.completeCommand({
             commandExecutionId: command.id,
@@ -699,6 +784,7 @@ export class AttendanceCommandService {
             reason_code: response["reason_code"],
             next_allowed_actions: response["next_allowed_actions"],
             punch_policy: response["punch_policy"],
+            geo_policy: response["geo_policy"],
           },
         );
       }
@@ -1533,13 +1619,13 @@ export class AttendanceCommandService {
   ): Promise<PersistedLocationEvidence> {
     const evaluatedAgeMs = Math.max(
       0,
-      Date.parse(input.receivedAt) - Date.parse(input.location.captured_at),
+      Date.parse(input.receivedAt) - Date.parse(input.location.captured_at ?? input.receivedAt),
     );
     const evidence = await tx.createAttendanceLocationEvidence({
       attendanceEventId: input.attendanceEventId,
       companyId: input.companyId,
       employeeUserId: input.employeeUserId,
-      capturedAt: input.location.captured_at,
+      capturedAt: input.location.captured_at ?? input.receivedAt,
       receivedAt: input.receivedAt,
       location: input.location,
       ageMs: evaluatedAgeMs,
@@ -1547,10 +1633,10 @@ export class AttendanceCommandService {
       rawPayload: {
         schema_version: 1,
         source_channel: input.sourceChannel,
-        provider: input.location.provider ?? null,
-        permission_state: input.location.permission_state,
-        client_age_ms: input.location.age_ms ?? null,
-        evaluated_age_ms: evaluatedAgeMs,
+      provider: input.location.provider ?? null,
+      permission_state: input.location.permission_state,
+      client_age_ms: input.location.age_ms ?? null,
+      evaluated_age_ms: evaluatedAgeMs,
       },
     });
     return {
@@ -1559,7 +1645,7 @@ export class AttendanceCommandService {
       sourceChannel: input.sourceChannel,
       provider: input.location.provider ?? null,
       permissionState: input.location.permission_state,
-      accuracyMeters: input.location.accuracy_meters,
+      accuracyMeters: hasCoordinateEvidence(input.location) ? input.location.accuracy_meters : null,
     };
   }
 
