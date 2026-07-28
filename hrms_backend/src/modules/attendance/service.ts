@@ -174,6 +174,16 @@ function timeConfig(config: Record<string, unknown>, key: string, fallback: stri
   return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/u.test(value.trim()) ? value.trim() : fallback;
 }
 
+function enumConfig<T extends string>(
+  config: Record<string, unknown>,
+  key: string,
+  values: readonly T[],
+  fallback: T
+): T {
+  const value = config[key];
+  return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
+}
+
 function minutesOfDay(clock: string): number {
   const [hourText, minuteText] = clock.split(":");
   return Number(hourText) * 60 + Number(minuteText);
@@ -234,6 +244,7 @@ function visibleUserPredicate(actor: AuthUser, user: CoreUser): boolean {
 interface AttendancePunchPolicy {
   graceMinutes: number;
   autoMarkAbsentMinutes: number;
+  allowRegularization: boolean;
   fullDayPunchWindow: boolean;
   punchInStart: string;
   punchInEnd: string;
@@ -242,6 +253,9 @@ interface AttendancePunchPolicy {
   autoPunchOutEnabled: boolean;
   autoPunchOutTime: string;
   allowOffDayPunches: boolean;
+  attendanceMode: "manual_only" | "geo_optional" | "geo_required";
+  fallbackApprovalMode: "disabled" | "approval_required";
+  regularizationMode: "disabled" | "approval_required";
 }
 
 interface PunchAvailability {
@@ -489,6 +503,14 @@ export class AttendanceService {
       requested_punches: Array<{ event_type: AttendancePunchEventType; occurred_at: string }>;
     }
   ) {
+    const policy = this.attendancePolicy();
+    if (!policy.allowRegularization || policy.regularizationMode === "disabled") {
+      throw forbidden("Attendance regularization requests are disabled by company policy.", {
+        policy_key: "attendance",
+        allow_regularization: policy.allowRegularization,
+        regularization_mode: policy.regularizationMode
+      });
+    }
     const approver = this.core.resolveImmediateManager(actor.id) ?? this.adminFallback();
     const request = this.repository.addRegularization({
       employee_user_id: actor.id,
@@ -841,6 +863,9 @@ export class AttendanceService {
       auto_punch_out_enabled: availability.policy.autoPunchOutEnabled,
       auto_punch_out_time: availability.policy.autoPunchOutTime,
       allow_off_day_punches: availability.policy.allowOffDayPunches,
+      attendance_mode: availability.policy.attendanceMode,
+      fallback_approval_mode: availability.policy.fallbackApprovalMode,
+      regularization_mode: availability.policy.regularizationMode,
       is_company_working_day: availability.is_company_working_day,
       local_time: availability.local_time,
       can_punch_now: availability.next_allowed_actions.length > 0,
@@ -1277,9 +1302,11 @@ export class AttendanceService {
       (candidate) => candidate.policy_key === "attendance" && candidate.status === "active" && !candidate.deleted_at
     );
     const config = policy?.config ?? {};
+    const allowRegularization = booleanConfig(config, "allowRegularization", true);
     return {
       graceMinutes: numberConfig(config, "graceMinutes", 10),
       autoMarkAbsentMinutes: numberConfig(config, "autoMarkAbsentMinutes", 480),
+      allowRegularization,
       fullDayPunchWindow: booleanConfig(config, "fullDayPunchWindow", true),
       punchInStart: timeConfig(config, "punchInStart", "09:00"),
       punchInEnd: timeConfig(config, "punchInEnd", "11:00"),
@@ -1287,7 +1314,15 @@ export class AttendanceService {
       punchOutEnd: timeConfig(config, "punchOutEnd", "23:59"),
       autoPunchOutEnabled: booleanConfig(config, "autoPunchOutEnabled", true),
       autoPunchOutTime: timeConfig(config, "autoPunchOutTime", "23:59"),
-      allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false)
+      allowOffDayPunches: booleanConfig(config, "allowOffDayPunches", false),
+      attendanceMode: enumConfig(config, "attendanceMode", ["manual_only", "geo_optional", "geo_required"], "manual_only"),
+      fallbackApprovalMode: enumConfig(config, "fallbackApprovalMode", ["disabled", "approval_required"], "disabled"),
+      regularizationMode: enumConfig(
+        config,
+        "regularizationMode",
+        ["disabled", "approval_required"],
+        allowRegularization ? "approval_required" : "disabled"
+      )
     };
   }
 

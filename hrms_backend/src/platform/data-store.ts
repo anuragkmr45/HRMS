@@ -866,7 +866,10 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         punchOutEnd: "23:59",
         autoPunchOutEnabled: true,
         autoPunchOutTime: "23:59",
-        allowOffDayPunches: false
+        allowOffDayPunches: false,
+        attendanceMode: "manual_only",
+        fallbackApprovalMode: "disabled",
+        regularizationMode: "approval_required"
       }
     },
     {
