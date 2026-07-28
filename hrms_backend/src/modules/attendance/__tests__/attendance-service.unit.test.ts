@@ -738,6 +738,27 @@ describe("AttendanceService.punch", () => {
       expect(store.attendanceRegularizations).toHaveLength(1);
     });
 
+    it("blocks regularization when disabled by the attendance policy", () => {
+      const policy = store.adminPolicies.find(
+        (candidate) => candidate.policy_key === "attendance",
+      )!;
+      policy.config = {
+        ...policy.config,
+        allowRegularization: false,
+        regularizationMode: "disabled",
+      };
+
+      expect(() =>
+        service.createRegularization(employee(), {
+          work_date: "2026-07-08",
+          reason: "Forgot to punch in",
+          requested_punches: [],
+        }),
+      ).toThrow("Attendance regularization requests are disabled by company policy.");
+      expect(store.attendanceRegularizations).toHaveLength(0);
+      expect(store.outbox).toHaveLength(0);
+    });
+
     it("trims the submitted reason", () => {
       const result = service.createRegularization(employee(), {
         work_date: "2026-07-08",

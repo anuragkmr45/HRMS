@@ -10,6 +10,7 @@ import { useAdminSettings, type Policies } from "@/lib/admin-settings-store";
 import { toastApiError, useApiRouteEnabled } from "@/shared/api";
 import { useAdminPolicies, useUpdateAdminPolicyMutation } from "@/domains/admin/queries";
 import type { AdminPolicyRecord, AdminPolicyValue } from "@/domains/admin/api";
+import { AttendancePolicyEditor } from "@/domains/admin/components/attendance-policy-editor";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_app/admin-settings/policies")({
@@ -104,94 +105,20 @@ function PoliciesScreen() {
       </TabsList>
 
       <TabsContent value="attendance" className="mt-4">
-        <PolicyCard
-          title="Attendance policy"
-          description="Govern punch availability, off-day access, grace periods and auto-absent thresholds."
+        <AttendancePolicyEditor
+          value={policies.attendance}
+          publishedValue={apiPolicyState.policies.attendance}
           apiEnabled={apiEnabled}
           saving={updatePolicy.isPending}
-          onSave={() => savePolicy("attendance")}
-        >
-          <SwitchField
-            label="Allow punching any time (24-hour window)"
-            value={policies.attendance.fullDayPunchWindow}
-            onChange={(v) => setPolicy("attendance", { fullDayPunchWindow: v })}
-          />
-          <SwitchField
-            label="Allow punches on company off days"
-            value={policies.attendance.allowOffDayPunches}
-            onChange={(v) => setPolicy("attendance", { allowOffDayPunches: v })}
-          />
-          {!policies.attendance.fullDayPunchWindow && (
-            <div className="md:col-span-2 grid grid-cols-1 gap-3 rounded-xl border bg-card/50 p-3 md:grid-cols-2">
-              <p className="md:col-span-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Punch windows
-              </p>
-              <TimeField
-                label="Punch-in starts"
-                value={policies.attendance.punchInStart}
-                onChange={(v) => setPolicy("attendance", { punchInStart: v })}
-              />
-              <TimeField
-                label="Punch-in ends"
-                value={policies.attendance.punchInEnd}
-                onChange={(v) => setPolicy("attendance", { punchInEnd: v })}
-              />
-              <TimeField
-                label="Punch-out starts"
-                value={policies.attendance.punchOutStart}
-                onChange={(v) => setPolicy("attendance", { punchOutStart: v })}
-              />
-              <TimeField
-                label="Punch-out ends"
-                value={policies.attendance.punchOutEnd}
-                onChange={(v) => setPolicy("attendance", { punchOutEnd: v })}
-              />
-            </div>
-          )}
-          <div className="md:col-span-2 grid grid-cols-1 gap-3 rounded-xl border bg-card/50 p-3 md:grid-cols-2">
-            <div className="md:col-span-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Day-end safety
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Open punch sessions are automatically closed at this time if an employee forgets to
-                punch out.
-              </p>
-            </div>
-            <SwitchField
-              label="Auto punch-out"
-              value={policies.attendance.autoPunchOutEnabled}
-              onChange={(v) => setPolicy("attendance", { autoPunchOutEnabled: v })}
-            />
-            {policies.attendance.autoPunchOutEnabled && (
-              <TimeField
-                label="Auto punch-out time"
-                value={policies.attendance.autoPunchOutTime}
-                onChange={(v) => setPolicy("attendance", { autoPunchOutTime: v })}
-              />
-            )}
-          </div>
-          <NumField
-            label="Grace minutes (no late mark)"
-            value={policies.attendance.graceMinutes}
-            onChange={(v) => setPolicy("attendance", { graceMinutes: v })}
-          />
-          <NumField
-            label="Half-day after (minutes late)"
-            value={policies.attendance.halfDayAfterMinutes}
-            onChange={(v) => setPolicy("attendance", { halfDayAfterMinutes: v })}
-          />
-          <NumField
-            label="Auto-absent after (minutes)"
-            value={policies.attendance.autoMarkAbsentMinutes}
-            onChange={(v) => setPolicy("attendance", { autoMarkAbsentMinutes: v })}
-          />
-          <SwitchField
-            label="Allow regularization requests"
-            value={policies.attendance.allowRegularization}
-            onChange={(v) => setPolicy("attendance", { allowRegularization: v })}
-          />
-        </PolicyCard>
+          onChange={(patch) => setPolicy("attendance", patch)}
+          onPublish={() => void savePolicy("attendance")}
+          onReset={() =>
+            setDrafts((current) => ({
+              ...current,
+              attendance: { ...apiPolicyState.policies.attendance },
+            }))
+          }
+        />
       </TabsContent>
 
       <TabsContent value="leave" className="mt-4">
@@ -528,6 +455,30 @@ function policiesFromApi(items: AdminPolicyRecord[], fallback: Policies) {
             "allowRegularization",
             policies.attendance.allowRegularization,
           ),
+          attendanceMode: enumValue(
+            item.config,
+            "attendanceMode",
+            ["manual_only", "geo_optional", "geo_required"] as const,
+            policies.attendance.attendanceMode,
+          ),
+          fallbackApprovalMode: enumValue(
+            item.config,
+            "fallbackApprovalMode",
+            ["disabled", "approval_required"] as const,
+            policies.attendance.fallbackApprovalMode,
+          ),
+          regularizationMode: enumValue(
+            item.config,
+            "regularizationMode",
+            ["disabled", "approval_required"] as const,
+            booleanValue(
+              item.config,
+              "allowRegularization",
+              policies.attendance.allowRegularization,
+            )
+              ? "approval_required"
+              : "disabled",
+          ),
           fullDayPunchWindow: booleanValue(
             item.config,
             "fullDayPunchWindow",
@@ -673,4 +624,14 @@ function booleanValue(config: Record<string, AdminPolicyValue>, key: string, fal
 function stringValue(config: Record<string, AdminPolicyValue>, key: string, fallback: string) {
   const value = config[key];
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function enumValue<T extends string>(
+  config: Record<string, AdminPolicyValue>,
+  key: string,
+  values: readonly T[],
+  fallback: T,
+): T {
+  const value = config[key];
+  return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
 }

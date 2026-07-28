@@ -48,7 +48,10 @@ describe("admin policy settings", () => {
             punchOutEnd: "23:59",
             autoPunchOutEnabled: true,
             autoPunchOutTime: "23:59",
-            allowOffDayPunches: false
+            allowOffDayPunches: false,
+            attendanceMode: "manual_only",
+            fallbackApprovalMode: "disabled",
+            regularizationMode: "approval_required"
           })
         })
       ])
@@ -85,7 +88,10 @@ describe("admin policy settings", () => {
           punchOutEnd: "22:30",
           autoPunchOutEnabled: false,
           autoPunchOutTime: "22:45",
-          allowOffDayPunches: true
+          allowOffDayPunches: true,
+          attendanceMode: "geo_optional",
+          fallbackApprovalMode: "approval_required",
+          regularizationMode: "disabled"
         }
       }
     });
@@ -104,7 +110,10 @@ describe("admin policy settings", () => {
         punchOutEnd: "22:30",
         autoPunchOutEnabled: false,
         autoPunchOutTime: "22:45",
-        allowOffDayPunches: true
+        allowOffDayPunches: true,
+        attendanceMode: "geo_optional",
+        fallbackApprovalMode: "approval_required",
+        regularizationMode: "disabled"
       })
     });
 
@@ -140,6 +149,31 @@ describe("admin policy settings", () => {
       }
     });
     expect(invalidTime.statusCode).toBe(400);
+
+    const invalidMode = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: { attendanceMode: "site_required" }
+      }
+    });
+    expect(invalidMode.statusCode).toBe(400);
+
+    const inconsistentRegularization = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          allowRegularization: false,
+          regularizationMode: "approval_required"
+        }
+      }
+    });
+    expect(inconsistentRegularization.statusCode).toBe(400);
 
     expect(app.store.outbox.at(-1)?.event_type).toBe("admin.policy.updated");
   });

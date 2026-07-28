@@ -132,6 +132,9 @@ export interface PolicyAttendance {
   halfDayAfterMinutes: number;
   autoMarkAbsentMinutes: number;
   allowRegularization: boolean;
+  attendanceMode: "manual_only" | "geo_optional" | "geo_required";
+  fallbackApprovalMode: "disabled" | "approval_required";
+  regularizationMode: "disabled" | "approval_required";
   fullDayPunchWindow: boolean;
   punchInStart: string;
   punchInEnd: string;
@@ -534,6 +537,9 @@ const DEFAULT_POLICIES: Policies = {
     halfDayAfterMinutes: 240,
     autoMarkAbsentMinutes: 480,
     allowRegularization: true,
+    attendanceMode: "manual_only",
+    fallbackApprovalMode: "disabled",
+    regularizationMode: "approval_required",
     fullDayPunchWindow: true,
     punchInStart: "09:00",
     punchInEnd: "11:00",
