@@ -16,6 +16,7 @@ import {
 import { isWorkingDate } from "../../platform/work-schedule.js";
 import {
   PostgresAttendanceCommandRepository,
+  ATTENDANCE_GEO_EVALUATOR_VERSION,
   type AttendanceCommandTransactionRepository,
   type AttendanceCommandDecisionReasonCode,
   type PlatformIdempotencyKeyRecord,
@@ -29,6 +30,8 @@ import type { EffectiveAttendancePolicy } from "./policy-config.js";
 import {
   evaluateAttendanceGeoPolicy,
   type AttendanceGeoDecision,
+  type AttendanceGeoEvidenceWideEvaluation,
+  type AttendanceGeoNoEffectiveEvaluation,
 } from "./geo-policy.js";
 import { resolveEffectiveAttendancePolicy } from "./policy-resolver.js";
 import { decideAttendanceTransition } from "./session-transition.js";
@@ -223,16 +226,48 @@ function hasCoordinateEvidence(
 function geoDecisionSnapshot(decision: AttendanceGeoDecision): Record<string, unknown> {
   return {
     factual_outcome: decision.factualOutcome,
+    category: decision.evaluation?.category ?? decision.factualOutcome,
     selected_action: decision.selectedAction,
     fallback_used: decision.fallbackUsed,
     allowed: decision.allowed,
     reason_code: decision.reasonCode,
+    evaluator_version: decision.evaluation?.evaluator_version ?? ATTENDANCE_GEO_EVALUATOR_VERSION,
     geofence_id: decision.geofence?.geofenceId ?? null,
     geofence_version_id: decision.geofence?.geofenceVersionId ?? null,
     work_site_id: decision.geofence?.workSiteId ?? null,
     geofence_version_number: decision.geofence?.versionNumber ?? null,
     geofence_shape_type: decision.geofence?.shapeType ?? null,
     geofence_canonical_hash: decision.geofence?.canonicalHash ?? null,
+    evaluation: decision.evaluation,
+  };
+}
+
+function evidenceWideGeoEvaluation(input: {
+  category: "stale_evidence" | "accuracy_exceeded";
+  evidenceAgeMs: number;
+  reportedAccuracyMeters: number;
+  maxLocationAgeMs: number | null;
+  maxAccuracyMeters: number | null;
+}): AttendanceGeoEvidenceWideEvaluation {
+  return {
+    category: input.category,
+    evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+    evidence_age_ms: input.evidenceAgeMs,
+    reported_accuracy_meters: input.reportedAccuracyMeters,
+    max_location_age_ms: input.maxLocationAgeMs,
+    max_accuracy_meters: input.maxAccuracyMeters,
+  };
+}
+
+function noEffectiveGeoEvaluation(input: {
+  candidateCount: number;
+  validCandidateCount: number;
+}): AttendanceGeoNoEffectiveEvaluation {
+  return {
+    category: "no_effective_geofence",
+    evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+    candidate_count: input.candidateCount,
+    valid_candidate_count: input.validCandidateCount,
   };
 }
 
@@ -443,19 +478,59 @@ export class AttendanceCommandService {
               : commandInput.location.permission_state === "unavailable"
                 ? { kind: "location_unavailable" as const }
                 : hasCoordinateEvidence(commandInput.location)
-                  ? {
-                      kind: "coordinates" as const,
-                      fence: policy.effectiveGeofenceId
-                        ? await tx.evaluateEffectiveGeofence({
-                            companyId: input.companyId,
-                            geofenceId: policy.effectiveGeofenceId,
-                            asOf: occurredAt,
-                            latitude: commandInput.location.latitude,
-                            longitude: commandInput.location.longitude,
-                          })
-                        : { configured: false as const },
-                    }
+                  ? policy.maxLocationAgeMs !== null &&
+                    locationEvidence &&
+                    locationEvidence.ageMs > policy.maxLocationAgeMs
+                    ? {
+                        kind: "stale_evidence" as const,
+                        evaluation: evidenceWideGeoEvaluation({
+                          category: "stale_evidence",
+                          evidenceAgeMs: locationEvidence.ageMs,
+                          reportedAccuracyMeters: commandInput.location.accuracy_meters,
+                          maxLocationAgeMs: policy.maxLocationAgeMs,
+                          maxAccuracyMeters: policy.maxAccuracyMeters,
+                        }),
+                      }
+                    : policy.maxAccuracyMeters !== null &&
+                        commandInput.location.accuracy_meters > policy.maxAccuracyMeters
+                      ? {
+                          kind: "accuracy_exceeded" as const,
+                          evaluation: evidenceWideGeoEvaluation({
+                            category: "accuracy_exceeded",
+                            evidenceAgeMs: locationEvidence?.ageMs ?? 0,
+                            reportedAccuracyMeters: commandInput.location.accuracy_meters,
+                            maxLocationAgeMs: policy.maxLocationAgeMs,
+                            maxAccuracyMeters: policy.maxAccuracyMeters,
+                          }),
+                        }
+                      : {
+                          kind: "coordinates" as const,
+                          fence: policy.effectiveGeofenceIds.length > 0
+                            ? await tx.evaluateEffectiveGeofence({
+                                companyId: input.companyId,
+                                geofenceIds: policy.effectiveGeofenceIds,
+                                asOf: occurredAt,
+                                latitude: commandInput.location.latitude,
+                                longitude: commandInput.location.longitude,
+                                reportedAccuracyMeters: commandInput.location.accuracy_meters,
+                                graceMeters: policy.geofenceGraceMeters,
+                              })
+                            : {
+                                configured: false as const,
+                                evaluation: noEffectiveGeoEvaluation({
+                                  candidateCount: 0,
+                                  validCandidateCount: 0,
+                                }),
+                              },
+                        }
                   : { kind: "location_unavailable" as const };
+          if (geoLocationStatus.kind === "coordinates" && geoLocationStatus.fence.configured) {
+            if (locationEvidence) {
+              geoLocationStatus.fence.evaluation.evidence_age_ms = locationEvidence.ageMs;
+            }
+            geoLocationStatus.fence.evaluation.max_location_age_ms = policy.maxLocationAgeMs;
+            geoLocationStatus.fence.evaluation.max_accuracy_meters = policy.maxAccuracyMeters;
+          }
           const geoDecision = evaluateAttendanceGeoPolicy({
             policy,
             locationStatus: geoLocationStatus,

@@ -14,6 +14,9 @@ export const AttendanceGeoDecisionReasonCodes = {
   GeoFenceNotConfigured: "geo_fence_not_configured",
   GeoInsideFence: "geo_inside_fence",
   GeoOutsideFence: "geo_outside_fence",
+  GeoBoundaryUncertain: "geo_boundary_uncertain",
+  GeoStaleEvidence: "geo_stale_evidence",
+  GeoAccuracyExceeded: "geo_accuracy_exceeded",
   GeoPolicyModeUnknown: "geo_policy_mode_unknown",
   GeoActionUnknown: "geo_action_unknown",
   GeoManualFallbackAllowed: "geo_manual_fallback_allowed",
@@ -25,12 +28,20 @@ export type AttendanceGeoDecisionReasonCode =
 
 export type AttendanceGeoFactualOutcome =
   | "not_required"
-  | "inside_fence"
-  | "outside_fence"
+  | "inside_confident"
+  | "outside_confident"
+  | "boundary_uncertain"
+  | "stale_evidence"
+  | "accuracy_exceeded"
   | "missing"
   | "permission_denied"
   | "location_unavailable"
   | "fence_not_configured";
+
+export type AttendanceGeoSpatialCategory =
+  | "inside_confident"
+  | "outside_confident"
+  | "boundary_uncertain";
 
 export interface AttendanceGeoFenceReference {
   geofenceId: UUID;
@@ -43,6 +54,52 @@ export interface AttendanceGeoFenceReference {
   canonicalHash: string;
 }
 
+export interface AttendanceGeoSafeEvaluation {
+  category: AttendanceGeoSpatialCategory;
+  evaluator_version: string;
+  candidate_count: number;
+  valid_candidate_count: number;
+  inside_match_count: number;
+  multiple_inside_matches: boolean;
+  selected_candidate_ordinal: number;
+  selected_work_site_id: UUID;
+  selected_geofence_id: UUID;
+  selected_geofence_version_id: UUID;
+  selected_shape_type: "circle" | "polygon";
+  selection_reason: string;
+  distance_meters?: number;
+  boundary_distance_meters?: number;
+  radius_meters?: number;
+  grace_meters: number;
+  effective_radius_meters?: number;
+  signed_margin_meters: number;
+  reported_accuracy_meters: number;
+  evidence_age_ms?: number;
+  max_location_age_ms?: number | null;
+  max_accuracy_meters?: number | null;
+}
+
+export interface AttendanceGeoEvidenceWideEvaluation {
+  category: "stale_evidence" | "accuracy_exceeded";
+  evaluator_version: string;
+  evidence_age_ms: number;
+  reported_accuracy_meters: number;
+  max_location_age_ms?: number | null;
+  max_accuracy_meters?: number | null;
+}
+
+export interface AttendanceGeoNoEffectiveEvaluation {
+  category: "no_effective_geofence";
+  evaluator_version: string;
+  candidate_count: number;
+  valid_candidate_count: number;
+}
+
+type AttendanceGeoDecisionEvaluation =
+  | AttendanceGeoSafeEvaluation
+  | AttendanceGeoEvidenceWideEvaluation
+  | AttendanceGeoNoEffectiveEvaluation;
+
 export interface AttendanceGeoEvaluationInput {
   policy: Pick<
     EffectiveAttendancePolicy,
@@ -51,7 +108,11 @@ export interface AttendanceGeoEvaluationInput {
     | "locationUnavailableAction"
     | "permissionDeniedAction"
     | "outsideFenceAction"
+    | "boundaryUncertainAction"
+    | "staleEvidenceAction"
+    | "accuracyExceededAction"
     | "effectiveGeofenceId"
+    | "effectiveGeofenceIds"
     | "policyVersion"
     | "policyVersionId"
     | "policyVersionNumber"
@@ -60,7 +121,19 @@ export interface AttendanceGeoEvaluationInput {
     | { kind: "missing" }
     | { kind: "permission_denied" }
     | { kind: "location_unavailable" }
-    | { kind: "coordinates"; fence: { configured: false } | { configured: true; inside: boolean; reference: AttendanceGeoFenceReference } };
+    | { kind: "stale_evidence"; evaluation: AttendanceGeoEvidenceWideEvaluation }
+    | { kind: "accuracy_exceeded"; evaluation: AttendanceGeoEvidenceWideEvaluation }
+    | {
+        kind: "coordinates";
+        fence:
+          | { configured: false; evaluation?: AttendanceGeoNoEffectiveEvaluation }
+          | {
+              configured: true;
+              category: AttendanceGeoSpatialCategory;
+              reference: AttendanceGeoFenceReference;
+              evaluation: AttendanceGeoSafeEvaluation;
+            };
+      };
 }
 
 export interface AttendanceGeoDecisionReason {
@@ -78,6 +151,7 @@ export interface AttendanceGeoDecision {
   reasonCode: AttendanceGeoDecisionReasonCode;
   reasonDetail: string;
   geofence: AttendanceGeoFenceReference | null;
+  evaluation: AttendanceGeoDecisionEvaluation | null;
   reasons: AttendanceGeoDecisionReason[];
 }
 
@@ -94,6 +168,7 @@ export function evaluateAttendanceGeoPolicy(
       "deny",
       AttendanceGeoDecisionReasonCodes.GeoPolicyModeUnknown,
       "Attendance geo policy mode is not supported.",
+      null,
       null,
       [{ policy_mode: mode }],
     );
@@ -113,16 +188,19 @@ export function evaluateAttendanceGeoPolicy(
   const located = factualOutcome(input.locationStatus);
   const factual = located.outcome;
   const geofence = located.geofence;
+  const evaluation = located.evaluation;
   const reasonCode = factualReasonCode(factual);
 
-  if (factual === "inside_fence") {
+  if (factual === "inside_confident") {
     return allowed(
       factual,
       "allow",
       false,
       reasonCode,
-      "Location evidence is inside the effective geofence.",
+      "Location evidence is confidently inside the effective geofence.",
       geofence,
+      undefined,
+      evaluation,
     );
   }
 
@@ -135,6 +213,8 @@ export function evaluateAttendanceGeoPolicy(
         reasonCode,
         "No effective geofence is configured; geo-optional policy allows attendance.",
         geofence,
+        undefined,
+        evaluation,
       );
     }
     return denied(
@@ -143,6 +223,7 @@ export function evaluateAttendanceGeoPolicy(
       reasonCode,
       "No effective geofence is configured for the resolved attendance policy.",
       geofence,
+      evaluation,
     );
   }
 
@@ -154,6 +235,7 @@ export function evaluateAttendanceGeoPolicy(
       AttendanceGeoDecisionReasonCodes.GeoActionUnknown,
       "Attendance geo policy action is not supported.",
       geofence,
+      evaluation,
       [{ factual_reason_code: reasonCode, configured_action: action }],
     );
   }
@@ -167,6 +249,8 @@ export function evaluateAttendanceGeoPolicy(
       reasonCode,
       reasonDetailFor(factual, "allowed by policy."),
       geofence,
+      undefined,
+      evaluation,
     );
   }
 
@@ -180,6 +264,7 @@ export function evaluateAttendanceGeoPolicy(
         reasonDetailFor(factual, "accepted through explicit manual fallback policy."),
         geofence,
         AttendanceGeoDecisionReasonCodes.GeoManualFallbackAllowed,
+        evaluation,
       );
     }
     const result = decision(
@@ -191,6 +276,7 @@ export function evaluateAttendanceGeoPolicy(
       reasonDetailFor(factual, "manual fallback is disabled by the resolved policy."),
       geofence,
       AttendanceGeoDecisionReasonCodes.GeoManualFallbackDisallowed,
+      evaluation,
     );
     result.reasonCode = AttendanceGeoDecisionReasonCodes.GeoManualFallbackDisallowed;
     result.reasons[1]!.severity = "error";
@@ -203,6 +289,7 @@ export function evaluateAttendanceGeoPolicy(
     reasonCode,
     reasonDetailFor(factual, "denied by policy."),
     geofence,
+    evaluation,
   );
 }
 
@@ -213,6 +300,9 @@ function selectedActionFor(
     locationUnavailableAction: string;
     permissionDeniedAction: string;
     outsideFenceAction: string;
+    boundaryUncertainAction: string;
+    staleEvidenceAction: string;
+    accuracyExceededAction: string;
     fallbackApprovalMode: AttendanceApprovalMode;
   },
 ): string {
@@ -220,20 +310,28 @@ function selectedActionFor(
     return "allow";
   }
   if (factual === "permission_denied") return policy.permissionDeniedAction;
-  if (factual === "outside_fence") return policy.outsideFenceAction;
+  if (factual === "outside_confident") return policy.outsideFenceAction;
+  if (factual === "boundary_uncertain") return policy.boundaryUncertainAction;
+  if (factual === "stale_evidence") return policy.staleEvidenceAction;
+  if (factual === "accuracy_exceeded") return policy.accuracyExceededAction;
   return policy.locationUnavailableAction;
 }
 
 function factualOutcome(
   status: AttendanceGeoEvaluationInput["locationStatus"],
-): { outcome: AttendanceGeoFactualOutcome; geofence: AttendanceGeoFenceReference | null } {
-  if (status.kind === "missing") return { outcome: "missing", geofence: null };
-  if (status.kind === "permission_denied") return { outcome: "permission_denied", geofence: null };
-  if (status.kind === "location_unavailable") return { outcome: "location_unavailable", geofence: null };
-  if (!status.fence.configured) return { outcome: "fence_not_configured", geofence: null };
+): { outcome: AttendanceGeoFactualOutcome; geofence: AttendanceGeoFenceReference | null; evaluation: AttendanceGeoDecisionEvaluation | null } {
+  if (status.kind === "missing") return { outcome: "missing", geofence: null, evaluation: null };
+  if (status.kind === "permission_denied") return { outcome: "permission_denied", geofence: null, evaluation: null };
+  if (status.kind === "location_unavailable") return { outcome: "location_unavailable", geofence: null, evaluation: null };
+  if (status.kind === "stale_evidence") return { outcome: "stale_evidence", geofence: null, evaluation: status.evaluation };
+  if (status.kind === "accuracy_exceeded") return { outcome: "accuracy_exceeded", geofence: null, evaluation: status.evaluation };
+  if (!status.fence.configured) {
+    return { outcome: "fence_not_configured", geofence: null, evaluation: status.fence.evaluation ?? null };
+  }
   return {
-    outcome: status.fence.inside ? "inside_fence" : "outside_fence",
+    outcome: status.fence.category,
     geofence: status.fence.reference,
+    evaluation: status.fence.evaluation,
   };
 }
 
@@ -243,10 +341,16 @@ function factualReasonCode(
   switch (factual) {
     case "not_required":
       return AttendanceGeoDecisionReasonCodes.GeoNotRequired;
-    case "inside_fence":
+    case "inside_confident":
       return AttendanceGeoDecisionReasonCodes.GeoInsideFence;
-    case "outside_fence":
+    case "outside_confident":
       return AttendanceGeoDecisionReasonCodes.GeoOutsideFence;
+    case "boundary_uncertain":
+      return AttendanceGeoDecisionReasonCodes.GeoBoundaryUncertain;
+    case "stale_evidence":
+      return AttendanceGeoDecisionReasonCodes.GeoStaleEvidence;
+    case "accuracy_exceeded":
+      return AttendanceGeoDecisionReasonCodes.GeoAccuracyExceeded;
     case "missing":
       return AttendanceGeoDecisionReasonCodes.GeoEvidenceMissing;
     case "permission_denied":
@@ -266,8 +370,9 @@ function allowed(
   reasonDetail: string,
   geofence: AttendanceGeoFenceReference | null,
   fallbackReasonCode?: AttendanceGeoDecisionReasonCode,
+  evaluation?: AttendanceGeoDecisionEvaluation | null,
 ): AttendanceGeoDecision {
-  return decision(true, factualOutcome, selectedAction, fallbackUsed, reasonCode, reasonDetail, geofence, fallbackReasonCode);
+  return decision(true, factualOutcome, selectedAction, fallbackUsed, reasonCode, reasonDetail, geofence, fallbackReasonCode, evaluation);
 }
 
 function denied(
@@ -276,9 +381,10 @@ function denied(
   reasonCode: AttendanceGeoDecisionReasonCode,
   reasonDetail: string,
   geofence: AttendanceGeoFenceReference | null,
+  evaluation: AttendanceGeoDecisionEvaluation | null = null,
   extraDetails: Array<Record<string, unknown>> = [],
 ): AttendanceGeoDecision {
-  const result = decision(false, factualOutcome, selectedAction, false, reasonCode, reasonDetail, geofence);
+  const result = decision(false, factualOutcome, selectedAction, false, reasonCode, reasonDetail, geofence, undefined, evaluation);
   for (const [index, details] of extraDetails.entries()) {
     Object.assign(result.reasons[index]?.details ?? {}, details);
   }
@@ -294,6 +400,7 @@ function decision(
   reasonDetail: string,
   geofence: AttendanceGeoFenceReference | null,
   fallbackReasonCode?: AttendanceGeoDecisionReasonCode,
+  evaluation: AttendanceGeoDecisionEvaluation | null = null,
 ): AttendanceGeoDecision {
   const details = {
     factual_outcome: factualOutcome,
@@ -302,6 +409,7 @@ function decision(
     geofence_id: geofence?.geofenceId ?? null,
     geofence_version_id: geofence?.geofenceVersionId ?? null,
     reason_detail: reasonDetail,
+    evaluation,
   };
   const reasons: AttendanceGeoDecisionReason[] = [
     {
@@ -327,6 +435,7 @@ function decision(
     reasonCode,
     reasonDetail,
     geofence,
+    evaluation,
     reasons,
   };
 }
@@ -342,8 +451,14 @@ function reasonDetailFor(
         ? "Location permission was denied"
         : factual === "location_unavailable"
           ? "Location is unavailable"
-          : factual === "outside_fence"
-            ? "Location evidence is outside the effective geofence"
-            : "No effective geofence is configured";
+          : factual === "outside_confident"
+            ? "Location evidence is confidently outside the effective geofence"
+            : factual === "boundary_uncertain"
+              ? "Location evidence is within boundary uncertainty"
+              : factual === "stale_evidence"
+                ? "Location evidence is stale"
+                : factual === "accuracy_exceeded"
+                  ? "Location accuracy exceeds policy"
+                  : "No effective geofence is configured";
   return `${prefix}; ${suffix}`;
 }

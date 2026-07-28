@@ -3,7 +3,11 @@ import {
   AttendanceGeoDecisionReasonCodes,
   evaluateAttendanceGeoPolicy,
   type AttendanceGeoEvaluationInput,
+  type AttendanceGeoEvidenceWideEvaluation,
+  type AttendanceGeoSafeEvaluation,
+  type AttendanceGeoSpatialCategory,
 } from "../geo-policy.js";
+import { classifyAttendanceGeoSpatialCategory } from "../command-repository.js";
 import { normalizeAttendancePolicyConfig } from "../policy-config.js";
 
 const geofence = {
@@ -26,7 +30,11 @@ function policy(
     locationUnavailableAction: "deny",
     permissionDeniedAction: "deny",
     outsideFenceAction: "deny",
+    boundaryUncertainAction: "deny",
+    staleEvidenceAction: "deny",
+    accuracyExceededAction: "deny",
     effectiveGeofenceId: geofence.geofenceId,
+    effectiveGeofenceIds: [geofence.geofenceId],
     policyVersion: "1",
     policyVersionId: geofence.geofenceVersionId,
     policyVersionNumber: 1,
@@ -34,20 +42,84 @@ function policy(
   };
 }
 
-const statuses = {
-  missing: { kind: "missing" as const },
-  denied: { kind: "permission_denied" as const },
-  unavailable: { kind: "location_unavailable" as const },
-  inside: { kind: "coordinates" as const, fence: { configured: true as const, inside: true, reference: geofence } },
-  outside: { kind: "coordinates" as const, fence: { configured: true as const, inside: false, reference: geofence } },
-  noFence: { kind: "coordinates" as const, fence: { configured: false as const } },
-};
-
 type GeoPolicy = AttendanceGeoEvaluationInput["policy"];
 type LocationStatus = AttendanceGeoEvaluationInput["locationStatus"];
 type PolicyOverrides = Partial<GeoPolicy>;
 
+function safeEvaluation(
+  category: AttendanceGeoSpatialCategory,
+  overrides: Partial<AttendanceGeoSafeEvaluation> = {},
+): AttendanceGeoSafeEvaluation {
+  return {
+    category,
+    evaluator_version: "attendance-geo-v2",
+    candidate_count: 1,
+    valid_candidate_count: 1,
+    inside_match_count: category === "inside_confident" ? 1 : 0,
+    multiple_inside_matches: false,
+    selected_candidate_ordinal: 1,
+    selected_work_site_id: geofence.workSiteId,
+    selected_geofence_id: geofence.geofenceId,
+    selected_geofence_version_id: geofence.geofenceVersionId,
+    selected_shape_type: geofence.shapeType,
+    selection_reason: category,
+    grace_meters: 0,
+    signed_margin_meters: category === "inside_confident" ? 20 : category === "outside_confident" ? -20 : 2,
+    reported_accuracy_meters: 5,
+    ...overrides,
+  };
+}
+
+function evidenceWideEvaluation(
+  category: AttendanceGeoEvidenceWideEvaluation["category"],
+  overrides: Partial<AttendanceGeoEvidenceWideEvaluation> = {},
+): AttendanceGeoEvidenceWideEvaluation {
+  return {
+    category,
+    evaluator_version: "attendance-geo-v2",
+    evidence_age_ms: 120_000,
+    reported_accuracy_meters: 50,
+    ...overrides,
+  };
+}
+
+function coordinates(category: AttendanceGeoSpatialCategory): LocationStatus {
+  return {
+    kind: "coordinates",
+    fence: {
+      configured: true,
+      category,
+      reference: geofence,
+      evaluation: safeEvaluation(category),
+    },
+  };
+}
+
+const statuses = {
+  missing: { kind: "missing" as const },
+  denied: { kind: "permission_denied" as const },
+  unavailable: { kind: "location_unavailable" as const },
+  stale: { kind: "stale_evidence" as const, evaluation: evidenceWideEvaluation("stale_evidence") },
+  inaccurate: { kind: "accuracy_exceeded" as const, evaluation: evidenceWideEvaluation("accuracy_exceeded") },
+  inside: coordinates("inside_confident"),
+  outside: coordinates("outside_confident"),
+  boundary: coordinates("boundary_uncertain"),
+  noFence: { kind: "coordinates" as const, fence: { configured: false as const } },
+};
+
 describe("attendance geo policy evaluator", () => {
+  it.each([
+    [10, 10, "inside_confident"],
+    [9.999, 10, "boundary_uncertain"],
+    [-10, 10, "boundary_uncertain"],
+    [-10.001, 10, "outside_confident"],
+  ] as const)(
+    "classifies signed margin %s with accuracy %s as %s",
+    (signedMarginMeters, reportedAccuracyMeters, expected) => {
+      expect(classifyAttendanceGeoSpatialCategory(signedMarginMeters, reportedAccuracyMeters)).toBe(expected);
+    },
+  );
+
   it.each([
     ["missing", statuses.missing],
     ["permission denied", statuses.denied],
@@ -82,6 +154,9 @@ describe("attendance geo policy evaluator", () => {
       { outsideFenceAction: "manual_fallback" as const, fallbackApprovalMode: "approval_required" as const },
       true,
     ],
+    ["boundary allow", statuses.boundary, true, "geo_boundary_uncertain", { boundaryUncertainAction: "allow" as const }],
+    ["stale allow", statuses.stale, true, "geo_stale_evidence", { staleEvidenceAction: "allow" as const }],
+    ["accuracy allow", statuses.inaccurate, true, "geo_accuracy_exceeded", { accuracyExceededAction: "allow" as const }],
     ["no effective fence", statuses.noFence, true, "geo_fence_not_configured"],
   ];
   it.each(optionalCases)("evaluates geo_optional %s", (_name, locationStatus, allowed, reasonCode, overrides = {}, fallbackUsed = false) => {
@@ -90,6 +165,9 @@ describe("attendance geo policy evaluator", () => {
       locationUnavailableAction: "allow",
       permissionDeniedAction: "allow",
       outsideFenceAction: "allow",
+      boundaryUncertainAction: "allow",
+      staleEvidenceAction: "allow",
+      accuracyExceededAction: "allow",
     });
     const decision = evaluateAttendanceGeoPolicy({
       policy: { ...basePolicy, ...overrides },
@@ -111,6 +189,13 @@ describe("attendance geo policy evaluator", () => {
     ["outside allow", statuses.outside, { outsideFenceAction: "allow" }, true, "geo_outside_fence", false],
     ["outside deny", statuses.outside, { outsideFenceAction: "deny" }, false, "geo_outside_fence", false],
     ["outside fallback", statuses.outside, { outsideFenceAction: "manual_fallback", fallbackApprovalMode: "approval_required" }, true, "geo_outside_fence", true],
+    ["boundary default deny", statuses.boundary, {}, false, "geo_boundary_uncertain", false],
+    ["boundary allow", statuses.boundary, { boundaryUncertainAction: "allow" }, true, "geo_boundary_uncertain", false],
+    ["boundary fallback", statuses.boundary, { boundaryUncertainAction: "manual_fallback", fallbackApprovalMode: "approval_required" }, true, "geo_boundary_uncertain", true],
+    ["stale default deny", statuses.stale, {}, false, "geo_stale_evidence", false],
+    ["stale allow", statuses.stale, { staleEvidenceAction: "allow" }, true, "geo_stale_evidence", false],
+    ["accuracy default deny", statuses.inaccurate, {}, false, "geo_accuracy_exceeded", false],
+    ["accuracy allow", statuses.inaccurate, { accuracyExceededAction: "allow" }, true, "geo_accuracy_exceeded", false],
     ["no effective fence", statuses.noFence, {}, false, "geo_fence_not_configured", false],
   ];
   it.each(requiredCases)("evaluates geo_required %s", (_name, locationStatus, overrides, allowed, reasonCode, fallbackUsed) => {
@@ -136,6 +221,11 @@ describe("attendance geo policy evaluator", () => {
     ["outside allow", statuses.outside, { outsideFenceAction: "allow" }, true, false],
     ["outside deny", statuses.outside, { outsideFenceAction: "deny" }, false, false],
     ["outside fallback", statuses.outside, { outsideFenceAction: "manual_fallback", fallbackApprovalMode: "approval_required" }, true, true],
+    ["boundary allow", statuses.boundary, { boundaryUncertainAction: "allow" }, true, false],
+    ["boundary deny", statuses.boundary, { boundaryUncertainAction: "deny" }, false, false],
+    ["boundary fallback", statuses.boundary, { boundaryUncertainAction: "manual_fallback", fallbackApprovalMode: "approval_required" }, true, true],
+    ["stale allow", statuses.stale, { staleEvidenceAction: "allow" }, true, false],
+    ["accuracy deny", statuses.inaccurate, { accuracyExceededAction: "deny" }, false, false],
   ];
   it.each(preferredCases)("evaluates geo_preferred %s", (_name, locationStatus, overrides, allowed, fallbackUsed) => {
     const decision = evaluateAttendanceGeoPolicy({
@@ -157,6 +247,10 @@ describe("attendance geo policy evaluator", () => {
   it("defaults a missing stored mode to manual_only", () => {
     const normalized = normalizeAttendancePolicyConfig({});
     expect(normalized.attendanceMode).toBe("manual_only");
+    expect(normalized.effectiveGeofenceIds).toEqual([]);
+    expect(normalized.geofenceGraceMeters).toBe(0);
+    expect(normalized.maxLocationAgeMs).toBeNull();
+    expect(normalized.maxAccuracyMeters).toBeNull();
 
     const decision = evaluateAttendanceGeoPolicy({
       policy: policy(normalized),
@@ -166,6 +260,30 @@ describe("attendance geo policy evaluator", () => {
     expect(decision).toMatchObject({
       allowed: true,
       reasonCode: AttendanceGeoDecisionReasonCodes.GeoNotRequired,
+    });
+  });
+
+  it("normalizes new geofence candidate and threshold policy keys", () => {
+    const normalized = normalizeAttendancePolicyConfig({
+      attendanceMode: "geo_required",
+      boundaryUncertainAction: "allow",
+      staleEvidenceAction: "deny",
+      accuracyExceededAction: "manual_fallback",
+      effectiveGeofenceId: geofence.geofenceId,
+      effectiveGeofenceIds: [geofence.geofenceId, geofence.geofenceId, geofence.geofenceVersionId],
+      geofenceGraceMeters: 15.5,
+      maxLocationAgeMs: 60_000,
+      maxAccuracyMeters: 35,
+    });
+
+    expect(normalized).toMatchObject({
+      boundaryUncertainAction: "allow",
+      staleEvidenceAction: "deny",
+      accuracyExceededAction: "manual_fallback",
+      effectiveGeofenceIds: [geofence.geofenceId, geofence.geofenceVersionId],
+      geofenceGraceMeters: 15.5,
+      maxLocationAgeMs: 60_000,
+      maxAccuracyMeters: 35,
     });
   });
 
@@ -203,6 +321,9 @@ describe("attendance geo policy evaluator", () => {
     ["permission denied", statuses.denied, "permissionDeniedAction", "geo_permission_denied"],
     ["unavailable", statuses.unavailable, "locationUnavailableAction", "geo_location_unavailable"],
     ["outside fence", statuses.outside, "outsideFenceAction", "geo_outside_fence"],
+    ["boundary", statuses.boundary, "boundaryUncertainAction", "geo_boundary_uncertain"],
+    ["stale", statuses.stale, "staleEvidenceAction", "geo_stale_evidence"],
+    ["accuracy", statuses.inaccurate, "accuracyExceededAction", "geo_accuracy_exceeded"],
   ] as const)(
     "keeps factual and fallback-disallowed reasons for disallowed %s fallback",
     (_name, locationStatus, actionKey, factualReasonCode) => {

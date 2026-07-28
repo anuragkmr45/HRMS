@@ -140,6 +140,62 @@ async function createPublishedPolygonGeofence(
   return geofenceId;
 }
 
+async function createPublishedCircleGeofence(
+  app: TestApp,
+  companyId: string,
+  radiusMeters = 100,
+): Promise<string> {
+  const site = await app.store.pgPool!.query<{ id: string }>(
+    `INSERT INTO attendance.work_sites (
+      company_id, site_code, name, site_type, timezone, metadata
+    ) VALUES ($1, $2, 'Bengaluru Circle Office', 'office', 'Asia/Kolkata', '{}'::jsonb)
+    RETURNING id`,
+    [companyId, `SITE-${randomUUID()}`],
+  );
+  const siteId = site.rows[0]?.id;
+  if (!siteId) throw new Error("Circle work-site fixture was not created.");
+
+  const geofence = await app.store.pgPool!.query<{ id: string }>(
+    `INSERT INTO attendance.geofences (
+      company_id, work_site_id, geofence_code, name, metadata
+    ) VALUES ($1, $2, $3, 'Circle Office Fence', '{}'::jsonb)
+    RETURNING id`,
+    [companyId, siteId, `GEO-${randomUUID()}`],
+  );
+  const geofenceId = geofence.rows[0]?.id;
+  if (!geofenceId) throw new Error("Circle geofence fixture was not created.");
+
+  const version = await app.store.pgPool!.query<{ id: string }>(
+    `INSERT INTO attendance.geofence_versions (
+      company_id, geofence_id, version_number, version_status,
+      shape_type, shape, circle_radius_meters, shape_metadata,
+      created_by_user_id, published_by_user_id, published_at,
+      effective_from, effective_until, canonical_hash
+    ) VALUES (
+      $1, $2, 1, 'published', 'circle',
+      ST_SetSRID(ST_MakePoint(77.595, 12.972), 4326), $3, '{}'::jsonb,
+      $4::uuid, $4::uuid, now(),
+      '2026-01-01T00:00:00.000Z', NULL,
+      attendance.geofence_shape_canonical_hash(
+        'circle',
+        ST_SetSRID(ST_MakePoint(77.595, 12.972), 4326),
+        $3
+      )
+    )
+    RETURNING id`,
+    [companyId, geofenceId, radiusMeters, randomUUID()],
+  );
+  const versionId = version.rows[0]?.id;
+  if (!versionId) throw new Error("Circle geofence version fixture was not created.");
+  await app.store.pgPool!.query(
+    `UPDATE attendance.geofences
+        SET current_published_version_id = $1
+      WHERE id = $2`,
+    [versionId, geofenceId],
+  );
+  return geofenceId;
+}
+
 async function assignAttendancePolicy(
   app: TestApp,
   input: {
@@ -374,8 +430,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
   });
 
   it.each([
-    ["inside fence", coordinateLocation(12.972, 77.595), "inside_fence"],
-    ["on polygon boundary", coordinateLocation(12.971, 77.595), "inside_fence"],
+    ["inside fence", coordinateLocation(12.972, 77.595), "inside_confident"],
   ])("allows required-geo current punches %s", async (_name, location, factualOutcome) => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
@@ -409,6 +464,195 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     expect(JSON.stringify(response.json())).not.toContain("77.595");
   });
 
+  it.each([
+    ["confidently inside", coordinateLocation(12.972, 77.595), "inside_confident", 200],
+    ["confidently outside", coordinateLocation(12.975, 77.598), "outside_confident", 409],
+  ])("evaluates circle geofences as %s", async (_name, location, factualOutcome, statusCode) => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedCircleGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location,
+      },
+    });
+
+    expect(response.statusCode).toBe(statusCode);
+    const geoPolicy = statusCode === 200 ? response.json().geo_policy : response.json().details.geo_policy;
+    expect(geoPolicy).toMatchObject({
+      factual_outcome: factualOutcome,
+      geofence_id: geofenceId,
+      evaluation: {
+        selected_shape_type: "circle",
+        radius_meters: 100,
+        grace_meters: 0,
+      },
+    });
+    expect(JSON.stringify(response.json())).not.toContain("77.595");
+  });
+
+  it("flags polygon boundary evidence separately from confident inside evidence", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: coordinateLocation(12.971, 77.595),
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().details).toMatchObject({
+      reason_code: "geo_boundary_uncertain",
+      geo_policy: {
+        factual_outcome: "boundary_uncertain",
+        selected_action: "deny",
+        allowed: false,
+      },
+    });
+    expect(JSON.stringify(response.json())).not.toContain("77.595");
+  });
+
+  it("evaluates only the configured geofence candidate list and preserves safe selection metrics", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceIds: [randomUUID(), geofenceId] },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: coordinateLocation(12.972, 77.595),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().geo_policy).toMatchObject({
+      factual_outcome: "inside_confident",
+      geofence_id: geofenceId,
+      evaluation: {
+        category: "inside_confident",
+        candidate_count: 2,
+        valid_candidate_count: 1,
+        selected_candidate_ordinal: 2,
+        selected_geofence_id: geofenceId,
+      },
+    });
+    expect(JSON.stringify(response.json())).not.toContain("77.595");
+  });
+
+  it("rejects stale and low-accuracy coordinate evidence with distinct factual outcomes", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId, maxLocationAgeMs: 60_000 },
+    });
+
+    const stale = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: {
+          ...coordinateLocation(12.972, 77.595),
+          captured_at: new Date(Date.now() - 120_000).toISOString(),
+        },
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().details).toMatchObject({
+      reason_code: "geo_stale_evidence",
+      geo_policy: {
+        factual_outcome: "stale_evidence",
+        selected_action: "deny",
+        evaluation: {
+          category: "stale_evidence",
+          max_location_age_ms: 60_000,
+        },
+      },
+    });
+    expect(JSON.stringify(stale.json())).not.toContain("77.595");
+
+    await clearGeoPolicyFixtures(app);
+    const accuracyGeofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: accuracyGeofenceId, maxAccuracyMeters: 5 },
+    });
+
+    const inaccurate = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: coordinateLocation(12.972, 77.595),
+      },
+    });
+
+    expect(inaccurate.statusCode).toBe(409);
+    expect(inaccurate.json().details).toMatchObject({
+      reason_code: "geo_accuracy_exceeded",
+      geo_policy: {
+        factual_outcome: "accuracy_exceeded",
+        selected_action: "deny",
+        evaluation: {
+          category: "accuracy_exceeded",
+          max_accuracy_meters: 5,
+        },
+      },
+    });
+    expect(JSON.stringify(inaccurate.json())).not.toContain("77.595");
+  });
+
   it("applies outside-fence allow, deny, and manual fallback actions explicitly", async () => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
@@ -428,7 +672,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     });
     expect(allowed.statusCode).toBe(200);
     expect(allowed.json().geo_policy).toMatchObject({
-      factual_outcome: "outside_fence",
+      factual_outcome: "outside_confident",
       selected_action: "allow",
       allowed: true,
     });
@@ -475,7 +719,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     });
     expect(fallback.statusCode).toBe(200);
     expect(fallback.json().geo_policy).toMatchObject({
-      factual_outcome: "outside_fence",
+      factual_outcome: "outside_confident",
       selected_action: "manual_fallback",
       fallback_used: true,
       allowed: true,

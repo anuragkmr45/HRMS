@@ -13,7 +13,12 @@ import { conflict } from "../../platform/errors.js";
 import type {
   AttendanceGeoDecisionReasonCode,
   AttendanceGeoFenceReference,
+  AttendanceGeoNoEffectiveEvaluation,
+  AttendanceGeoSafeEvaluation,
+  AttendanceGeoSpatialCategory,
 } from "./geo-policy.js";
+
+export const ATTENDANCE_GEO_EVALUATOR_VERSION = "attendance-geo-v2";
 
 export type AttendanceCommandDecisionReasonCode =
   | AttendanceDecisionReasonCode
@@ -113,6 +118,7 @@ export interface AttendanceLocationEvidenceRecord {
 }
 
 interface EffectiveGeofenceEvaluationRow {
+  candidate_ordinal: number;
   geofence_id: UUID;
   geofence_version_id: UUID;
   work_site_id: UUID;
@@ -121,7 +127,68 @@ interface EffectiveGeofenceEvaluationRow {
   effective_from: Date;
   effective_until: Date | null;
   canonical_hash: string;
-  inside: boolean;
+  covered: boolean | null;
+  distance_meters: number | string | null;
+  boundary_distance_meters: number | string | null;
+  radius_meters: number | string | null;
+  grace_meters: number | string;
+  effective_radius_meters: number | string | null;
+  signed_margin_meters: number | string;
+  reported_accuracy_meters: number | string;
+}
+
+export type EffectiveGeofenceEvaluationResult =
+  | {
+      configured: false;
+      evaluation: AttendanceGeoNoEffectiveEvaluation;
+    }
+  | {
+      configured: true;
+      category: AttendanceGeoSpatialCategory;
+      reference: AttendanceGeoFenceReference;
+      evaluation: AttendanceGeoSafeEvaluation;
+    };
+
+function finiteNumber(value: number | string | null, field: string): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed)) {
+    throw conflict("PostGIS geofence evaluation produced a non-finite metric.", {
+      code: "geofence_evaluation_non_finite_metric",
+      field,
+    });
+  }
+  return parsed;
+}
+
+export function classifyAttendanceGeoSpatialCategory(
+  signedMarginMeters: number,
+  reportedAccuracyMeters: number,
+): AttendanceGeoSpatialCategory {
+  if (signedMarginMeters >= reportedAccuracyMeters) return "inside_confident";
+  if (signedMarginMeters < -reportedAccuracyMeters) return "outside_confident";
+  return "boundary_uncertain";
+}
+
+function categoryPriority(category: AttendanceGeoSpatialCategory): number {
+  switch (category) {
+    case "inside_confident":
+      return 1;
+    case "boundary_uncertain":
+      return 2;
+    case "outside_confident":
+      return 3;
+  }
+}
+
+function selectionReason(category: AttendanceGeoSpatialCategory): string {
+  switch (category) {
+    case "inside_confident":
+      return "inside_confident_strongest_margin";
+    case "boundary_uncertain":
+      return "boundary_uncertain_strongest_margin";
+    case "outside_confident":
+      return "outside_confident_nearest";
+  }
 }
 
 export interface CreateAttendanceCommandInput {
@@ -720,56 +787,195 @@ export class AttendanceCommandTransactionRepository {
 
   async evaluateEffectiveGeofence(input: {
     companyId: UUID;
-    geofenceId: UUID;
+    geofenceIds: UUID[];
     asOf: string;
     latitude: number;
     longitude: number;
-  }): Promise<{ configured: false } | { configured: true; inside: boolean; reference: AttendanceGeoFenceReference }> {
+    reportedAccuracyMeters: number;
+    graceMeters: number;
+  }): Promise<EffectiveGeofenceEvaluationResult> {
+    const candidateCount = input.geofenceIds.length;
+    if (candidateCount === 0) {
+      return {
+        configured: false,
+        evaluation: {
+          category: "no_effective_geofence",
+          evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+          candidate_count: candidateCount,
+          valid_candidate_count: 0,
+        },
+      };
+    }
     const result = await this.client.query<EffectiveGeofenceEvaluationRow>(
-      `WITH point AS (
+      `WITH candidates AS (
+          SELECT candidate.geofence_id, candidate.ordinal::integer AS candidate_ordinal
+          FROM unnest($2::uuid[]) WITH ORDINALITY AS candidate(geofence_id, ordinal)
+        ),
+        point AS (
           SELECT ST_SetSRID(ST_MakePoint($4, $5), 4326) AS geom
+        ),
+        effective AS (
+          SELECT
+            candidates.candidate_ordinal,
+            geofence.id AS geofence_id,
+            version.id AS geofence_version_id,
+            geofence.work_site_id,
+            version.version_number,
+            version.shape_type,
+            version.effective_from,
+            version.effective_until,
+            version.canonical_hash,
+            CASE
+              WHEN version.shape_type = 'polygon'
+                THEN ST_Covers(version.shape, point.geom)
+              ELSE NULL
+            END AS covered,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN ST_Distance(point.geom::geography, version.shape::geography)
+              ELSE NULL
+            END AS distance_meters,
+            CASE
+              WHEN version.shape_type = 'polygon'
+                THEN ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography)
+              ELSE NULL
+            END AS boundary_distance_meters,
+            version.circle_radius_meters::double precision AS radius_meters,
+            $7::double precision AS grace_meters,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN version.circle_radius_meters::double precision + $7::double precision
+              ELSE NULL
+            END AS effective_radius_meters,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN version.circle_radius_meters::double precision + $7::double precision -
+                  ST_Distance(point.geom::geography, version.shape::geography)
+              WHEN ST_Covers(version.shape, point.geom)
+                THEN ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography) + $7::double precision
+              ELSE $7::double precision -
+                ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography)
+            END AS signed_margin_meters,
+            $6::double precision AS reported_accuracy_meters
+          FROM candidates
+          JOIN attendance.geofences geofence
+            ON geofence.company_id = $1
+           AND geofence.id = candidates.geofence_id
+           AND geofence.is_active = true
+           AND geofence.deleted_at IS NULL
+          JOIN attendance.geofence_versions version
+            ON version.geofence_id = geofence.id
+           AND version.company_id = geofence.company_id
+          CROSS JOIN point
+          WHERE version.version_status = 'published'
+            AND version.effective_from <= $3::timestamptz
+            AND (version.effective_until IS NULL OR $3::timestamptz < version.effective_until)
         )
         SELECT
-          geofence.id AS geofence_id,
-          version.id AS geofence_version_id,
-          geofence.work_site_id,
-          version.version_number,
-          version.shape_type,
-          version.effective_from,
-          version.effective_until,
-          version.canonical_hash,
-          CASE
-            WHEN version.shape_type = 'circle'
-              THEN ST_DWithin(point.geom::geography, version.shape::geography, version.circle_radius_meters)
-            ELSE ST_Covers(version.shape, point.geom)
-          END AS inside
-        FROM attendance.geofences geofence
-        JOIN attendance.geofence_versions version
-          ON version.geofence_id = geofence.id
-         AND version.company_id = geofence.company_id
-        CROSS JOIN point
-        WHERE geofence.company_id = $1
-          AND geofence.id = $2
-          AND geofence.is_active = true
-          AND geofence.deleted_at IS NULL
-          AND version.version_status = 'published'
-          AND version.effective_from <= $3::timestamptz
-          AND (version.effective_until IS NULL OR $3::timestamptz < version.effective_until)
-        ORDER BY version.effective_from DESC, version.published_at DESC, version.version_number DESC`,
-      [input.companyId, input.geofenceId, input.asOf, input.longitude, input.latitude],
+          candidate_ordinal,
+          geofence_id,
+          geofence_version_id,
+          work_site_id,
+          version_number,
+          shape_type,
+          effective_from,
+          effective_until,
+          canonical_hash,
+          covered,
+          distance_meters,
+          boundary_distance_meters,
+          radius_meters,
+          grace_meters,
+          effective_radius_meters,
+          signed_margin_meters,
+          reported_accuracy_meters
+        FROM effective
+        ORDER BY candidate_ordinal ASC, effective_from DESC, version_number DESC`,
+      [
+        input.companyId,
+        input.geofenceIds,
+        input.asOf,
+        input.longitude,
+        input.latitude,
+        input.reportedAccuracyMeters,
+        input.graceMeters,
+      ],
     );
-    if (result.rows.length === 0) return { configured: false };
-    if (result.rows.length > 1) {
+    if (result.rows.length === 0) {
+      return {
+        configured: false,
+        evaluation: {
+          category: "no_effective_geofence",
+          evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+          candidate_count: candidateCount,
+          valid_candidate_count: 0,
+        },
+      };
+    }
+    const versionsByGeofence = new Map<UUID, EffectiveGeofenceEvaluationRow[]>();
+    for (const row of result.rows) {
+      versionsByGeofence.set(row.geofence_id, [
+        ...(versionsByGeofence.get(row.geofence_id) ?? []),
+        row,
+      ]);
+    }
+    const ambiguous = [...versionsByGeofence.values()].find((rows) => rows.length > 1);
+    if (ambiguous) {
       throw conflict("Geofence has multiple effective published versions.", {
         code: "geofence_ambiguous_active_versions",
-        geofence_id: input.geofenceId,
-        geofence_version_ids: result.rows.map((row) => row.geofence_version_id),
+        geofence_id: ambiguous[0]!.geofence_id,
+        geofence_version_ids: ambiguous.map((row) => row.geofence_version_id),
       });
     }
-    const row = result.rows[0]!;
+    const evaluated = result.rows.map((row) => {
+      const signedMarginMeters = finiteNumber(row.signed_margin_meters, "signed_margin_meters");
+      const reportedAccuracyMeters = finiteNumber(row.reported_accuracy_meters, "reported_accuracy_meters");
+      const category = classifyAttendanceGeoSpatialCategory(signedMarginMeters, reportedAccuracyMeters);
+      const evaluation: AttendanceGeoSafeEvaluation = {
+        category,
+        evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+        candidate_count: candidateCount,
+        valid_candidate_count: result.rows.length,
+        inside_match_count: 0,
+        multiple_inside_matches: false,
+        selected_candidate_ordinal: row.candidate_ordinal,
+        selected_work_site_id: row.work_site_id,
+        selected_geofence_id: row.geofence_id,
+        selected_geofence_version_id: row.geofence_version_id,
+        selected_shape_type: row.shape_type,
+        selection_reason: "",
+        grace_meters: finiteNumber(row.grace_meters, "grace_meters"),
+        signed_margin_meters: signedMarginMeters,
+        reported_accuracy_meters: reportedAccuracyMeters,
+      };
+      if (row.shape_type === "circle") {
+        evaluation.distance_meters = finiteNumber(row.distance_meters, "distance_meters");
+        evaluation.radius_meters = finiteNumber(row.radius_meters, "radius_meters");
+        evaluation.effective_radius_meters = finiteNumber(row.effective_radius_meters, "effective_radius_meters");
+      } else {
+        evaluation.boundary_distance_meters = finiteNumber(row.boundary_distance_meters, "boundary_distance_meters");
+      }
+      return { row, category, evaluation };
+    });
+    const insideMatchCount = evaluated.filter((candidate) => candidate.category === "inside_confident").length;
+    const selected = evaluated.sort((left, right) => {
+      const priority = categoryPriority(left.category) - categoryPriority(right.category);
+      if (priority !== 0) return priority;
+      const margin = right.evaluation.signed_margin_meters - left.evaluation.signed_margin_meters;
+      if (margin !== 0) return margin;
+      const ordinal = left.row.candidate_ordinal - right.row.candidate_ordinal;
+      if (ordinal !== 0) return ordinal;
+      const geofence = left.row.geofence_id.localeCompare(right.row.geofence_id);
+      if (geofence !== 0) return geofence;
+      return left.row.geofence_version_id.localeCompare(right.row.geofence_version_id);
+    })[0]!;
+    selected.evaluation.inside_match_count = insideMatchCount;
+    selected.evaluation.multiple_inside_matches = insideMatchCount > 1;
+    selected.evaluation.selection_reason = selectionReason(selected.category);
+    const row = selected.row;
     return {
       configured: true,
-      inside: row.inside,
+      category: selected.category,
       reference: {
         geofenceId: row.geofence_id,
         geofenceVersionId: row.geofence_version_id,
@@ -780,6 +986,7 @@ export class AttendanceCommandTransactionRepository {
         effectiveUntil: row.effective_until?.toISOString() ?? null,
         canonicalHash: row.canonical_hash,
       },
+      evaluation: selected.evaluation,
     };
   }
 

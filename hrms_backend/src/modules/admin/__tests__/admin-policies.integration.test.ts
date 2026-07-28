@@ -129,7 +129,14 @@ describe("admin policy settings", () => {
             locationUnavailableAction: "allow",
             permissionDeniedAction: "allow",
             outsideFenceAction: "allow",
+            boundaryUncertainAction: "allow",
+            staleEvidenceAction: "allow",
+            accuracyExceededAction: "allow",
             effectiveGeofenceId: null,
+            effectiveGeofenceIds: [],
+            geofenceGraceMeters: 0,
+            maxLocationAgeMs: null,
+            maxAccuracyMeters: null,
           }),
         }),
       ]),
@@ -177,7 +184,14 @@ describe("admin policy settings", () => {
           locationUnavailableAction: "manual_fallback",
           permissionDeniedAction: "deny",
           outsideFenceAction: "allow",
+          boundaryUncertainAction: "manual_fallback",
+          staleEvidenceAction: "deny",
+          accuracyExceededAction: "manual_fallback",
           effectiveGeofenceId: null,
+          effectiveGeofenceIds: [],
+          geofenceGraceMeters: 12.5,
+          maxLocationAgeMs: 120000,
+          maxAccuracyMeters: 50,
         },
       },
     });
@@ -221,7 +235,14 @@ describe("admin policy settings", () => {
         locationUnavailableAction: "manual_fallback",
         permissionDeniedAction: "deny",
         outsideFenceAction: "allow",
+        boundaryUncertainAction: "manual_fallback",
+        staleEvidenceAction: "deny",
+        accuracyExceededAction: "manual_fallback",
         effectiveGeofenceId: null,
+        effectiveGeofenceIds: [],
+        geofenceGraceMeters: 12.5,
+        maxLocationAgeMs: 120000,
+        maxAccuracyMeters: 50,
       }),
     });
 
@@ -247,7 +268,14 @@ describe("admin policy settings", () => {
         locationUnavailableAction: "manual_fallback",
         permissionDeniedAction: "deny",
         outsideFenceAction: "allow",
+        boundaryUncertainAction: "manual_fallback",
+        staleEvidenceAction: "deny",
+        accuracyExceededAction: "manual_fallback",
         effectiveGeofenceId: null,
+        effectiveGeofenceIds: [],
+        geofenceGraceMeters: 12.5,
+        maxLocationAgeMs: 120000,
+        maxAccuracyMeters: 50,
       }),
     });
 
@@ -307,6 +335,48 @@ describe("admin policy settings", () => {
 
     expect(invalidTime.statusCode).toBe(400);
 
+    const invalidGrace = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          geofenceGraceMeters: -1,
+        },
+      },
+    });
+
+    expect(invalidGrace.statusCode).toBe(400);
+
+    const invalidMaxAge = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          maxLocationAgeMs: 0,
+        },
+      },
+    });
+
+    expect(invalidMaxAge.statusCode).toBe(400);
+
+    const invalidMaxAccuracy = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          maxAccuracyMeters: 0,
+        },
+      },
+    });
+
+    expect(invalidMaxAccuracy.statusCode).toBe(400);
+
     expect(app.store.outbox.at(-1)?.event_type).toBe("admin.policy.updated");
   });
 
@@ -330,23 +400,61 @@ describe("admin policy settings", () => {
       config: expect.objectContaining({ effectiveGeofenceId: activeGeofenceId }),
     });
 
-    const malformed = await app.inject({
+    const secondGeofenceId = await createPolicyGeofence(companyId);
+    const validList = await app.inject({
       method: "PUT",
       url: "/api/v1/admin/policies/attendance",
       headers: authHeader(admin.token),
       payload: {
         expected_version: 2,
+        config: { effectiveGeofenceIds: [activeGeofenceId, secondGeofenceId] },
+      },
+    });
+    expect(validList.statusCode).toBe(200);
+    expect(validList.json().policy).toMatchObject({
+      version: 3,
+      config: expect.objectContaining({ effectiveGeofenceIds: [activeGeofenceId, secondGeofenceId] }),
+    });
+
+    const malformed = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
         config: { effectiveGeofenceId: "not-a-uuid" },
       },
     });
     expect(malformed.statusCode).toBe(400);
+
+    const malformedList = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceIds: [activeGeofenceId, "not-a-uuid"] },
+      },
+    });
+    expect(malformedList.statusCode).toBe(400);
+
+    const duplicateList = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceIds: [activeGeofenceId, activeGeofenceId] },
+      },
+    });
+    expect(duplicateList.statusCode).toBe(400);
 
     const missing = await app.inject({
       method: "PUT",
       url: "/api/v1/admin/policies/attendance",
       headers: authHeader(admin.token),
       payload: {
-        expected_version: 2,
+        expected_version: 3,
         config: { effectiveGeofenceId: randomUUID() },
       },
     });
@@ -358,7 +466,7 @@ describe("admin policy settings", () => {
       url: "/api/v1/admin/policies/attendance",
       headers: authHeader(admin.token),
       payload: {
-        expected_version: 2,
+        expected_version: 3,
         config: { effectiveGeofenceId: deletedGeofenceId },
       },
     });
@@ -370,7 +478,7 @@ describe("admin policy settings", () => {
       url: "/api/v1/admin/policies/attendance",
       headers: authHeader(admin.token),
       payload: {
-        expected_version: 2,
+        expected_version: 3,
         config: { effectiveGeofenceId: crossCompanyGeofenceId },
       },
     });
@@ -381,13 +489,13 @@ describe("admin policy settings", () => {
       url: "/api/v1/admin/policies/attendance",
       headers: authHeader(admin.token),
       payload: {
-        expected_version: 2,
+        expected_version: 3,
         config: { effectiveGeofenceId: null },
       },
     });
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json().policy).toMatchObject({
-      version: 3,
+      version: 4,
       config: expect.objectContaining({ effectiveGeofenceId: null }),
     });
   });

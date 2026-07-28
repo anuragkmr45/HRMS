@@ -350,7 +350,14 @@ interface AttendancePunchPolicy {
   locationUnavailableAction: NormalizedAttendanceGeoPolicyAction;
   permissionDeniedAction: NormalizedAttendanceGeoPolicyAction;
   outsideFenceAction: NormalizedAttendanceGeoPolicyAction;
+  boundaryUncertainAction: NormalizedAttendanceGeoPolicyAction;
+  staleEvidenceAction: NormalizedAttendanceGeoPolicyAction;
+  accuracyExceededAction: NormalizedAttendanceGeoPolicyAction;
   effectiveGeofenceId: UUID | null;
+  effectiveGeofenceIds: UUID[];
+  geofenceGraceMeters: number;
+  maxLocationAgeMs: number | null;
+  maxAccuracyMeters: number | null;
   policyVersion: string;
 }
 
@@ -1657,7 +1664,14 @@ export class AttendanceService {
       location_unavailable_action: availability.policy.locationUnavailableAction,
       permission_denied_action: availability.policy.permissionDeniedAction,
       outside_fence_action: availability.policy.outsideFenceAction,
+      boundary_uncertain_action: availability.policy.boundaryUncertainAction,
+      stale_evidence_action: availability.policy.staleEvidenceAction,
+      accuracy_exceeded_action: availability.policy.accuracyExceededAction,
       effective_geofence_id: availability.policy.effectiveGeofenceId,
+      effective_geofence_ids: availability.policy.effectiveGeofenceIds,
+      geofence_grace_meters: availability.policy.geofenceGraceMeters,
+      max_location_age_ms: availability.policy.maxLocationAgeMs,
+      max_accuracy_meters: availability.policy.maxAccuracyMeters,
       is_company_working_day: availability.is_company_working_day,
       local_time: availability.local_time,
       can_punch_now: availability.next_allowed_actions.length > 0,

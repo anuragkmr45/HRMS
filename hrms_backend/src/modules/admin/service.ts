@@ -1780,6 +1780,9 @@ const attendanceModeFields: Record<string, readonly string[]> = {
   locationUnavailableAction: ["allow", "deny", "manual_fallback"],
   permissionDeniedAction: ["allow", "deny", "manual_fallback"],
   outsideFenceAction: ["allow", "deny", "manual_fallback"],
+  boundaryUncertainAction: ["allow", "deny", "manual_fallback"],
+  staleEvidenceAction: ["allow", "deny", "manual_fallback"],
+  accuracyExceededAction: ["allow", "deny", "manual_fallback"],
 };
 const attendanceTimePolicyPattern = /^([01]\d|2[0-3]):[0-5]\d$/u;
 const uuidPolicyPattern =
@@ -1804,6 +1807,30 @@ function normalizeAdminPolicyConfig(
         "Policy number values must be finite and non-negative.",
         { policy_key: policyKey, field: key },
       );
+    }
+    if (policyKey === "attendance" && key === "geofenceGraceMeters") {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw badRequest("Attendance geofence grace must be a non-negative finite number.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+    }
+    if (policyKey === "attendance" && key === "maxLocationAgeMs" && value !== null) {
+      if (typeof value !== "number" || !Number.isInteger(value) || !Number.isFinite(value) || value <= 0) {
+        throw badRequest("Attendance maximum location age must be a positive integer.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+    }
+    if (policyKey === "attendance" && key === "maxAccuracyMeters" && value !== null) {
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        throw badRequest("Attendance maximum accuracy must be a positive finite number.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
     }
     if (
       policyKey === "attendance" &&
@@ -1850,6 +1877,33 @@ function normalizeAdminPolicyConfig(
         );
       }
     }
+    if (policyKey === "attendance" && key === "effectiveGeofenceIds") {
+      if (!Array.isArray(value)) {
+        throw badRequest("Attendance policy geofence candidates must be a UUID array.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+      const seen = new Set<string>();
+      next[key] = value.map((item) => {
+        if (typeof item !== "string" || !uuidPolicyPattern.test(item.trim())) {
+          throw badRequest("Attendance policy geofence candidate must be a UUID.", {
+            policy_key: policyKey,
+            field: key,
+          });
+        }
+        const trimmed = item.trim();
+        if (seen.has(trimmed)) {
+          throw badRequest("Attendance policy geofence candidates must be unique.", {
+            policy_key: policyKey,
+            field: key,
+          });
+        }
+        seen.add(trimmed);
+        return trimmed;
+      });
+      continue;
+    }
     if (typeof value === "string") {
       const trimmed = value.trim();
       if (!trimmed) {
@@ -1873,11 +1927,12 @@ async function validateAdminPolicyConfigReferences(
   config: Record<string, unknown>,
 ): Promise<void> {
   const geofenceId = config["effectiveGeofenceId"];
+  const geofenceIds = config["effectiveGeofenceIds"];
 
   if (
     policyKey !== "attendance" ||
-    geofenceId === null ||
-    geofenceId === undefined
+    ((geofenceId === null || geofenceId === undefined) &&
+      (!Array.isArray(geofenceIds) || geofenceIds.length === 0))
   ) {
     return;
   }
@@ -1887,15 +1942,21 @@ async function validateAdminPolicyConfigReferences(
       "Attendance policy geofence reference requires a company context.",
       {
         policy_key: policyKey,
-        field: "effectiveGeofenceId",
+        field: Array.isArray(geofenceIds) && geofenceIds.length > 0 ? "effectiveGeofenceIds" : "effectiveGeofenceId",
       },
     );
   }
 
-  if (typeof geofenceId !== "string") {
+  const candidateIds = [
+    ...new Set([
+      ...(typeof geofenceId === "string" ? [geofenceId] : []),
+      ...(Array.isArray(geofenceIds) ? geofenceIds : []),
+    ]),
+  ];
+  if (!candidateIds.every((item): item is string => typeof item === "string")) {
     throw badRequest("Attendance policy geofence reference must be a UUID.", {
       policy_key: policyKey,
-      field: "effectiveGeofenceId",
+      field: "effectiveGeofenceIds",
     });
   }
 
@@ -1908,20 +1969,19 @@ async function validateAdminPolicyConfigReferences(
   const geofence = await store.pgPool.query<{ id: string }>(
     `SELECT id
        FROM attendance.geofences
-      WHERE id = $1
+      WHERE id = ANY($1::uuid[])
         AND company_id = $2
         AND is_active = true
         AND deleted_at IS NULL`,
-    [geofenceId, companyId],
+    [candidateIds, companyId],
   );
 
-  if (!geofence.rows[0]) {
+  if (geofence.rows.length !== candidateIds.length) {
     throw badRequest(
       "Attendance policy geofence reference is not valid for this company.",
       {
         policy_key: policyKey,
-        field: "effectiveGeofenceId",
-        geofence_id: geofenceId,
+        field: candidateIds.length > 1 ? "effectiveGeofenceIds" : "effectiveGeofenceId",
       },
     );
   }
@@ -1948,7 +2008,14 @@ function adminPolicyConfigKeys(policyKey: AdminPolicyKey): Set<string> {
       "locationUnavailableAction",
       "permissionDeniedAction",
       "outsideFenceAction",
+      "boundaryUncertainAction",
+      "staleEvidenceAction",
+      "accuracyExceededAction",
       "effectiveGeofenceId",
+      "effectiveGeofenceIds",
+      "geofenceGraceMeters",
+      "maxLocationAgeMs",
+      "maxAccuracyMeters",
     ],
     leave: [
       "casualPerYear",

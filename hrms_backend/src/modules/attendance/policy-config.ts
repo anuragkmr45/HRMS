@@ -36,7 +36,14 @@ export interface NormalizedAttendancePolicyConfig {
   locationUnavailableAction: NormalizedAttendanceGeoPolicyAction;
   permissionDeniedAction: NormalizedAttendanceGeoPolicyAction;
   outsideFenceAction: NormalizedAttendanceGeoPolicyAction;
+  boundaryUncertainAction: NormalizedAttendanceGeoPolicyAction;
+  staleEvidenceAction: NormalizedAttendanceGeoPolicyAction;
+  accuracyExceededAction: NormalizedAttendanceGeoPolicyAction;
   effectiveGeofenceId: UUID | null;
+  effectiveGeofenceIds: UUID[];
+  geofenceGraceMeters: number;
+  maxLocationAgeMs: number | null;
+  maxAccuracyMeters: number | null;
 }
 
 export interface EffectiveAttendancePolicy extends NormalizedAttendancePolicyConfig, Record<string, unknown> {
@@ -80,7 +87,14 @@ const defaultAttendancePolicyConfig: NormalizedAttendancePolicyConfig = {
   locationUnavailableAction: "allow",
   permissionDeniedAction: "allow",
   outsideFenceAction: "allow",
+  boundaryUncertainAction: "allow",
+  staleEvidenceAction: "allow",
+  accuracyExceededAction: "allow",
   effectiveGeofenceId: null,
+  effectiveGeofenceIds: [],
+  geofenceGraceMeters: 0,
+  maxLocationAgeMs: null,
+  maxAccuracyMeters: null,
 };
 
 export function normalizeAttendancePolicyConfig(
@@ -91,6 +105,13 @@ export function normalizeAttendancePolicyConfig(
     config,
     "allowRegularization",
     defaultAttendancePolicyConfig.allowRegularization,
+  );
+  const effectiveGeofenceId = uuidConfig(config, "effectiveGeofenceId", "effective_geofence_id");
+  const locationUnavailableAction = geoActionConfig(
+    config,
+    "locationUnavailableAction",
+    "location_unavailable_action",
+    actionDefault(config, "locationUnavailableAction", "location_unavailable_action"),
   );
   return {
     graceMinutes: numberConfig(config, "graceMinutes", defaultAttendancePolicyConfig.graceMinutes),
@@ -113,12 +134,7 @@ export function normalizeAttendancePolicyConfig(
       ["disabled", "approval_required"],
       allowRegularization ? "approval_required" : "disabled",
     ),
-    locationUnavailableAction: geoActionConfig(
-      config,
-      "locationUnavailableAction",
-      "location_unavailable_action",
-      actionDefault(config, "locationUnavailableAction", "location_unavailable_action"),
-    ),
+    locationUnavailableAction,
     permissionDeniedAction: geoActionConfig(
       config,
       "permissionDeniedAction",
@@ -131,7 +147,14 @@ export function normalizeAttendancePolicyConfig(
       "outside_fence_action",
       actionDefault(config, "outsideFenceAction", "outside_fence_action"),
     ),
-    effectiveGeofenceId: uuidConfig(config, "effectiveGeofenceId", "effective_geofence_id"),
+    boundaryUncertainAction: geoActionConfig(config, "boundaryUncertainAction", "boundary_uncertain_action", locationUnavailableAction),
+    staleEvidenceAction: geoActionConfig(config, "staleEvidenceAction", "stale_evidence_action", locationUnavailableAction),
+    accuracyExceededAction: geoActionConfig(config, "accuracyExceededAction", "accuracy_exceeded_action", locationUnavailableAction),
+    effectiveGeofenceId,
+    effectiveGeofenceIds: uuidListConfig(config, effectiveGeofenceId),
+    geofenceGraceMeters: numberAliasConfig(config, "geofenceGraceMeters", "geofence_grace_meters", defaultAttendancePolicyConfig.geofenceGraceMeters),
+    maxLocationAgeMs: positiveIntegerOrNullConfig(config, "maxLocationAgeMs", "max_location_age_ms"),
+    maxAccuracyMeters: positiveNumberOrNullConfig(config, "maxAccuracyMeters", "max_accuracy_meters"),
   };
 }
 
@@ -164,6 +187,16 @@ function numberConfig(config: Record<string, unknown>, key: string, fallback: nu
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+function numberAliasConfig(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+  fallback: number,
+): number {
+  const value = config[camelKey] ?? config[snakeKey];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
 function booleanConfig(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
   return typeof config[key] === "boolean" ? config[key] : fallback;
 }
@@ -187,7 +220,7 @@ function geoActionConfig(
   config: Record<string, unknown>,
   camelKey: string,
   snakeKey: string,
-  fallback: AttendanceGeoPolicyAction,
+  fallback: NormalizedAttendanceGeoPolicyAction,
 ): NormalizedAttendanceGeoPolicyAction {
   const value = config[camelKey] ?? config[snakeKey];
   if (camelKey in config || snakeKey in config) {
@@ -230,6 +263,51 @@ function uuidConfig(
 ): UUID | null {
   const value = config[camelKey] ?? config[snakeKey];
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+    ? value
+    : null;
+}
+
+function uuidListConfig(
+  config: Record<string, unknown>,
+  fallbackGeofenceId: UUID | null,
+): UUID[] {
+  const value = config["effectiveGeofenceIds"] ?? config["effective_geofence_ids"];
+  const source =
+    Array.isArray(value) && value.length > 0
+      ? value
+      : fallbackGeofenceId
+        ? [fallbackGeofenceId]
+        : [];
+  const unique = new Set<UUID>();
+  for (const item of source) {
+    if (
+      typeof item === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(item.trim())
+    ) {
+      unique.add(item.trim() as UUID);
+    }
+  }
+  return [...unique];
+}
+
+function positiveIntegerOrNullConfig(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): number | null {
+  const value = config[camelKey] ?? config[snakeKey];
+  return typeof value === "number" && Number.isInteger(value) && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function positiveNumberOrNullConfig(
+  config: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): number | null {
+  const value = config[camelKey] ?? config[snakeKey];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
 }
