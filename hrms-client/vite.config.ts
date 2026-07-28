@@ -16,6 +16,13 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     define: envDefine,
+    // Tailwind CSS v4 is handled by @tailwindcss/vite. Defining PostCSS
+    // inline prevents Vite from inheriting unrelated configs above this app.
+    css: {
+      postcss: {
+        plugins: [],
+      },
+    },
     resolve: {
       alias: {
         "@": `${process.cwd()}/src`,
