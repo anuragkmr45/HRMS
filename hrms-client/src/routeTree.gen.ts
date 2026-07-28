@@ -80,6 +80,7 @@ import { Route as AppEmsAdminRouteImport } from './routes/_app/ems.admin'
 import { Route as AppEmployeesIdRouteImport } from './routes/_app/employees.$id'
 import { Route as AppAttendanceExceptionsRouteImport } from './routes/_app/attendance.exceptions'
 import { Route as AppAttendanceCalendarRouteImport } from './routes/_app/attendance.calendar'
+import { Route as AppAttendanceApprovalsRouteImport } from './routes/_app/attendance.approvals'
 import { Route as AppAssetsWarrantyRouteImport } from './routes/_app/assets.warranty'
 import { Route as AppAssetsReturnsRouteImport } from './routes/_app/assets.returns'
 import { Route as AppAssetsRequestsRouteImport } from './routes/_app/assets.requests'
@@ -450,6 +451,11 @@ const AppAttendanceCalendarRoute = AppAttendanceCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AppAttendanceRoute,
 } as any)
+const AppAttendanceApprovalsRoute = AppAttendanceApprovalsRouteImport.update({
+  id: '/approvals',
+  path: '/approvals',
+  getParentRoute: () => AppAttendanceRoute,
+} as any)
 const AppAssetsWarrantyRoute = AppAssetsWarrantyRouteImport.update({
   id: '/warranty',
   path: '/warranty',
@@ -569,6 +575,7 @@ export interface FileRoutesByFullPath {
   '/assets/requests': typeof AppAssetsRequestsRoute
   '/assets/returns': typeof AppAssetsReturnsRoute
   '/assets/warranty': typeof AppAssetsWarrantyRoute
+  '/attendance/approvals': typeof AppAttendanceApprovalsRoute
   '/attendance/calendar': typeof AppAttendanceCalendarRoute
   '/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/employees/$id': typeof AppEmployeesIdRoute
@@ -647,6 +654,7 @@ export interface FileRoutesByTo {
   '/assets/requests': typeof AppAssetsRequestsRoute
   '/assets/returns': typeof AppAssetsReturnsRoute
   '/assets/warranty': typeof AppAssetsWarrantyRoute
+  '/attendance/approvals': typeof AppAttendanceApprovalsRoute
   '/attendance/calendar': typeof AppAttendanceCalendarRoute
   '/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/employees/$id': typeof AppEmployeesIdRoute
@@ -736,6 +744,7 @@ export interface FileRoutesById {
   '/_app/assets/requests': typeof AppAssetsRequestsRoute
   '/_app/assets/returns': typeof AppAssetsReturnsRoute
   '/_app/assets/warranty': typeof AppAssetsWarrantyRoute
+  '/_app/attendance/approvals': typeof AppAttendanceApprovalsRoute
   '/_app/attendance/calendar': typeof AppAttendanceCalendarRoute
   '/_app/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/_app/employees/$id': typeof AppEmployeesIdRoute
@@ -825,6 +834,7 @@ export interface FileRouteTypes {
     | '/assets/requests'
     | '/assets/returns'
     | '/assets/warranty'
+    | '/attendance/approvals'
     | '/attendance/calendar'
     | '/attendance/exceptions'
     | '/employees/$id'
@@ -903,6 +913,7 @@ export interface FileRouteTypes {
     | '/assets/requests'
     | '/assets/returns'
     | '/assets/warranty'
+    | '/attendance/approvals'
     | '/attendance/calendar'
     | '/attendance/exceptions'
     | '/employees/$id'
@@ -991,6 +1002,7 @@ export interface FileRouteTypes {
     | '/_app/assets/requests'
     | '/_app/assets/returns'
     | '/_app/assets/warranty'
+    | '/_app/attendance/approvals'
     | '/_app/attendance/calendar'
     | '/_app/attendance/exceptions'
     | '/_app/employees/$id'
@@ -1553,6 +1565,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAttendanceCalendarRouteImport
       parentRoute: typeof AppAttendanceRoute
     }
+    '/_app/attendance/approvals': {
+      id: '/_app/attendance/approvals'
+      path: '/approvals'
+      fullPath: '/attendance/approvals'
+      preLoaderRoute: typeof AppAttendanceApprovalsRouteImport
+      parentRoute: typeof AppAttendanceRoute
+    }
     '/_app/assets/warranty': {
       id: '/_app/assets/warranty'
       path: '/warranty'
@@ -1715,12 +1734,14 @@ const AppAssetsRouteWithChildren = AppAssetsRoute._addFileChildren(
 )
 
 interface AppAttendanceRouteChildren {
+  AppAttendanceApprovalsRoute: typeof AppAttendanceApprovalsRoute
   AppAttendanceCalendarRoute: typeof AppAttendanceCalendarRoute
   AppAttendanceExceptionsRoute: typeof AppAttendanceExceptionsRoute
   AppAttendanceIndexRoute: typeof AppAttendanceIndexRoute
 }
 
 const AppAttendanceRouteChildren: AppAttendanceRouteChildren = {
+  AppAttendanceApprovalsRoute: AppAttendanceApprovalsRoute,
   AppAttendanceCalendarRoute: AppAttendanceCalendarRoute,
   AppAttendanceExceptionsRoute: AppAttendanceExceptionsRoute,
   AppAttendanceIndexRoute: AppAttendanceIndexRoute,
