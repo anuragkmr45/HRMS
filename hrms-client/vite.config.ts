@@ -16,6 +16,10 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     define: envDefine,
+    css: {
+      // Prevent Vite from discovering machine-level PostCSS configs outside this project.
+      postcss: { plugins: [] },
+    },
     resolve: {
       alias: {
         "@": `${process.cwd()}/src`,
