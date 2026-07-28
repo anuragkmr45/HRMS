@@ -1,7 +1,18 @@
 import type {
   AssetStatus,
+  AttendanceApprovalKind,
+  AttendanceApprovalState,
+  AttendanceDayClassification,
   AttendanceDayStatus,
+  AttendanceEvidenceState,
+  AttendanceLocationPermissionState,
+  AttendanceLocationProvider,
+  AttendancePayrollState,
+  AttendancePresenceState,
   AttendancePunchEventType,
+  AttendancePunctualityState,
+  AttendanceRegularizationActionKind,
+  AttendanceRegularizationOperation,
   AttendanceRegularizationStatus,
   DocumentClassification,
   EmsLetterStatus,
@@ -381,26 +392,56 @@ export interface TimesheetSubmission {
 export interface AttendancePunch {
   id: UUID;
   employee_user_id: UUID;
+  actor_user_id: UUID;
+  company_id: UUID;
   event_type: AttendancePunchEventType;
   occurred_at: ISODateTime;
   work_mode: "office" | "remote" | "wfh" | "field";
   source: "web" | "mobile" | "kiosk" | "admin";
+  origin: "employee_manual_now" | "manager_assisted_now" | "historical_correction" | "approved_regularization" | "system";
+  regularization_request_id: UUID | null;
   metadata: Record<string, unknown>;
   created_at: ISODateTime;
   deleted_at: ISODateTime | null;
 }
 
+export interface AttendanceLocationEvidenceInput {
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number;
+  captured_at: ISODateTime;
+  age_ms?: number;
+  provider?: AttendanceLocationProvider;
+  permission_state: AttendanceLocationPermissionState;
+  altitude_meters?: number;
+  is_mocked?: boolean;
+  integrity_status?: string;
+}
+
 export interface AttendanceDayRecord {
   id: UUID;
   employee_user_id: UUID;
+  company_id: UUID;
   work_date: ISODate;
   status: AttendanceDayStatus;
+  day_classification: AttendanceDayClassification;
+  presence_state: AttendancePresenceState;
+  punctuality_state: AttendancePunctualityState;
+  evidence_state: AttendanceEvidenceState;
+  approval_kind: AttendanceApprovalKind;
+  approval_state: AttendanceApprovalState;
+  payroll_state: AttendancePayrollState;
   first_check_in: ISODateTime | null;
   last_check_out: ISODateTime | null;
   work_minutes: number;
   break_minutes: number;
   late_minutes: number;
   early_out_minutes: number;
+  work_seconds: number;
+  break_seconds: number;
+  scheduled_seconds: number;
+  late_seconds: number;
+  early_departure_seconds: number;
   work_mode: "office" | "remote" | "wfh" | "field" | null;
   note: string | null;
   exception_type: "late" | "missing_punch" | "absent" | "early_out" | null;
@@ -414,12 +455,15 @@ export interface AttendanceDayRecord {
 export interface AttendanceRegularizationRequest {
   id: UUID;
   employee_user_id: UUID;
+  submitted_by_user_id: UUID;
+  company_id: UUID;
   work_date: ISODate;
   reason: string;
   requested_punches: Array<{
     event_type: AttendancePunchEventType;
     occurred_at: ISODateTime;
   }>;
+  items: AttendanceRegularizationRequestItem[];
   status: AttendanceRegularizationStatus;
   current_approver_user_id: UUID | null;
   decision_remarks: string | null;
@@ -429,6 +473,47 @@ export interface AttendanceRegularizationRequest {
   created_at: ISODateTime;
   updated_at: ISODateTime;
   deleted_at: ISODateTime | null;
+}
+
+export interface AttendanceRegularizationRequestItem {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  ordinal: number;
+  operation: AttendanceRegularizationOperation;
+  target_punch_event_id: UUID | null;
+  event_type: AttendancePunchEventType | null;
+  occurred_at: ISODateTime | null;
+  created_at: ISODateTime;
+}
+
+export interface AttendanceRegularizationAction {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  actor_user_id: UUID;
+  subject_employee_user_id: UUID;
+  action_kind: AttendanceRegularizationActionKind;
+  previous_state: AttendanceRegularizationStatus | null;
+  resulting_state: AttendanceRegularizationStatus;
+  remarks: string | null;
+  resulting_version: number;
+  occurred_at: ISODateTime;
+  migration_reconstructed: boolean;
+}
+
+export interface AttendanceRegularizationCorrectionApplication {
+  id: UUID;
+  company_id: UUID;
+  regularization_request_id: UUID;
+  regularization_request_item_id: UUID;
+  regularization_action_id: UUID;
+  operation: AttendanceRegularizationOperation;
+  target_punch_event_id: UUID | null;
+  replacement_punch_event_id: UUID | null;
+  attendance_event_id: UUID | null;
+  applied_by_user_id: UUID;
+  applied_at: ISODateTime;
 }
 
 export interface LeaveRequest {
@@ -478,6 +563,7 @@ export interface WfhRequest {
 
 export interface Holiday {
   id: UUID;
+  company_id: UUID;
   name: string;
   holiday_date: ISODate;
   region: string;
