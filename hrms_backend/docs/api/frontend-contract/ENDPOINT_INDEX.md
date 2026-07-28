@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 245
+Documented operations: 255
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2508,6 +2508,438 @@ Required: yes
 |---|---|---|---|
 | `name` | string | required | - |
 | `definition` | object | required | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### GET /api/v1/admin/shifts/templates
+
+| Field | Contract |
+|---|---|
+| Purpose | List shift templates |
+| Frontend use | List shift templates |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `status` | query | no | string enum("active", "inactive") | - |
+| `search` | query | no | string | - |
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `items` | array of object | required | - |
+| `total` | integer | required | minimum 0 |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/admin/shifts/templates
+
+| Field | Contract |
+|---|---|
+| Purpose | Create shift template |
+| Frontend use | Create shift template |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `code` | string | required | minLength 2 |
+| `name` | string | required | minLength 2 |
+| `description` | string | optional, nullable | - |
+| `is_company_default` | boolean | optional | default false |
+| `version` | object | required | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `template` | object | required | - |
+| `version` | integer | required | minimum 1 |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### PATCH /api/v1/admin/shifts/templates/{id}
+
+| Field | Contract |
+|---|---|
+| Purpose | Update shift template |
+| Frontend use | Update shift template |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | optional | minLength 2 |
+| `description` | string | optional, nullable | - |
+| `status` | string enum("active", "inactive") | optional | - |
+| `is_company_default` | boolean | optional | - |
+| `expected_version` | integer | required | minimum 1 |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- OCC mutation: send `expected_version`; on `409`, refetch latest object/version and ask the user to retry.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### GET /api/v1/admin/shifts/templates/{id}/versions
+
+| Field | Contract |
+|---|---|
+| Purpose | List shift template versions |
+| Frontend use | List shift template versions |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `template` | object | required | - |
+| `items` | array of object | required | - |
+| `total` | integer | required | minimum 0 |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/admin/shifts/templates/{id}/versions
+
+| Field | Contract |
+|---|---|
+| Purpose | Create shift template version |
+| Frontend use | Create shift template version |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `effective_from` | string<date> | required | - |
+| `effective_until` | string<date> | optional, nullable | - |
+| `local_start_time` | string | required | pattern ^([01]\d\|2[0-3]):[0-5]\d$ |
+| `local_end_time` | string | required | pattern ^([01]\d\|2[0-3]):[0-5]\d$ |
+| `crosses_midnight` | boolean | optional | default false |
+| `timezone_strategy` | string enum("company", "employee_with_company_fallback", "fixed") | optional | default "company" |
+| `fixed_timezone` | string | optional, nullable | - |
+| `eligibility_open_before_start_minutes` | integer | optional | default 120; minimum 0 |
+| `eligibility_close_after_end_minutes` | integer | optional | default 240; minimum 0 |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `version` | object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### GET /api/v1/admin/shifts/assignments
+
+| Field | Contract |
+|---|---|
+| Purpose | List shift assignments |
+| Frontend use | List shift assignments |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `status` | query | no | string enum("active", "inactive") | - |
+| `template_id` | query | no | string<uuid> | - |
+| `department_id` | query | no | string<uuid> | - |
+| `search` | query | no | string | - |
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `items` | array of object | required | - |
+| `total` | integer | required | minimum 0 |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/admin/shifts/assignments
+
+| Field | Contract |
+|---|---|
+| Purpose | Create shift assignments |
+| Frontend use | Create shift assignments |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `target_type` | string enum("employee", "department") | required | - |
+| `target_id` | string<uuid> | required | Employee or department UUID |
+| `template_id` | string<uuid> | required | Shift template UUID |
+| `effective_from` | string<date> | required | - |
+| `effective_until` | string<date> | optional, nullable | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### PATCH /api/v1/admin/shifts/assignments/{id}
+
+| Field | Contract |
+|---|---|
+| Purpose | Update shift assignment |
+| Frontend use | Update shift assignment |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `template_id` | string<uuid> | optional | Shift template UUID |
+| `effective_from` | string<date> | optional | - |
+| `effective_until` | string<date> | optional, nullable | - |
+| `status` | string enum("active", "inactive") | optional | - |
+| `expected_version` | integer | required | minimum 1 |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- OCC mutation: send `expected_version`; on `409`, refetch latest object/version and ask the user to retry.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### GET /api/v1/admin/shifts/references
+
+| Field | Contract |
+|---|---|
+| Purpose | List shift assignment references |
+| Frontend use | List shift assignment references |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/configuration persona only unless backend grants narrower operational permission. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
 
 **Responses**
 | Status | Meaning |
@@ -13717,6 +14149,38 @@ Success body highlights:
 - Display backend `message` and retain `request_id` for support.
 - Treat `401` as authentication failure and `403` as real permission denial.
 - Paginated list: send `page` and `page_size`; do not fetch unbounded lists.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+## Untagged
+
+Backend-owned API group.
+
+### GET /api/v1/locations/india
+
+| Field | Contract |
+|---|---|
+| Purpose | Backend operation |
+| Frontend use | Frontend API integration. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Default Response |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
 ## Notifications

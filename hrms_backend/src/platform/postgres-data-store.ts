@@ -136,6 +136,9 @@ const resetTables = [
   "leave_wfh.holidays",
   "leave_wfh.wfh_requests",
   "leave_wfh.leave_requests",
+  "attendance.shift_assignments",
+  "attendance.shift_template_versions",
+  "attendance.shift_templates",
   "attendance.regularization_requests",
   "attendance.daily_records",
   "attendance.punch_events",
@@ -322,7 +325,7 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
   try {
     await client.query(migrationSql());
     await client.query("BEGIN");
-    await client.query(`TRUNCATE ${resetTables.join(", ")} RESTART IDENTITY`);
+    await client.query(`TRUNCATE ${resetTables.join(", ")} RESTART IDENTITY CASCADE`);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);

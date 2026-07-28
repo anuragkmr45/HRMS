@@ -12,6 +12,7 @@ import {
   BellRing,
   Lock,
   ScrollText,
+  CalendarClock,
 } from "lucide-react";
 
 export const Route = createFileRoute("/_app/admin-settings")({
@@ -42,6 +43,7 @@ const TABS: Tab[] = [
   { to: "/admin-settings", label: "Overview", icon: LayoutDashboard, exact: true },
   { to: "/admin-settings/company", label: "Company", icon: Building2 },
   { to: "/admin-settings/master-data", label: "Master Data", icon: Database },
+  { to: "/admin-settings/shifts", label: "Shifts", icon: CalendarClock },
   { to: "/admin-settings/roles", label: "Roles & Permissions", icon: ShieldCheck, mainOnly: true },
   { to: "/admin-settings/workflows", label: "Approval Workflows", icon: GitBranch, mainOnly: true },
   { to: "/admin-settings/policies", label: "Policies", icon: FileText },

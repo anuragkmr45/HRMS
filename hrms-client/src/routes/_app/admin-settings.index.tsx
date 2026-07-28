@@ -13,6 +13,7 @@ import {
   useDesignationMasters,
   useExtendedMasterData,
   useRbacRoles,
+  useShiftTemplates,
 } from "@/domains/admin/queries";
 import { useApiRouteEnabled } from "@/shared/api";
 import {
@@ -57,7 +58,7 @@ function AdminSettingsIndex() {
   const designationsQuery = useDesignationMasters(apiEnabled);
   const employmentTypesQuery = useExtendedMasterData("employmentTypes", apiEnabled);
   const workLocationsQuery = useExtendedMasterData("workLocations", apiEnabled);
-  const shiftsQuery = useExtendedMasterData("shifts", apiEnabled);
+  const shiftsQuery = useShiftTemplates(apiEnabled);
   const rolesQuery = useRbacRoles(apiEnabled && isMain);
   const workflowsQuery = useAdminWorkflows(apiEnabled && isMain);
   const policiesQuery = useAdminPolicies(apiEnabled);
@@ -84,7 +85,7 @@ function AdminSettingsIndex() {
       title: "Departments",
       description: "Org units that group teams and reporting lines.",
       icon: Users,
-      to: "/admin-settings/master-data",
+      to: "/admin-settings/shifts",
       meta: () =>
         countMeta(
           apiEnabled,

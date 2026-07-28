@@ -87,6 +87,7 @@ import { Route as AppAssetsMyRouteImport } from './routes/_app/assets.my'
 import { Route as AppAssetsInventoryRouteImport } from './routes/_app/assets.inventory'
 import { Route as AppAssetsIdRouteImport } from './routes/_app/assets.$id'
 import { Route as AppAdminSettingsWorkflowsRouteImport } from './routes/_app/admin-settings.workflows'
+import { Route as AppAdminSettingsShiftsRouteImport } from './routes/_app/admin-settings.shifts'
 import { Route as AppAdminSettingsSecurityRouteImport } from './routes/_app/admin-settings.security'
 import { Route as AppAdminSettingsRolesRouteImport } from './routes/_app/admin-settings.roles'
 import { Route as AppAdminSettingsPoliciesRouteImport } from './routes/_app/admin-settings.policies'
@@ -486,6 +487,11 @@ const AppAdminSettingsWorkflowsRoute =
     path: '/workflows',
     getParentRoute: () => AppAdminSettingsRoute,
   } as any)
+const AppAdminSettingsShiftsRoute = AppAdminSettingsShiftsRouteImport.update({
+  id: '/shifts',
+  path: '/shifts',
+  getParentRoute: () => AppAdminSettingsRoute,
+} as any)
 const AppAdminSettingsSecurityRoute =
   AppAdminSettingsSecurityRouteImport.update({
     id: '/security',
@@ -562,6 +568,7 @@ export interface FileRoutesByFullPath {
   '/admin-settings/policies': typeof AppAdminSettingsPoliciesRoute
   '/admin-settings/roles': typeof AppAdminSettingsRolesRoute
   '/admin-settings/security': typeof AppAdminSettingsSecurityRoute
+  '/admin-settings/shifts': typeof AppAdminSettingsShiftsRoute
   '/admin-settings/workflows': typeof AppAdminSettingsWorkflowsRoute
   '/assets/$id': typeof AppAssetsIdRoute
   '/assets/inventory': typeof AppAssetsInventoryRoute
@@ -640,6 +647,7 @@ export interface FileRoutesByTo {
   '/admin-settings/policies': typeof AppAdminSettingsPoliciesRoute
   '/admin-settings/roles': typeof AppAdminSettingsRolesRoute
   '/admin-settings/security': typeof AppAdminSettingsSecurityRoute
+  '/admin-settings/shifts': typeof AppAdminSettingsShiftsRoute
   '/admin-settings/workflows': typeof AppAdminSettingsWorkflowsRoute
   '/assets/$id': typeof AppAssetsIdRoute
   '/assets/inventory': typeof AppAssetsInventoryRoute
@@ -729,6 +737,7 @@ export interface FileRoutesById {
   '/_app/admin-settings/policies': typeof AppAdminSettingsPoliciesRoute
   '/_app/admin-settings/roles': typeof AppAdminSettingsRolesRoute
   '/_app/admin-settings/security': typeof AppAdminSettingsSecurityRoute
+  '/_app/admin-settings/shifts': typeof AppAdminSettingsShiftsRoute
   '/_app/admin-settings/workflows': typeof AppAdminSettingsWorkflowsRoute
   '/_app/assets/$id': typeof AppAssetsIdRoute
   '/_app/assets/inventory': typeof AppAssetsInventoryRoute
@@ -818,6 +827,7 @@ export interface FileRouteTypes {
     | '/admin-settings/policies'
     | '/admin-settings/roles'
     | '/admin-settings/security'
+    | '/admin-settings/shifts'
     | '/admin-settings/workflows'
     | '/assets/$id'
     | '/assets/inventory'
@@ -896,6 +906,7 @@ export interface FileRouteTypes {
     | '/admin-settings/policies'
     | '/admin-settings/roles'
     | '/admin-settings/security'
+    | '/admin-settings/shifts'
     | '/admin-settings/workflows'
     | '/assets/$id'
     | '/assets/inventory'
@@ -984,6 +995,7 @@ export interface FileRouteTypes {
     | '/_app/admin-settings/policies'
     | '/_app/admin-settings/roles'
     | '/_app/admin-settings/security'
+    | '/_app/admin-settings/shifts'
     | '/_app/admin-settings/workflows'
     | '/_app/assets/$id'
     | '/_app/assets/inventory'
@@ -1602,6 +1614,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminSettingsWorkflowsRouteImport
       parentRoute: typeof AppAdminSettingsRoute
     }
+    '/_app/admin-settings/shifts': {
+      id: '/_app/admin-settings/shifts'
+      path: '/shifts'
+      fullPath: '/admin-settings/shifts'
+      preLoaderRoute: typeof AppAdminSettingsShiftsRouteImport
+      parentRoute: typeof AppAdminSettingsRoute
+    }
     '/_app/admin-settings/security': {
       id: '/_app/admin-settings/security'
       path: '/security'
@@ -1670,6 +1689,7 @@ interface AppAdminSettingsRouteChildren {
   AppAdminSettingsPoliciesRoute: typeof AppAdminSettingsPoliciesRoute
   AppAdminSettingsRolesRoute: typeof AppAdminSettingsRolesRoute
   AppAdminSettingsSecurityRoute: typeof AppAdminSettingsSecurityRoute
+  AppAdminSettingsShiftsRoute: typeof AppAdminSettingsShiftsRoute
   AppAdminSettingsWorkflowsRoute: typeof AppAdminSettingsWorkflowsRoute
   AppAdminSettingsIndexRoute: typeof AppAdminSettingsIndexRoute
 }
@@ -1683,6 +1703,7 @@ const AppAdminSettingsRouteChildren: AppAdminSettingsRouteChildren = {
   AppAdminSettingsPoliciesRoute: AppAdminSettingsPoliciesRoute,
   AppAdminSettingsRolesRoute: AppAdminSettingsRolesRoute,
   AppAdminSettingsSecurityRoute: AppAdminSettingsSecurityRoute,
+  AppAdminSettingsShiftsRoute: AppAdminSettingsShiftsRoute,
   AppAdminSettingsWorkflowsRoute: AppAdminSettingsWorkflowsRoute,
   AppAdminSettingsIndexRoute: AppAdminSettingsIndexRoute,
 }

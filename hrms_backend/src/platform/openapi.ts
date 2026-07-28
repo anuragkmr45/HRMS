@@ -559,6 +559,84 @@ const adminMasterDataQuerySchema = {
   }
 };
 
+const adminShiftVersionSchema = {
+  type: "object",
+  required: ["id", "template_id", "version_number", "effective_from", "local_start_time", "local_end_time", "crosses_midnight", "timezone_strategy"],
+  properties: {
+    id: uuid("Shift template version UUID"),
+    template_id: uuid("Shift template UUID"),
+    version_number: { type: "integer", minimum: 1, example: 1 },
+    effective_from: { type: "string", format: "date", example: "2026-08-01" },
+    effective_until: { type: "string", format: "date", nullable: true },
+    local_start_time: { type: "string", example: "22:00" },
+    local_end_time: { type: "string", example: "07:00" },
+    end_day_offset: { type: "integer", minimum: 0, maximum: 7, example: 1 },
+    crosses_midnight: { type: "boolean", example: true },
+    timezone_strategy: { type: "string", enum: ["company", "employee_with_company_fallback", "fixed"] },
+    fixed_timezone: { type: "string", nullable: true, example: "Asia/Kolkata" },
+    eligibility_open_before_start_minutes: { type: "integer", minimum: 0, example: 120 },
+    eligibility_close_after_end_minutes: { type: "integer", minimum: 0, example: 240 },
+    created_at: dateTime("Version creation timestamp")
+  },
+  additionalProperties: true
+};
+
+const adminShiftVersionBody = {
+  type: "object",
+  required: ["effective_from", "local_start_time", "local_end_time"],
+  properties: {
+    effective_from: { type: "string", format: "date" },
+    effective_until: { type: "string", format: "date", nullable: true },
+    local_start_time: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    local_end_time: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    crosses_midnight: { type: "boolean", default: false },
+    timezone_strategy: { type: "string", enum: ["company", "employee_with_company_fallback", "fixed"], default: "company" },
+    fixed_timezone: { type: "string", nullable: true },
+    eligibility_open_before_start_minutes: { type: "integer", minimum: 0, maximum: 1440, default: 120 },
+    eligibility_close_after_end_minutes: { type: "integer", minimum: 0, maximum: 1440, default: 240 }
+  },
+  additionalProperties: false
+};
+
+const adminShiftTemplateSchema = {
+  type: "object",
+  required: ["id", "code", "name", "status", "is_company_default", "version"],
+  properties: {
+    id: uuid("Shift template UUID"),
+    code: { type: "string", example: "NIGHT_01" },
+    name: { type: "string", example: "Night operations" },
+    description: { type: "string", nullable: true },
+    status: { type: "string", enum: ["active", "inactive"] },
+    is_company_default: { type: "boolean" },
+    latest_version: { ...adminShiftVersionSchema, nullable: true },
+    created_at: dateTime("Template creation timestamp"),
+    updated_at: dateTime("Template update timestamp"),
+    version: { type: "integer", minimum: 1 }
+  },
+  additionalProperties: true
+};
+
+const adminShiftAssignmentSchema = {
+  type: "object",
+  required: ["id", "employee_user_id", "template_id", "effective_from", "status", "version"],
+  properties: {
+    id: uuid("Shift assignment UUID"),
+    employee_user_id: uuid("Employee user UUID"),
+    template_id: uuid("Shift template UUID"),
+    effective_from: { type: "string", format: "date" },
+    effective_until: { type: "string", format: "date", nullable: true },
+    status: { type: "string", enum: ["active", "inactive"] },
+    employee_name: { type: "string" },
+    employee_code: { type: "string" },
+    department_id: { ...uuid("Department UUID"), nullable: true },
+    department_name: { type: "string", nullable: true },
+    template_code: { type: "string" },
+    template_name: { type: "string" },
+    version: { type: "integer", minimum: 1 }
+  },
+  additionalProperties: true
+};
+
 const adminDepartmentSchema = {
   type: "object",
   required: ["id", "department_code", "code", "name", "status", "active", "version"],
@@ -4552,6 +4630,135 @@ const routeDocs: Record<string, RouteSchema> = {
     "Upload company logo",
     "Uploads or replaces the active company logo through the backend document storage adapter. The company-logo upload policy is returned from /api/v1/documents/upload-policy and uses stricter image-only size and compression limits before Cloudinary upload.",
     { body: adminCompanyLogoUploadBodySchema, response200: { type: "object", required: ["company", "document"], properties: { company: adminCompanyProfileSchema, document: documentSchema }, additionalProperties: true } }
+  ),
+  "GET /api/v1/admin/shifts/templates": operation(
+    "Admin / Configuration",
+    "List shift templates",
+    "Lists effective-dated shift templates for the active company. Admin role is required.",
+    {
+      querystring: { type: "object", properties: { status: { type: "string", enum: ["active", "inactive"] }, search: { type: "string", maxLength: 160 } } },
+      response200: { type: "object", required: ["items", "total"], properties: { items: { type: "array", items: adminShiftTemplateSchema }, total: { type: "integer", minimum: 0 } } }
+    }
+  ),
+  "POST /api/v1/admin/shifts/templates": operation(
+    "Admin / Configuration",
+    "Create shift template",
+    "Creates a company shift template and its immutable first schedule version.",
+    {
+      body: {
+        type: "object",
+        required: ["code", "name", "version"],
+        properties: {
+          code: { type: "string", minLength: 2, maxLength: 40 },
+          name: { type: "string", minLength: 2, maxLength: 160 },
+          description: { type: "string", nullable: true, maxLength: 1000 },
+          is_company_default: { type: "boolean", default: false },
+          version: adminShiftVersionBody
+        },
+        additionalProperties: false
+      },
+      response200: { type: "object", required: ["template", "version"], properties: { template: adminShiftTemplateSchema, version: { type: "integer", minimum: 1 } } }
+    }
+  ),
+  "PATCH /api/v1/admin/shifts/templates/{id}": operation(
+    "Admin / Configuration",
+    "Update shift template",
+    "Updates shift template metadata or status with optimistic concurrency.",
+    {
+      params: idParamSchema,
+      body: {
+        type: "object",
+        required: ["expected_version"],
+        properties: {
+          name: { type: "string", minLength: 2, maxLength: 160 },
+          description: { type: "string", nullable: true, maxLength: 1000 },
+          status: { type: "string", enum: ["active", "inactive"] },
+          is_company_default: { type: "boolean" },
+          expected_version: { type: "integer", minimum: 1 }
+        },
+        additionalProperties: false
+      },
+      response200: { type: "object", additionalProperties: true }
+    }
+  ),
+  "GET /api/v1/admin/shifts/templates/{id}/versions": operation(
+    "Admin / Configuration",
+    "List shift template versions",
+    "Lists immutable effective-dated versions of a shift template.",
+    {
+      params: idParamSchema,
+      response200: { type: "object", required: ["template", "items", "total"], properties: { template: adminShiftTemplateSchema, items: { type: "array", items: adminShiftVersionSchema }, total: { type: "integer", minimum: 0 } } }
+    }
+  ),
+  "POST /api/v1/admin/shifts/templates/{id}/versions": operation(
+    "Admin / Configuration",
+    "Create shift template version",
+    "Adds a non-overlapping immutable effective-dated version to an active shift template.",
+    { params: idParamSchema, body: adminShiftVersionBody, response200: { type: "object", required: ["version"], properties: { version: adminShiftVersionSchema } } }
+  ),
+  "GET /api/v1/admin/shifts/assignments": operation(
+    "Admin / Configuration",
+    "List shift assignments",
+    "Lists employee-level shift assignments enriched with employee, department, and template labels.",
+    {
+      querystring: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["active", "inactive"] },
+          template_id: uuid("Shift template UUID"),
+          department_id: uuid("Department UUID"),
+          search: { type: "string", maxLength: 160 }
+        }
+      },
+      response200: { type: "object", required: ["items", "total"], properties: { items: { type: "array", items: adminShiftAssignmentSchema }, total: { type: "integer", minimum: 0 } } }
+    }
+  ),
+  "POST /api/v1/admin/shifts/assignments": operation(
+    "Admin / Configuration",
+    "Create shift assignments",
+    "Assigns a shift to one employee or expands a department target to its current active employees.",
+    {
+      body: {
+        type: "object",
+        required: ["target_type", "target_id", "template_id", "effective_from"],
+        properties: {
+          target_type: { type: "string", enum: ["employee", "department"] },
+          target_id: uuid("Employee or department UUID"),
+          template_id: uuid("Shift template UUID"),
+          effective_from: { type: "string", format: "date" },
+          effective_until: { type: "string", format: "date", nullable: true }
+        },
+        additionalProperties: false
+      },
+      response200: { type: "object", additionalProperties: true }
+    }
+  ),
+  "PATCH /api/v1/admin/shifts/assignments/{id}": operation(
+    "Admin / Configuration",
+    "Update shift assignment",
+    "Updates an employee shift assignment with optimistic concurrency and overlap protection.",
+    {
+      params: idParamSchema,
+      body: {
+        type: "object",
+        required: ["expected_version"],
+        properties: {
+          template_id: uuid("Shift template UUID"),
+          effective_from: { type: "string", format: "date" },
+          effective_until: { type: "string", format: "date", nullable: true },
+          status: { type: "string", enum: ["active", "inactive"] },
+          expected_version: { type: "integer", minimum: 1 }
+        },
+        additionalProperties: false
+      },
+      response200: { type: "object", additionalProperties: true }
+    }
+  ),
+  "GET /api/v1/admin/shifts/references": operation(
+    "Admin / Configuration",
+    "List shift assignment references",
+    "Lists active company employees and departments available as shift assignment targets.",
+    { response200: { type: "object", additionalProperties: true } }
   ),
   "GET /api/v1/admin/master-data/departments": operation(
     "Admin / Configuration",
