@@ -331,6 +331,26 @@ export const AttendanceEvidenceStates = {
 export type AttendanceEvidenceState =
   (typeof AttendanceEvidenceStates)[keyof typeof AttendanceEvidenceStates];
 
+export const AttendanceLocationPermissionStates = {
+  Granted: "granted",
+  Denied: "denied",
+  Unavailable: "unavailable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceLocationPermissionState =
+  (typeof AttendanceLocationPermissionStates)[keyof typeof AttendanceLocationPermissionStates];
+
+export const AttendanceLocationProviders = {
+  Browser: "browser",
+  Device: "device",
+  Network: "network",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceLocationProvider =
+  (typeof AttendanceLocationProviders)[keyof typeof AttendanceLocationProviders];
+
 export const AttendanceApprovalKinds = {
   None: "none",
   Regularization: "regularization",

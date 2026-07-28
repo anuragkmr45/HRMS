@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AttendanceDayRecord,
   AttendanceDayStatus,
+  AttendanceLocationEvidenceInput,
   AttendancePunch,
   AttendancePunchEventType,
   AttendanceRegularizationRequest,
@@ -393,6 +394,7 @@ export class AttendanceService {
       work_mode: "office" | "remote" | "wfh" | "field";
       source: "web" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
+      location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
     },
     subjectEmployeeUserId = actor.id,
@@ -505,6 +507,7 @@ export class AttendanceService {
       work_mode: "office" | "remote" | "wfh" | "field";
       source: "web" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
+      location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
     },
     subjectEmployeeUserId = actor.id,
@@ -523,6 +526,7 @@ export class AttendanceService {
       work_mode: "office" | "remote" | "wfh" | "field";
       source: "web" | "mobile" | "kiosk";
       metadata: Record<string, unknown>;
+      location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
     },
   ) {

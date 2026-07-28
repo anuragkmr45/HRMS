@@ -3,6 +3,7 @@ import {
   canonicalAttendanceRequestHash,
   canonicalAttendanceResponseHash,
 } from "../command-service.js";
+import { attendanceLocationEvidenceSchema } from "#shared";
 
 describe("attendance command request hashing", () => {
   const command = {
@@ -111,5 +112,45 @@ describe("attendance command request hashing", () => {
     ).not.toBe(
       canonicalAttendanceResponseHash({ events: ["check_out", "check_in"] }),
     );
+  });
+});
+
+describe("attendance location evidence request schema", () => {
+  const point = {
+    latitude: 12.971599,
+    longitude: 77.594566,
+    accuracy_meters: 8.5,
+    captured_at: "2026-07-14T04:00:00.000Z",
+    provider: "browser",
+  };
+
+  it("accepts granted or unknown permission states for point evidence", () => {
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        ...point,
+        permission_state: "granted",
+      }).success,
+    ).toBe(true);
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        ...point,
+        permission_state: "unknown",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects denied or unavailable permission states for point evidence", () => {
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        ...point,
+        permission_state: "denied",
+      }).success,
+    ).toBe(false);
+    expect(
+      attendanceLocationEvidenceSchema.safeParse({
+        ...point,
+        permission_state: "unavailable",
+      }).success,
+    ).toBe(false);
   });
 });

@@ -43,6 +43,26 @@ describe("PostgreSQL attendance daily projection schema", () => {
     }
   });
 
+  it("keeps exact location evidence out of the daily projection schema", async () => {
+    const columns = await app.store.pgPool!.query<{ column_name: string }>(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'attendance'
+         AND table_name = 'daily_records'
+         AND column_name IN (
+           'latitude',
+           'longitude',
+           'coordinates',
+           'location',
+           'accuracy_meters',
+           'provider',
+           'permission_state'
+         )`,
+    );
+
+    expect(columns.rows).toEqual([]);
+  });
+
   it("rejects negative canonical durations and preserves company/date uniqueness", async () => {
     const companyId = randomUUID();
     const employeeUserId = randomUUID();

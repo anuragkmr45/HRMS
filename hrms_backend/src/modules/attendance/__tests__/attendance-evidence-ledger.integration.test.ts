@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
+import { schema } from "#db";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
@@ -80,8 +81,8 @@ async function createLedgerFixture(pool: Pool): Promise<LedgerFixture> {
     `
     INSERT INTO attendance.location_evidence (
       attendance_event_id, company_id, employee_user_id, captured_at,
-      latitude, longitude, accuracy_meters, is_mocked, raw_payload
-    ) VALUES ($1, $2, $3, now(), 12.971599, 77.594566, 8.5, false, '{}'::jsonb)
+      latitude, longitude, accuracy_meters, is_mocked, raw_payload, age_ms
+    ) VALUES ($1, $2, $3, now(), 12.971599, 77.594566, 8.5, false, '{}'::jsonb, 0)
     RETURNING id
   `,
     [eventRow.id, eventRow.company_id, eventRow.employee_user_id],
@@ -268,6 +269,106 @@ describe("PostgreSQL attendance evidence ledger", () => {
     expect(ledgerRows.rows[0]?.created_at).not.toBeNull();
   });
 
+  it("maps the evidence ledger in Drizzle and exposes GEO-S12-004 database metadata", async () => {
+    const pool = requireApp(app).store.pgPool!;
+
+    expect(schema.attendanceEvents).toBeDefined();
+    expect(schema.attendanceLocationEvidence).toBeDefined();
+    expect(schema.attendanceDecisions).toBeDefined();
+    expect(schema.attendanceDecisionReasons).toBeDefined();
+
+    const columns = await pool.query<{
+      column_name: string;
+      is_nullable: string;
+      column_default: string | null;
+    }>(
+      `SELECT column_name, is_nullable, column_default
+       FROM information_schema.columns
+       WHERE table_schema = 'attendance'
+         AND table_name = 'location_evidence'
+         AND column_name IN (
+           'age_ms',
+           'permission_state',
+           'coordinates_expire_at'
+         )
+       ORDER BY column_name`,
+    );
+    expect(columns.rows).toEqual([
+      {
+        column_name: "age_ms",
+        is_nullable: "NO",
+        column_default: null,
+      },
+      {
+        column_name: "coordinates_expire_at",
+        is_nullable: "YES",
+        column_default: null,
+      },
+      {
+        column_name: "permission_state",
+        is_nullable: "NO",
+        column_default: "'unknown'::text",
+      },
+    ]);
+
+    const constraints = await pool.query<{ conname: string; contype: string }>(
+      `SELECT conname, contype
+       FROM pg_constraint
+       WHERE connamespace = 'attendance'::regnamespace
+         AND conname IN (
+           'attendance_events_id_company_uq',
+           'attendance_decisions_id_company_uq',
+           'location_evidence_event_company_fk',
+           'attendance_decisions_event_company_fk',
+           'decision_reasons_decision_company_fk',
+           'location_evidence_age_ms_nonnegative_check',
+           'location_evidence_permission_state_check',
+           'location_evidence_provider_check',
+           'location_evidence_coordinates_expire_after_received_check'
+         )
+       ORDER BY conname`,
+    );
+
+    expect(constraints.rows).toEqual([
+      {
+        conname: "attendance_decisions_event_company_fk",
+        contype: "f",
+      },
+      {
+        conname: "attendance_decisions_id_company_uq",
+        contype: "u",
+      },
+      {
+        conname: "attendance_events_id_company_uq",
+        contype: "u",
+      },
+      {
+        conname: "decision_reasons_decision_company_fk",
+        contype: "f",
+      },
+      {
+        conname: "location_evidence_age_ms_nonnegative_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_coordinates_expire_after_received_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_event_company_fk",
+        contype: "f",
+      },
+      {
+        conname: "location_evidence_permission_state_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_provider_check",
+        contype: "c",
+      },
+    ]);
+  });
+
   it("prevents updates and deletes while preserving immutable rows", async () => {
     const pool = requireApp(app).store.pgPool!;
     const fixture = await createLedgerFixture(pool);
@@ -339,8 +440,8 @@ describe("PostgreSQL attendance evidence ledger", () => {
       pool.query(
         `INSERT INTO attendance.location_evidence (
           attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters
-        ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0)`,
+          latitude, longitude, accuracy_meters, age_ms
+        ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
@@ -348,8 +449,44 @@ describe("PostgreSQL attendance evidence ledger", () => {
       pool.query(
         `INSERT INTO attendance.location_evidence (
           attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters
-        ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0)`,
+          latitude, longitude, accuracy_meters, age_ms
+        ) VALUES ($1, $2, $3, now(), 0, 0, 0, -1)`,
+        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "location_evidence_age_ms_nonnegative_check",
+    });
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          latitude, longitude, accuracy_meters, age_ms, permission_state
+        ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'prompt')`,
+        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "location_evidence_permission_state_check",
+    });
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          latitude, longitude, accuracy_meters, age_ms, provider
+        ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'gps')`,
+        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "location_evidence_provider_check",
+    });
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          latitude, longitude, accuracy_meters, age_ms
+        ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
@@ -357,8 +494,8 @@ describe("PostgreSQL attendance evidence ledger", () => {
       pool.query(
         `INSERT INTO attendance.location_evidence (
           attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters
-        ) VALUES ($1, $2, $3, now(), 0, 0, -0.01)`,
+          latitude, longitude, accuracy_meters, age_ms
+        ) VALUES ($1, $2, $3, now(), 0, 0, -0.01, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
@@ -406,6 +543,50 @@ describe("PostgreSQL attendance evidence ledger", () => {
     ).rejects.toMatchObject({
       code: "23505",
       constraint: "attendance_decision_reasons_ordinal_uq",
+    });
+  });
+
+  it("rejects cross-tenant evidence ledger relationships", async () => {
+    const pool = requireApp(app).store.pgPool!;
+    const fixture = await createLedgerFixture(pool);
+    const otherCompanyId = "00000000-0000-4000-8000-000000000044";
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          latitude, longitude, accuracy_meters, age_ms
+        ) VALUES ($1, $2, $3, now(), 12.971599, 77.594566, 8.5, 0)`,
+        [fixture.eventId, otherCompanyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23503",
+      constraint: "location_evidence_event_company_fk",
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.attendance_decisions (
+          company_id, employee_user_id, attendance_event_id, decision_type,
+          outcome, policy_key, policy_version
+        ) VALUES ($1, $2, $3, 'manual_attendance', 'passed', 'attendance', 'v1')`,
+        [otherCompanyId, fixture.employeeUserId, fixture.eventId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23503",
+      constraint: "attendance_decisions_event_company_fk",
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.decision_reasons (
+          attendance_decision_id, company_id, reason_code, ordinal
+        ) VALUES ($1, $2, 'cross_tenant_reason', 1)`,
+        [fixture.attendanceDecisionId, otherCompanyId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23503",
+      constraint: "decision_reasons_decision_company_fk",
     });
   });
 

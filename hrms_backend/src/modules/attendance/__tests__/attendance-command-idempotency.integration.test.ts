@@ -458,6 +458,24 @@ describe("PostgreSQL attendance command idempotency", () => {
     expect(changed.json().message).toBe(
       "Idempotency key was already used with a different attendance command.",
     );
+
+    const changedLegacyCoordinates = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload: {
+        ...payload,
+        metadata: {
+          ...payload.metadata,
+          latitude: 12.9716,
+        },
+      },
+    });
+
+    expect(changedLegacyCoordinates.statusCode).toBe(409);
+    expect(changedLegacyCoordinates.json().message).toBe(
+      "Idempotency key was already used with a different attendance command.",
+    );
   });
 
   it("uses the built-in attendance policy when no active policy is persisted", async () => {
@@ -508,6 +526,260 @@ describe("PostgreSQL attendance command idempotency", () => {
     );
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]?.policy_version).toBe("built-in-default");
+  });
+
+  it("persists canonical location evidence without leaking coordinates into generic artifacts", async () => {
+    const employee = await loginAs(app, "E1");
+    const idempotencyKey = "attendance-idempotency-location-evidence-001";
+    const capturedAt = new Date(Date.now() - 60_000).toISOString();
+    const payload = {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web",
+      metadata: {
+        note: "front door",
+        latitude: 1.23,
+        longitude: 4.56,
+        location: { latitude: 1.23, longitude: 4.56 },
+      },
+      location: {
+        latitude: 12.971599,
+        longitude: 77.594566,
+        accuracy_meters: 8.5,
+        captured_at: capturedAt,
+        age_ms: 60_000,
+        provider: "browser",
+        permission_state: "granted",
+        altitude_meters: 920.12,
+        is_mocked: false,
+        integrity_status: "basic",
+      },
+    };
+
+    const headers = {
+      ...authHeader(employee.token),
+      "idempotency-key": idempotencyKey,
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().punch).not.toHaveProperty("location");
+    expect(first.json().punch.metadata).toEqual({ note: "front door" });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().command_id).toBe(first.json().command_id);
+
+    const persisted = await app.store.pgPool!.query<{
+      command_at: Date;
+      request_snapshot: Record<string, unknown>;
+      response_snapshot: Record<string, unknown>;
+      punch_metadata: Record<string, unknown>;
+      latitude: string;
+      longitude: string;
+      accuracy_meters: string;
+      altitude_meters: string | null;
+      age_ms: number;
+      permission_state: string;
+      provider: string | null;
+      raw_payload: Record<string, unknown>;
+      coordinates_expire_at: Date | null;
+      evaluation_context: Record<string, unknown>;
+      outbox_payload: Record<string, unknown>;
+      day_record: Record<string, unknown>;
+      location_rows: string;
+      reason_rows: string;
+    }>(
+      `SELECT
+        command.occurred_at AS command_at,
+        command.request_snapshot,
+        command.response_snapshot,
+        punch.metadata AS punch_metadata,
+        location.latitude::text,
+        location.longitude::text,
+        location.accuracy_meters::text,
+        location.altitude_meters::text,
+        location.age_ms,
+        location.permission_state,
+        location.provider,
+        location.raw_payload,
+        location.coordinates_expire_at,
+        audit.evaluation_context,
+        outbox.payload AS outbox_payload,
+        to_jsonb(day.*) AS day_record,
+        (
+          SELECT count(*)
+          FROM attendance.location_evidence
+          WHERE attendance_event_id = event.id
+        ) AS location_rows,
+        (
+          SELECT count(*)
+          FROM attendance.decision_reasons
+          WHERE attendance_decision_id = audit.id
+        ) AS reason_rows
+       FROM attendance.command_executions command
+       JOIN attendance.attendance_events event
+         ON event.command_execution_id = command.id
+       JOIN attendance.location_evidence location
+         ON location.attendance_event_id = event.id
+       JOIN attendance.attendance_decisions audit
+         ON audit.command_execution_id = command.id
+       JOIN attendance.punch_events punch
+         ON punch.command_execution_id = command.id
+       JOIN attendance.daily_records day
+         ON day.company_id = command.company_id
+        AND day.employee_user_id = command.employee_user_id
+       JOIN platform.outbox_events outbox
+         ON outbox.aggregate_id = punch.id
+       WHERE command.id = $1
+       ORDER BY command.id`,
+      [first.json().command_id],
+    );
+
+    expect(persisted.rows).toHaveLength(1);
+    const row = persisted.rows[0]!;
+    expect(row).toMatchObject({
+      latitude: "12.971599",
+      longitude: "77.594566",
+      accuracy_meters: "8.50",
+      altitude_meters: "920.12",
+      permission_state: "granted",
+      provider: "browser",
+      coordinates_expire_at: null,
+      location_rows: "1",
+      reason_rows: "0",
+    });
+    expect(row.age_ms).toBe(
+      Math.max(0, row.command_at.getTime() - Date.parse(capturedAt)),
+    );
+    expect(row.raw_payload).toEqual({
+      schema_version: 1,
+      source_channel: "web",
+      provider: "browser",
+      permission_state: "granted",
+      client_age_ms: 60_000,
+      evaluated_age_ms: row.age_ms,
+    });
+    expect(row.evaluation_context).toMatchObject({
+      location_evidence: {
+        present: true,
+        age_ms: row.age_ms,
+        source_channel: "web",
+        provider: "browser",
+        permission_state: "granted",
+        accuracy_meters: 8.5,
+      },
+    });
+
+    for (const artifact of [
+      row.request_snapshot,
+      row.response_snapshot,
+      row.punch_metadata,
+      row.evaluation_context,
+      row.outbox_payload,
+      row.day_record,
+    ]) {
+      const serialized = JSON.stringify(artifact);
+      expect(serialized).not.toContain("12.971599");
+      expect(serialized).not.toContain("77.594566");
+      expect(serialized).not.toContain("latitude");
+      expect(serialized).not.toContain("longitude");
+    }
+
+    const changedCoordinates = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload: {
+        ...payload,
+        location: {
+          ...payload.location,
+          latitude: 12.9716,
+        },
+      },
+    });
+
+    expect(changedCoordinates.statusCode).toBe(409);
+    expect(changedCoordinates.json().message).toBe(
+      "Idempotency key was already used with a different attendance command.",
+    );
+  });
+
+  it("accepts minor future location capture skew and rejects material future timestamps", async () => {
+    const employee = await loginAs(app, "E1");
+    const headers = {
+      ...authHeader(employee.token),
+      "idempotency-key": "attendance-idempotency-location-future-skew-001",
+    };
+    const withinSkew = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: {
+          latitude: 12.971599,
+          longitude: 77.594566,
+          accuracy_meters: 8.5,
+          captured_at: new Date(Date.now() + 60_000).toISOString(),
+          provider: "browser",
+          permission_state: "unknown",
+        },
+      },
+    });
+
+    expect(withinSkew.statusCode).toBe(200);
+
+    const evidence = await app.store.pgPool!.query<{ age_ms: number }>(
+      `SELECT location.age_ms
+       FROM attendance.location_evidence location
+       JOIN attendance.attendance_events event
+         ON event.id = location.attendance_event_id
+       WHERE event.command_execution_id = $1`,
+      [withinSkew.json().command_id],
+    );
+    expect(evidence.rows[0]?.age_ms).toBe(0);
+
+    const beyondSkew = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: {
+        ...authHeader(employee.token),
+        "idempotency-key": "attendance-idempotency-location-future-skew-002",
+      },
+      payload: {
+        event_type: "break_start",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: {
+          latitude: 12.971599,
+          longitude: 77.594566,
+          accuracy_meters: 8.5,
+          captured_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+          provider: "browser",
+          permission_state: "granted",
+        },
+      },
+    });
+
+    expect(beyondSkew.statusCode).toBe(400);
+    expect(beyondSkew.json().message).toContain(
+      "Location captured_at is too far in the future",
+    );
   });
 
   it("projects separate session intervals and their session-owned breaks", async () => {
@@ -738,6 +1010,14 @@ describe("PostgreSQL attendance command idempotency", () => {
           work_mode: "office",
           source: "web",
           metadata: {},
+          location: {
+            latitude: 12.971599,
+            longitude: 77.594566,
+            accuracy_meters: 8.5,
+            captured_at: new Date(Date.now() - 30_000).toISOString(),
+            provider: "browser",
+            permission_state: "granted",
+          },
         },
       });
       expect(response.statusCode).toBe(500);
@@ -746,6 +1026,7 @@ describe("PostgreSQL attendance command idempotency", () => {
         command_decisions: string;
         audit_decisions: string;
         evidence: string;
+        location_evidence: string;
         sessions: string;
         punches: string;
         outbox: string;
@@ -756,6 +1037,7 @@ describe("PostgreSQL attendance command idempotency", () => {
           (SELECT count(*) FROM attendance.command_decisions) AS command_decisions,
           (SELECT count(*) FROM attendance.attendance_decisions) AS audit_decisions,
           (SELECT count(*) FROM attendance.attendance_events) AS evidence,
+          (SELECT count(*) FROM attendance.location_evidence) AS location_evidence,
           (SELECT count(*) FROM attendance.sessions) AS sessions,
           (SELECT count(*) FROM attendance.punch_events) AS punches,
           (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox,
@@ -766,6 +1048,7 @@ describe("PostgreSQL attendance command idempotency", () => {
         command_decisions: "0",
         audit_decisions: "0",
         evidence: "0",
+        location_evidence: "0",
         sessions: "0",
         punches: "0",
         outbox: "0",

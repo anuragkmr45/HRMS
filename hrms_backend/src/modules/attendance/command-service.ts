@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AttendanceDayRecord,
+  AttendanceLocationEvidenceInput,
   AttendancePunchEventType,
   AuthUser,
   UUID,
@@ -48,6 +49,7 @@ export interface AttendanceCommandInput {
   work_mode: "office" | "remote" | "wfh" | "field";
   source: "web" | "mobile" | "kiosk" | "admin";
   metadata: Record<string, unknown>;
+  location?: AttendanceLocationEvidenceInput;
 }
 
 export type AttendanceCommandKind =
@@ -67,9 +69,36 @@ interface AttendanceCommandOutcome {
   responseStatus: number;
 }
 
+interface LocationEvidenceDecisionContext {
+  present: boolean;
+  location_evidence_id: UUID | null;
+  age_ms: number | null;
+  source_channel: AttendanceCommandInput["source"] | null;
+  provider: string | null;
+  permission_state: string | null;
+  accuracy_meters: number | null;
+}
+
+interface PersistedLocationEvidence {
+  id: UUID;
+  ageMs: number;
+  sourceChannel: AttendanceCommandInput["source"];
+  provider: string | null;
+  permissionState: string;
+  accuracyMeters: number;
+}
+
+interface AttendanceAuditDecisionReasonInput {
+  reasonCode: string;
+  category: string;
+  severity: string;
+  details: Record<string, unknown>;
+}
+
 export const ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX = "attendance.punch";
 export const ATTENDANCE_COMMAND_RESOURCE_TYPE = "attendance.command_execution";
 export const ATTENDANCE_IDEMPOTENCY_EXPIRATION_INTERVAL = "24 hours";
+const LOCATION_CAPTURE_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export function canonicalJsonHash(value: Record<string, unknown>): string {
   return createHash("sha256")
@@ -114,6 +143,110 @@ function jsonRoundTrip(
   }
 }
 
+const exactLocationMetadataKeys = new Set([
+  "lat",
+  "latitude",
+  "lng",
+  "long",
+  "longitude",
+  "coordinate",
+  "coordinates",
+  "accuracy",
+  "accuracy_meters",
+  "altitude",
+  "altitude_meters",
+  "geo_point",
+  "point",
+  "raw_payload",
+]);
+
+function sanitizeAttendanceMetadata(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([key, value]) => {
+      const normalizedKey = key.trim().toLowerCase().replaceAll("-", "_");
+      if (exactLocationMetadataKeys.has(normalizedKey)) return false;
+      if (
+        normalizedKey === "location" &&
+        value !== null &&
+        typeof value === "object"
+      ) {
+        return false;
+      }
+      return true;
+    }),
+  );
+}
+
+function locationEvidenceDecisionContext(
+  evidence: PersistedLocationEvidence | null,
+): LocationEvidenceDecisionContext {
+  if (!evidence) {
+    return {
+      present: false,
+      location_evidence_id: null,
+      age_ms: null,
+      source_channel: null,
+      provider: null,
+      permission_state: null,
+      accuracy_meters: null,
+    };
+  }
+  return {
+    present: true,
+    location_evidence_id: evidence.id,
+    age_ms: evidence.ageMs,
+    source_channel: evidence.sourceChannel,
+    provider: evidence.provider,
+    permission_state: evidence.permissionState,
+    accuracy_meters: evidence.accuracyMeters,
+  };
+}
+
+function buildAttendanceAuditDecisionReasons(input: {
+  denied: boolean;
+  reasonCode: string;
+  reasonDetail: string;
+  policyReason: boolean;
+}): AttendanceAuditDecisionReasonInput[] {
+  const reasons: AttendanceAuditDecisionReasonInput[] = [];
+  if (input.denied) {
+    reasons.push({
+      reasonCode: input.reasonCode,
+      category: input.policyReason ? "policy" : "state",
+      severity: "error",
+      details: { reason_detail: input.reasonDetail },
+    });
+  }
+  return reasons;
+}
+
+function assertLocationCapturedAtWithinFutureSkew(
+  location: AttendanceLocationEvidenceInput,
+  receivedAt: string,
+): void {
+  if (
+    location.permission_state !== "granted" &&
+    location.permission_state !== "unknown"
+  ) {
+    throw badRequest(
+      "Location permission_state must be granted or unknown when coordinates are supplied.",
+    );
+  }
+  const capturedAtMs = Date.parse(location.captured_at);
+  const receivedAtMs = Date.parse(receivedAt);
+  if (
+    Number.isFinite(capturedAtMs) &&
+    Number.isFinite(receivedAtMs) &&
+    capturedAtMs - receivedAtMs > LOCATION_CAPTURE_FUTURE_SKEW_MS
+  ) {
+    throw badRequest(
+      "Location captured_at is too far in the future; up to five minutes of device clock skew is allowed.",
+    );
+  }
+}
+
 export class AttendanceCommandService {
   constructor(private readonly store: MemoryDataStore) {}
 
@@ -134,15 +267,20 @@ export class AttendanceCommandService {
       );
     const subjectEmployeeUserId = input.subjectEmployeeUserId ?? input.actor.id;
     const commandKind = input.commandKind ?? "employee_manual_now";
+    const commandInput: AttendanceCommandInput = {
+      ...input.command,
+      metadata: sanitizeAttendanceMetadata(input.command.metadata),
+    };
     const requestHash = canonicalAttendanceRequestHash({
       company_id: input.companyId,
       actor_user_id: input.actor.id,
       subject_employee_user_id: subjectEmployeeUserId,
       command_kind: commandKind,
-      event_type: input.command.event_type,
-      work_mode: input.command.work_mode,
-      source: input.command.source,
+      event_type: commandInput.event_type,
+      work_mode: commandInput.work_mode,
+      source: commandInput.source,
       metadata: input.command.metadata,
+      location: commandInput.location ?? null,
     });
     const scope = `${ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX}:${commandKind}:${input.companyId}`;
     const repository = new PostgresAttendanceCommandRepository(pool);
@@ -170,6 +308,12 @@ export class AttendanceCommandService {
             asOf: occurredAt,
           });
           const workDate = dateInTimeZone(occurredAt, input.timeZone);
+          if (commandInput.location) {
+            assertLocationCapturedAtWithinFutureSkew(
+              commandInput.location,
+              occurredAt,
+            );
+          }
           const command = await tx.createCommandExecution({
             companyId: input.companyId,
             actorUserId: input.actor.id,
@@ -177,21 +321,22 @@ export class AttendanceCommandService {
             platformIdempotencyKeyId: platformKey.id,
             idempotencyKey: input.idempotencyKey,
             requestHash,
-            commandType: input.command.event_type,
+            commandType: commandInput.event_type,
             commandOrigin: commandKind,
             occurredAt,
             requestSnapshot: {
               work_date: workDate,
-              work_mode: input.command.work_mode,
-              source: input.command.source,
-              metadata: input.command.metadata,
+              work_mode: commandInput.work_mode,
+              source: commandInput.source,
+              metadata: commandInput.metadata,
+              location_evidence_supplied: Boolean(commandInput.location),
             },
           });
           const evidencePayload = {
             schema_version: 1,
-            command_type: input.command.event_type,
-            work_mode: input.command.work_mode,
-            source_channel: input.command.source,
+            command_type: commandInput.event_type,
+            work_mode: commandInput.work_mode,
+            source_channel: commandInput.source,
           };
           const evidencePayloadHash = canonicalJsonHash(evidencePayload);
           const evidence = await tx.createAttendanceEvidenceEvent({
@@ -199,13 +344,30 @@ export class AttendanceCommandService {
             employeeUserId: subjectEmployeeUserId,
             actorUserId: input.actor.id,
             commandExecutionId: command.id,
-            eventType: input.command.event_type,
-            source: input.command.source,
+            eventType: commandInput.event_type,
+            source: commandInput.source,
             occurredAt,
             receivedAt: occurredAt,
             payload: evidencePayload,
             payloadHash: evidencePayloadHash,
           });
+          const locationEvidence = commandInput.location
+            ? await this.persistLocationEvidence(tx, {
+                companyId: input.companyId,
+                employeeUserId: subjectEmployeeUserId,
+                attendanceEventId: evidence.id,
+                receivedAt: occurredAt,
+                sourceChannel: commandInput.source,
+                location: commandInput.location,
+              })
+            : null;
+          const locationContext = locationEvidenceDecisionContext(locationEvidence);
+          const auditEvidenceDigest = commandInput.location
+            ? canonicalJsonHash({
+                attendance_event_payload_hash: evidencePayloadHash,
+                location: commandInput.location,
+              })
+            : evidencePayloadHash;
           let state = await tx.ensureAndLockEmployeeState(
             input.companyId,
             subjectEmployeeUserId,
@@ -272,10 +434,10 @@ export class AttendanceCommandService {
           }
           const stateDecision = decideAttendanceTransition(
             state.state,
-            input.command.event_type,
+            commandInput.event_type,
           );
           const policyReason = policyBlocked(
-            input.command.event_type,
+            commandInput.event_type,
             occurredAt,
             input.timeZone,
             policy,
@@ -308,30 +470,39 @@ export class AttendanceCommandService {
             policyKey: "attendance",
             policyVersion: policy.policyVersion,
             evaluatedAt: occurredAt,
-            evidenceDigest: evidencePayloadHash,
+            evidenceDigest: auditEvidenceDigest,
             policySnapshot: policy,
             evaluationContext: {
               company_id: input.companyId,
               actor_user_id: input.actor.id,
               subject_employee_user_id: subjectEmployeeUserId,
               command_origin: commandKind,
-              command_type: input.command.event_type,
+              command_type: commandInput.event_type,
               previous_state: state.state,
               open_session_id: open?.id ?? null,
               occurred_at: occurredAt,
               work_date: workDate,
+              location_evidence: locationContext,
             },
           });
-          if (denied) {
+          const auditReasons = buildAttendanceAuditDecisionReasons({
+            denied,
+            reasonCode: code,
+            reasonDetail: reason,
+            policyReason: Boolean(policyReason),
+          });
+          for (const [ordinal, auditReason] of auditReasons.entries()) {
             await tx.createAttendanceDecisionReason({
               attendanceDecisionId: auditDecision.id,
               companyId: input.companyId,
-              reasonCode: code,
-              category: policyReason ? "policy" : "state",
-              severity: "error",
-              ordinal: 0,
-              details: { reason_detail: reason },
+              reasonCode: auditReason.reasonCode,
+              category: auditReason.category,
+              severity: auditReason.severity,
+              ordinal,
+              details: auditReason.details,
             });
+          }
+          if (denied) {
             const previous = state.state;
             const decision = await tx.createDecision({
               commandExecutionId: command.id,
@@ -351,6 +522,7 @@ export class AttendanceCommandService {
                 command_origin: commandKind,
                 attendance_event_id: evidence.id,
                 evidence_payload_hash: evidencePayloadHash,
+                location_evidence: locationEvidence,
                 open_session_id: open?.id ?? null,
                 occurred_at: occurredAt,
               },
@@ -409,7 +581,7 @@ export class AttendanceCommandService {
               subjectEmployeeUserId,
               workDate,
               occurredAt,
-              input.command,
+              commandInput,
               open,
               stateDecision.action,
             );
@@ -430,12 +602,12 @@ export class AttendanceCommandService {
               companyId: input.companyId,
               employeeUserId: subjectEmployeeUserId,
               actorUserId: input.actor.id,
-              eventType: input.command.event_type,
+              eventType: commandInput.event_type,
               occurredAt,
-              workMode: input.command.work_mode,
-              source: input.command.source,
+              workMode: commandInput.work_mode,
+              source: commandInput.source,
               origin: commandKind,
-              metadata: input.command.metadata,
+              metadata: commandInput.metadata,
               commandExecutionId: command.id,
               sessionId: session.id,
               decisionId: decision.id,
@@ -446,7 +618,7 @@ export class AttendanceCommandService {
             input.companyId,
             subjectEmployeeUserId,
             workDate,
-            input.command.work_mode,
+            commandInput.work_mode,
             policy.graceMinutes,
             input.timeZone,
             occurredAt,
@@ -460,11 +632,11 @@ export class AttendanceCommandService {
               decisionId: decision.id,
               sessionId: session.id,
               punchEventId: punch.id,
-              punchType: input.command.event_type,
+              punchType: commandInput.event_type,
               occurredAt,
               workDate,
-              workMode: input.command.work_mode,
-              sourceChannel: input.command.source,
+              workMode: commandInput.work_mode,
+              sourceChannel: commandInput.source,
               origin: commandKind,
               dayStatus:
                 typeof (day as { status?: unknown }).status === "string"
@@ -484,7 +656,10 @@ export class AttendanceCommandService {
               employee_user_id: subjectEmployeeUserId,
               actor_user_id: input.actor.id,
               origin: commandKind,
-              ...input.command,
+              event_type: commandInput.event_type,
+              work_mode: commandInput.work_mode,
+              source: commandInput.source,
+              metadata: commandInput.metadata,
               occurred_at: occurredAt,
               created_at: punch.created_at,
               deleted_at: null,
@@ -557,12 +732,19 @@ export class AttendanceCommandService {
     const pool = this.store.pgPool;
     if (!pool && !existingTransaction) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
     const { principal } = input;
+    const sanitizedMetadata = sanitizeAttendanceMetadata(input.command.metadata);
     const requestHash = canonicalAttendanceRequestHash({
       company_id: principal.companyId,
       actor_user_id: principal.actorUserId,
       subject_employee_user_id: principal.subjectEmployeeUserId,
       command_kind: input.commandKind,
-      ...input.command,
+      event_type: input.command.event_type,
+      occurred_at: input.command.occurred_at,
+      reason: input.command.reason,
+      work_mode: input.command.work_mode,
+      metadata: input.command.metadata,
+      linked_regularization_request_id:
+        input.command.linked_regularization_request_id ?? null,
     });
     const scope = `${ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX}:${input.commandKind}:${principal.companyId}`;
     const run = async (tx: AttendanceCommandTransactionRepository): Promise<AttendanceCommandOutcome> => {
@@ -600,7 +782,7 @@ export class AttendanceCommandService {
           reason: input.command.reason,
           linked_regularization_request_id: input.command.linked_regularization_request_id ?? null,
           work_mode: input.command.work_mode,
-          metadata: input.command.metadata,
+          metadata: sanitizedMetadata,
         },
       });
       const evidencePayload = {
@@ -673,7 +855,7 @@ export class AttendanceCommandService {
         origin: input.commandKind,
         regularizationRequestId: input.command.linked_regularization_request_id ?? null,
         metadata: {
-          ...input.command.metadata,
+          ...sanitizedMetadata,
           correction_reason: input.command.reason,
           linked_regularization_request_id: input.command.linked_regularization_request_id ?? null,
         },
@@ -1046,12 +1228,19 @@ export class AttendanceCommandService {
     const pool = this.store.pgPool;
     if (!pool) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
     const { principal } = input;
+    const sanitizedMetadata = sanitizeAttendanceMetadata(input.command.metadata);
     const requestHash = canonicalAttendanceRequestHash({
       company_id: principal.companyId,
       actor_user_id: principal.actorUserId,
       subject_employee_user_id: principal.subjectEmployeeUserId,
       command_kind: input.commandKind,
-      ...input.command,
+      event_type: input.command.event_type,
+      occurred_at: input.command.occurred_at,
+      reason: input.command.reason,
+      work_mode: input.command.work_mode,
+      metadata: input.command.metadata,
+      linked_regularization_request_id:
+        input.command.linked_regularization_request_id ?? null,
     });
     const scope = `${ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX}:${input.commandKind}:${principal.companyId}`;
     const repository = new PostgresAttendanceCommandRepository(pool);
@@ -1085,7 +1274,7 @@ export class AttendanceCommandService {
           reason: input.command.reason,
           linked_regularization_request_id: input.command.linked_regularization_request_id ?? null,
           work_mode: input.command.work_mode,
-          metadata: input.command.metadata,
+          metadata: sanitizedMetadata,
         },
       });
       const evidencePayload = {
@@ -1155,7 +1344,7 @@ export class AttendanceCommandService {
         origin: input.commandKind,
         regularizationRequestId: input.command.linked_regularization_request_id ?? null,
         metadata: {
-          ...input.command.metadata,
+          ...sanitizedMetadata,
           correction_reason: input.command.reason,
           linked_regularization_request_id: input.command.linked_regularization_request_id ?? null,
         },
@@ -1328,6 +1517,49 @@ export class AttendanceCommandService {
     return {
       response: command.response_snapshot,
       responseStatus: key.response_status,
+    };
+  }
+
+  private async persistLocationEvidence(
+    tx: AttendanceCommandTransactionRepository,
+    input: {
+      companyId: UUID;
+      employeeUserId: UUID;
+      attendanceEventId: UUID;
+      receivedAt: string;
+      sourceChannel: AttendanceCommandInput["source"];
+      location: AttendanceLocationEvidenceInput;
+    },
+  ): Promise<PersistedLocationEvidence> {
+    const evaluatedAgeMs = Math.max(
+      0,
+      Date.parse(input.receivedAt) - Date.parse(input.location.captured_at),
+    );
+    const evidence = await tx.createAttendanceLocationEvidence({
+      attendanceEventId: input.attendanceEventId,
+      companyId: input.companyId,
+      employeeUserId: input.employeeUserId,
+      capturedAt: input.location.captured_at,
+      receivedAt: input.receivedAt,
+      location: input.location,
+      ageMs: evaluatedAgeMs,
+      coordinatesExpireAt: null,
+      rawPayload: {
+        schema_version: 1,
+        source_channel: input.sourceChannel,
+        provider: input.location.provider ?? null,
+        permission_state: input.location.permission_state,
+        client_age_ms: input.location.age_ms ?? null,
+        evaluated_age_ms: evaluatedAgeMs,
+      },
+    });
+    return {
+      id: evidence.id,
+      ageMs: evaluatedAgeMs,
+      sourceChannel: input.sourceChannel,
+      provider: input.location.provider ?? null,
+      permissionState: input.location.permission_state,
+      accuracyMeters: input.location.accuracy_meters,
     };
   }
 

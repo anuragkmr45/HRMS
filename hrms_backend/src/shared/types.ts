@@ -5,6 +5,8 @@ import type {
   AttendanceDayClassification,
   AttendanceDayStatus,
   AttendanceEvidenceState,
+  AttendanceLocationPermissionState,
+  AttendanceLocationProvider,
   AttendancePayrollState,
   AttendancePresenceState,
   AttendancePunchEventType,
@@ -401,6 +403,19 @@ export interface AttendancePunch {
   metadata: Record<string, unknown>;
   created_at: ISODateTime;
   deleted_at: ISODateTime | null;
+}
+
+export interface AttendanceLocationEvidenceInput {
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number;
+  captured_at: ISODateTime;
+  age_ms?: number;
+  provider?: AttendanceLocationProvider;
+  permission_state: AttendanceLocationPermissionState;
+  altitude_meters?: number;
+  is_mocked?: boolean;
+  integrity_status?: string;
 }
 
 export interface AttendanceDayRecord {

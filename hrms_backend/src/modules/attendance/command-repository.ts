@@ -1,5 +1,9 @@
 import type { Pool, PoolClient } from "pg";
-import type { AttendancePunchEventType, UUID } from "#shared";
+import type {
+  AttendanceLocationEvidenceInput,
+  AttendancePunchEventType,
+  UUID,
+} from "#shared";
 import type { AttendanceOutboxEventContract } from "./events.js";
 import type {
   AttendanceCommandState,
@@ -92,6 +96,10 @@ export interface AttendanceAuditDecisionRecord {
   id: UUID;
 }
 
+export interface AttendanceLocationEvidenceRecord {
+  id: UUID;
+}
+
 export interface CreateAttendanceCommandInput {
   companyId: UUID;
   actorUserId: UUID;
@@ -116,6 +124,18 @@ export interface CreateAttendanceDecisionInput {
   nextState: AttendanceCommandState;
   policySnapshot: Record<string, unknown>;
   evidenceSnapshot: Record<string, unknown>;
+}
+
+export interface CreateAttendanceLocationEvidenceInput {
+  attendanceEventId: UUID;
+  companyId: UUID;
+  employeeUserId: UUID;
+  capturedAt: string;
+  receivedAt: string;
+  location: AttendanceLocationEvidenceInput;
+  ageMs: number;
+  rawPayload: Record<string, unknown>;
+  coordinatesExpireAt?: string | null;
 }
 
 export interface CompleteAttendanceCommandInput {
@@ -635,6 +655,43 @@ export class AttendanceCommandTransactionRepository {
     const decision = result.rows[0];
     if (!decision) throw new Error("Attendance audit decision was not created.");
     return decision;
+  }
+
+  async createAttendanceLocationEvidence(
+    input: CreateAttendanceLocationEvidenceInput,
+  ): Promise<AttendanceLocationEvidenceRecord> {
+    const result = await this.client.query<AttendanceLocationEvidenceRecord>(
+      `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          received_at, latitude, longitude, accuracy_meters, altitude_meters,
+          provider, is_mocked, integrity_status, raw_payload, age_ms,
+          permission_state, coordinates_expire_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16
+        )
+        RETURNING id`,
+      [
+        input.attendanceEventId,
+        input.companyId,
+        input.employeeUserId,
+        input.capturedAt,
+        input.receivedAt,
+        input.location.latitude,
+        input.location.longitude,
+        input.location.accuracy_meters,
+        input.location.altitude_meters ?? null,
+        input.location.provider ?? null,
+        input.location.is_mocked ?? null,
+        input.location.integrity_status ?? null,
+        JSON.stringify(input.rawPayload),
+        input.ageMs,
+        input.location.permission_state,
+        input.coordinatesExpireAt ?? null,
+      ],
+    );
+    const evidence = result.rows[0];
+    if (!evidence) throw new Error("Attendance location evidence was not created.");
+    return evidence;
   }
 
   async createAttendanceDecisionReason(input: {

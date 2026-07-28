@@ -549,6 +549,136 @@ export const attendanceEmployeeCommandStates = attendance.table(
   (table) => [primaryKey({ columns: [table.companyId, table.employeeUserId] })]
 );
 
+export const attendanceEvents = attendance.table(
+  "attendance_events",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    actorUserId: uuid("actor_user_id"),
+    commandExecutionId: uuid("command_execution_id"),
+    eventType: text("event_type").notNull(),
+    source: text("source").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    payload: jsonb("payload").notNull().default({}),
+    payloadHash: text("payload_hash"),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_events_id_company_uq").on(table.id, table.companyId),
+    index("attendance_events_employee_occurred_idx").on(table.companyId, table.employeeUserId, table.occurredAt.desc()),
+    index("attendance_events_command_created_idx")
+      .on(table.commandExecutionId, table.createdAt)
+      .where(sql`${table.commandExecutionId} IS NOT NULL`),
+    index("attendance_events_type_received_idx").on(table.companyId, table.eventType, table.receivedAt.desc()),
+    check("attendance_events_source_check", sql`${table.source} IN ('web', 'mobile', 'kiosk', 'admin', 'system')`),
+    check("attendance_events_schema_version_check", sql`${table.schemaVersion} > 0`),
+    check("attendance_events_payload_hash_check", sql`${table.payloadHash} IS NULL OR length(${table.payloadHash}) = 64`)
+  ]
+);
+
+export const attendanceLocationEvidence = attendance.table(
+  "location_evidence",
+  {
+    id: uuidPk.defaultRandom(),
+    attendanceEventId: uuid("attendance_event_id").notNull(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
+    accuracyMeters: numeric("accuracy_meters", { precision: 10, scale: 2 }).notNull(),
+    altitudeMeters: numeric("altitude_meters", { precision: 10, scale: 2 }),
+    provider: text("provider"),
+    isMocked: boolean("is_mocked"),
+    integrityStatus: text("integrity_status"),
+    rawPayload: jsonb("raw_payload").notNull().default({}),
+    ageMs: integer("age_ms").notNull(),
+    permissionState: text("permission_state").notNull().default("unknown"),
+    coordinatesExpireAt: timestamp("coordinates_expire_at", { withTimezone: true }),
+    createdAt
+  },
+  (table) => [
+    index("location_evidence_event_captured_idx").on(table.attendanceEventId, table.capturedAt),
+    index("location_evidence_employee_captured_idx").on(table.companyId, table.employeeUserId, table.capturedAt.desc()),
+    check("location_evidence_latitude_check", sql`${table.latitude} BETWEEN -90 AND 90`),
+    check("location_evidence_longitude_check", sql`${table.longitude} BETWEEN -180 AND 180`),
+    check("location_evidence_accuracy_meters_check", sql`${table.accuracyMeters} >= 0`),
+    check("location_evidence_age_ms_nonnegative_check", sql`${table.ageMs} >= 0`),
+    check("location_evidence_permission_state_check", sql`${table.permissionState} IN ('granted', 'denied', 'unavailable', 'unknown')`),
+    check("location_evidence_provider_check", sql`${table.provider} IS NULL OR ${table.provider} IN ('browser', 'device', 'network', 'unknown')`),
+    check("location_evidence_coordinates_expire_after_received_check", sql`${table.coordinatesExpireAt} IS NULL OR ${table.coordinatesExpireAt} > ${table.receivedAt}`),
+    foreignKey({
+      name: "location_evidence_event_company_fk",
+      columns: [table.attendanceEventId, table.companyId],
+      foreignColumns: [attendanceEvents.id, attendanceEvents.companyId]
+    }).onUpdate("restrict").onDelete("restrict")
+  ]
+);
+
+export const attendanceDecisions = attendance.table(
+  "attendance_decisions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    attendanceEventId: uuid("attendance_event_id").notNull(),
+    commandExecutionId: uuid("command_execution_id"),
+    decisionType: text("decision_type").notNull(),
+    outcome: text("outcome").notNull(),
+    policyKey: text("policy_key").notNull(),
+    policyVersion: text("policy_version").notNull(),
+    evaluatorVersion: text("evaluator_version"),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true }).notNull().defaultNow(),
+    evidenceDigest: text("evidence_digest"),
+    policySnapshot: jsonb("policy_snapshot").notNull().default({}),
+    evaluationContext: jsonb("evaluation_context").notNull().default({}),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_decisions_id_company_uq").on(table.id, table.companyId),
+    index("attendance_evidence_decisions_event_evaluated_idx").on(table.attendanceEventId, table.evaluatedAt),
+    index("attendance_evidence_decisions_command_evaluated_idx")
+      .on(table.commandExecutionId, table.evaluatedAt)
+      .where(sql`${table.commandExecutionId} IS NOT NULL`),
+    index("attendance_evidence_decisions_employee_evaluated_idx").on(table.companyId, table.employeeUserId, table.evaluatedAt.desc()),
+    check("attendance_decisions_outcome_check", sql`${table.outcome} IN ('passed', 'failed', 'not_applicable', 'indeterminate')`),
+    check("attendance_decisions_evidence_digest_check", sql`${table.evidenceDigest} IS NULL OR length(${table.evidenceDigest}) = 64`),
+    foreignKey({
+      name: "attendance_decisions_event_company_fk",
+      columns: [table.attendanceEventId, table.companyId],
+      foreignColumns: [attendanceEvents.id, attendanceEvents.companyId]
+    }).onUpdate("restrict").onDelete("restrict")
+  ]
+);
+
+export const attendanceDecisionReasons = attendance.table(
+  "decision_reasons",
+  {
+    id: uuidPk.defaultRandom(),
+    attendanceDecisionId: uuid("attendance_decision_id").notNull(),
+    companyId: uuid("company_id").notNull(),
+    reasonCode: text("reason_code").notNull(),
+    category: text("category"),
+    severity: text("severity"),
+    ordinal: integer("ordinal").notNull().default(0),
+    details: jsonb("details").notNull().default({}),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_decision_reasons_ordinal_uq").on(table.attendanceDecisionId, table.ordinal),
+    check("attendance_decision_reasons_ordinal_check", sql`${table.ordinal} >= 0`),
+    foreignKey({
+      name: "decision_reasons_decision_company_fk",
+      columns: [table.attendanceDecisionId, table.companyId],
+      foreignColumns: [attendanceDecisions.id, attendanceDecisions.companyId]
+    }).onUpdate("restrict").onDelete("restrict")
+  ]
+);
+
 export const attendanceDailyRecords = attendance.table(
   "daily_records",
   {
@@ -2004,6 +2134,10 @@ export const schema = {
   attendanceSessions,
   attendanceBreakSegments,
   attendanceEmployeeCommandStates,
+  attendanceEvents,
+  attendanceLocationEvidence,
+  attendanceDecisions,
+  attendanceDecisionReasons,
   attendanceDailyRecords,
   attendanceRegularizationRequests,
   attendanceRegularizationRequestItems,

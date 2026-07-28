@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  AttendanceLocationPermissionStates,
+  AttendanceLocationProviders,
   AttendancePunchEventTypes,
   AssetStatuses,
   DocumentClassifications,
@@ -295,6 +297,35 @@ export const timesheetDecisionSchema = z.object({
   expected_version: z.number().int().min(1)
 });
 
+const attendanceLocationPermissionStateValues = [
+  AttendanceLocationPermissionStates.Granted,
+  AttendanceLocationPermissionStates.Unknown
+] as const;
+
+const attendanceLocationProviderValues = [
+  AttendanceLocationProviders.Browser,
+  AttendanceLocationProviders.Device,
+  AttendanceLocationProviders.Network,
+  AttendanceLocationProviders.Unknown
+] as const;
+
+export const attendanceLocationEvidenceSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  accuracy_meters: z.number().min(0),
+  captured_at: isoDateTimeSchema,
+  age_ms: z.number().int().min(0).optional(),
+  provider: z.enum(attendanceLocationProviderValues).optional(),
+  permission_state: z.enum(attendanceLocationPermissionStateValues).default(
+    AttendanceLocationPermissionStates.Unknown
+  ),
+  altitude_meters: z.number().optional(),
+  is_mocked: z.boolean().optional(),
+  integrity_status: z.string().trim().min(1).max(80).optional()
+}).strict();
+
+export type AttendanceLocationEvidenceRequest = z.infer<typeof attendanceLocationEvidenceSchema>;
+
 export const attendancePunchSchema = z.object({
   event_type: z.enum([
     AttendancePunchEventTypes.CheckIn,
@@ -304,7 +335,8 @@ export const attendancePunchSchema = z.object({
   ]),
   work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
   source: z.enum(["web", "mobile", "kiosk"]).default("web"),
-  metadata: z.record(z.string(), z.unknown()).default({})
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  location: attendanceLocationEvidenceSchema.optional()
 }).strict();
 
 export const attendanceAssistedCurrentPunchSchema = z.object({
