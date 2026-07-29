@@ -140,6 +140,108 @@ export interface ExtendedMasterDataInput extends ApiRecord {
   expected_version?: number;
 }
 
+export type ShiftTimezoneStrategy = "company" | "employee_with_company_fallback" | "fixed";
+
+export interface ShiftVersionInput extends ApiRecord {
+  effective_from: string;
+  effective_until?: string | null;
+  local_start_time: string;
+  local_end_time: string;
+  crosses_midnight: boolean;
+  timezone_strategy: ShiftTimezoneStrategy;
+  fixed_timezone?: string | null;
+  eligibility_open_before_start_minutes: number;
+  eligibility_close_after_end_minutes: number;
+}
+
+export interface ShiftVersionRecord extends ApiRecord {
+  id: string;
+  company_id: string;
+  template_id: string;
+  version_number: number;
+  effective_from: string;
+  effective_until: string | null;
+  local_start_time: string;
+  local_end_time: string;
+  end_day_offset: number;
+  crosses_midnight: boolean;
+  timezone_strategy: ShiftTimezoneStrategy;
+  fixed_timezone: string | null;
+  eligibility_open_before_start_minutes: number;
+  eligibility_close_after_end_minutes: number;
+  created_at: string;
+}
+
+export interface ShiftTemplateRecord extends ApiRecord {
+  id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: "active" | "inactive";
+  is_company_default: boolean;
+  created_at: string;
+  updated_at: string;
+  version: number;
+  latest_version: ShiftVersionRecord | null;
+}
+
+export interface ShiftTemplateCreateInput extends ApiRecord {
+  code: string;
+  name: string;
+  description?: string | null;
+  is_company_default: boolean;
+  version: ShiftVersionInput;
+}
+
+export interface ShiftTemplateUpdateInput extends ApiRecord {
+  name?: string;
+  description?: string | null;
+  status?: "active" | "inactive";
+  is_company_default?: boolean;
+  expected_version: number;
+}
+
+export interface ShiftAssignmentRecord extends ApiRecord {
+  id: string;
+  company_id: string;
+  employee_user_id: string;
+  template_id: string;
+  effective_from: string;
+  effective_until: string | null;
+  status: "active" | "inactive";
+  employee_name: string;
+  employee_code: string;
+  department_id: string | null;
+  department_name: string | null;
+  template_code: string;
+  template_name: string;
+  version: number;
+}
+
+export interface ShiftAssignmentCreateInput extends ApiRecord {
+  target_type: "employee" | "department";
+  target_id: string;
+  template_id: string;
+  effective_from: string;
+  effective_until?: string | null;
+}
+
+export interface ShiftReferenceResponse extends ApiRecord {
+  employees: Array<{
+    id: string;
+    employee_code: string;
+    name: string;
+    department_id: string | null;
+  }>;
+  departments: Array<{
+    id: string;
+    code: string;
+    name: string;
+    employee_count: number;
+  }>;
+}
+
 export interface RbacRoleRecord extends ApiRecord {
   id: string;
   role_key: string;
@@ -510,6 +612,76 @@ export const adminApi = {
         body: input,
       },
     );
+  },
+  listShiftTemplates(params: { status?: "active" | "inactive"; search?: string } = {}) {
+    const path = "/api/v1/admin/shifts/templates";
+    return apiRequest<{ items: ShiftTemplateRecord[]; total: number }>(
+      `${path}${queryString(params)}`,
+    );
+  },
+  createShiftTemplate(input: ShiftTemplateCreateInput) {
+    return apiRequest<{ template: ShiftTemplateRecord; version: number }>(
+      "/api/v1/admin/shifts/templates",
+      { method: "POST", body: input },
+    );
+  },
+  updateShiftTemplate(id: string, input: ShiftTemplateUpdateInput) {
+    return apiRequest<{ template: ShiftTemplateRecord; version: number }>(
+      `/api/v1/admin/shifts/templates/${id}`,
+      { method: "PATCH", body: input },
+    );
+  },
+  listShiftVersions(templateId: string) {
+    return apiRequest<{
+      template: ShiftTemplateRecord;
+      items: ShiftVersionRecord[];
+      total: number;
+    }>(`/api/v1/admin/shifts/templates/${templateId}/versions`);
+  },
+  createShiftVersion(templateId: string, input: ShiftVersionInput) {
+    return apiRequest<{ version: ShiftVersionRecord }>(
+      `/api/v1/admin/shifts/templates/${templateId}/versions`,
+      { method: "POST", body: input },
+    );
+  },
+  listShiftAssignments(
+    params: {
+      status?: "active" | "inactive";
+      template_id?: string;
+      department_id?: string;
+      search?: string;
+    } = {},
+  ) {
+    const path = "/api/v1/admin/shifts/assignments";
+    return apiRequest<{ items: ShiftAssignmentRecord[]; total: number }>(
+      `${path}${queryString(params)}`,
+    );
+  },
+  createShiftAssignments(input: ShiftAssignmentCreateInput) {
+    return apiRequest<{
+      items: ShiftAssignmentRecord[];
+      created_count: number;
+      target_type: "employee" | "department";
+      target_id: string;
+    }>("/api/v1/admin/shifts/assignments", { method: "POST", body: input });
+  },
+  updateShiftAssignment(
+    id: string,
+    input: {
+      template_id?: string;
+      effective_from?: string;
+      effective_until?: string | null;
+      status?: "active" | "inactive";
+      expected_version: number;
+    },
+  ) {
+    return apiRequest<{ assignment: ShiftAssignmentRecord; version: number }>(
+      `/api/v1/admin/shifts/assignments/${id}`,
+      { method: "PATCH", body: input },
+    );
+  },
+  getShiftReferences() {
+    return apiRequest<ShiftReferenceResponse>("/api/v1/admin/shifts/references");
   },
   listRbacRoles(params: { page?: number; page_size?: number; active_only?: boolean } = {}) {
     const path = "/api/v1/admin/rbac/roles";

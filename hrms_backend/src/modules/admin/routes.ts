@@ -32,10 +32,13 @@ import {
   policyKeyParamSchema,
   workflowKeyParamSchema
 } from "./schemas.js";
+import { shiftAdminRoutes } from "./shift-routes.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
+  await fastify.register(shiftAdminRoutes, { prefix: "/shifts" });
+
   fastify.get("/company-profile", async (request) => {
     if (!request.actor) throw unauthorized();
     return new AdminService(fastify.store).getCompanyProfile(request.actor);

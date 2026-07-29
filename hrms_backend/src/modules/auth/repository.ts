@@ -1,5 +1,11 @@
 import type { CoreUser, UUID } from "#shared";
-import type { AuthTokenRecord, CompanyProfileRecord, MemoryDataStore, UserCredentialRecord, UserSessionPreferenceRecord } from "../../platform/data-store.js";
+import type {
+  AuthTokenRecord,
+  CompanyProfileRecord,
+  MemoryDataStore,
+  UserCredentialRecord,
+  UserSessionPreferenceRecord,
+} from "../../platform/data-store.js";
 
 export class AuthRepository {
   constructor(private readonly store: MemoryDataStore) {}
@@ -10,7 +16,7 @@ export class AuthRepository {
         (user) =>
           user.employee_code.toLowerCase() === employeeCode.toLowerCase() &&
           user.employment_status === "active" &&
-          !user.deleted_at
+          !user.deleted_at,
       ) ?? null
     );
   }
@@ -19,8 +25,7 @@ export class AuthRepository {
     return (
       this.store.users.find(
         (user) =>
-          user.email.toLowerCase() === email.toLowerCase() &&
-          !user.deleted_at
+          user.email.toLowerCase() === email.toLowerCase() && !user.deleted_at,
       ) ?? null
     );
   }
@@ -35,34 +40,68 @@ export class AuthRepository {
         (credential) =>
           credential.user_id === userId &&
           credential.status === "active" &&
-          !credential.deleted_at
+          !credential.deleted_at,
       ) ?? null
     );
   }
 
-  findTokenByHash(tokenHash: string, tokenType: AuthTokenRecord["token_type"]): AuthTokenRecord | null {
-    return this.store.authTokens.find((token) => token.token_hash === tokenHash && token.token_type === tokenType) ?? null;
+  findTokenByHash(
+    tokenHash: string,
+    tokenType: AuthTokenRecord["token_type"],
+  ): AuthTokenRecord | null {
+    return (
+      this.store.authTokens.find(
+        (token) =>
+          token.token_hash === tokenHash && token.token_type === tokenType,
+      ) ?? null
+    );
   }
 
-  activeTokensForUser(userId: UUID, tokenType: AuthTokenRecord["token_type"]): AuthTokenRecord[] {
-    return this.store.authTokens.filter((token) => token.user_id === userId && token.token_type === tokenType && token.status === "active");
+  activeTokensForUser(
+    userId: UUID,
+    tokenType: AuthTokenRecord["token_type"],
+  ): AuthTokenRecord[] {
+    return this.store.authTokens.filter(
+      (token) =>
+        token.user_id === userId &&
+        token.token_type === tokenType &&
+        token.status === "active",
+    );
   }
 
-  activeTokensForEmail(email: string, tokenType: AuthTokenRecord["token_type"]): AuthTokenRecord[] {
+  activeTokensForEmail(
+    email: string,
+    tokenType: AuthTokenRecord["token_type"],
+  ): AuthTokenRecord[] {
     const normalized = email.toLowerCase();
-    return this.store.authTokens.filter((token) => token.email?.toLowerCase() === normalized && token.token_type === tokenType && token.status === "active");
+    return this.store.authTokens.filter(
+      (token) =>
+        token.email?.toLowerCase() === normalized &&
+        token.token_type === tokenType &&
+        token.status === "active",
+    );
   }
 
   findCompanyBySlug(slug: string): CompanyProfileRecord | null {
-    return this.store.companyProfiles.find((company) => company.company_slug.toLowerCase() === slug.toLowerCase()) ?? null;
+    return (
+      this.store.companyProfiles.find(
+        (company) => company.company_slug.toLowerCase() === slug.toLowerCase(),
+      ) ?? null
+    );
   }
 
   findCompanyById(id: UUID): CompanyProfileRecord | null {
-    return this.store.companyProfiles.find((company) => company.id === id) ?? null;
+    return (
+      this.store.companyProfiles.find((company) => company.id === id) ?? null
+    );
   }
 
-  upsertSessionPreference(preference: UserSessionPreferenceRecord): UserSessionPreferenceRecord {
-    const index = this.store.userSessionPreferences.findIndex((candidate) => candidate.user_id === preference.user_id);
+  upsertSessionPreference(
+    preference: UserSessionPreferenceRecord,
+  ): UserSessionPreferenceRecord {
+    const index = this.store.userSessionPreferences.findIndex(
+      (candidate) => candidate.user_id === preference.user_id,
+    );
     if (index >= 0) {
       this.store.userSessionPreferences[index] = preference;
       return preference;
@@ -72,6 +111,23 @@ export class AuthRepository {
   }
 
   sessionPreferenceFor(userId: UUID): UserSessionPreferenceRecord | null {
-    return this.store.userSessionPreferences.find((preference) => preference.user_id === userId) ?? null;
+    return (
+      this.store.userSessionPreferences.find(
+        (preference) => preference.user_id === userId,
+      ) ?? null
+    );
+  }
+
+  tokensForEmail(
+    email: string,
+    tokenType: AuthTokenRecord["token_type"],
+  ): AuthTokenRecord[] {
+    const normalized = email.toLowerCase();
+
+    return this.store.authTokens.filter(
+      (token) =>
+        token.email?.toLowerCase() === normalized &&
+        token.token_type === tokenType,
+    );
   }
 }

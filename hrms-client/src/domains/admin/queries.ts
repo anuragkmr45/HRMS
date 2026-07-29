@@ -15,6 +15,10 @@ import {
   type RbacRoleInput,
   type RbacRolePermissionsInput,
   type RbacRoleUpdateInput,
+  type ShiftAssignmentCreateInput,
+  type ShiftTemplateCreateInput,
+  type ShiftTemplateUpdateInput,
+  type ShiftVersionInput,
 } from "./api";
 
 export function useCompanyProfile(enabled = true) {
@@ -149,6 +153,98 @@ export function useUpdateExtendedMasterDataMutation() {
       input: ExtendedMasterDataInput & { expected_version: number };
     }) => adminApi.updateExtendedMasterData(masterKey, id, input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.domain("admin") }),
+  });
+}
+
+export function useShiftTemplates(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.list("admin", "shifts", "templates"),
+    queryFn: () => adminApi.listShiftTemplates(),
+    enabled,
+    staleTime: queryTimings.referenceStaleMs,
+  });
+}
+
+export function useShiftVersions(templateId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.list("admin", "shifts", `versions:${templateId ?? "none"}`),
+    queryFn: () => adminApi.listShiftVersions(templateId!),
+    enabled: enabled && Boolean(templateId),
+  });
+}
+
+export function useShiftAssignments(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.list("admin", "shifts", "assignments"),
+    queryFn: () => adminApi.listShiftAssignments(),
+    enabled,
+  });
+}
+
+export function useShiftReferences(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.list("admin", "shifts", "references"),
+    queryFn: () => adminApi.getShiftReferences(),
+    enabled,
+    staleTime: queryTimings.referenceStaleMs,
+  });
+}
+
+function invalidateShiftQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.domain("admin") });
+}
+
+export function useCreateShiftTemplateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ShiftTemplateCreateInput) => adminApi.createShiftTemplate(input),
+    onSuccess: () => invalidateShiftQueries(queryClient),
+  });
+}
+
+export function useUpdateShiftTemplateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ShiftTemplateUpdateInput }) =>
+      adminApi.updateShiftTemplate(id, input),
+    onSuccess: () => invalidateShiftQueries(queryClient),
+  });
+}
+
+export function useCreateShiftVersionMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ templateId, input }: { templateId: string; input: ShiftVersionInput }) =>
+      adminApi.createShiftVersion(templateId, input),
+    onSuccess: () => invalidateShiftQueries(queryClient),
+  });
+}
+
+export function useCreateShiftAssignmentsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ShiftAssignmentCreateInput) => adminApi.createShiftAssignments(input),
+    onSuccess: () => invalidateShiftQueries(queryClient),
+  });
+}
+
+export function useUpdateShiftAssignmentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      expectedVersion,
+      status,
+    }: {
+      id: string;
+      expectedVersion: number;
+      status: "active" | "inactive";
+    }) =>
+      adminApi.updateShiftAssignment(id, {
+        status,
+        expected_version: expectedVersion,
+      }),
+    onSuccess: () => invalidateShiftQueries(queryClient),
   });
 }
 

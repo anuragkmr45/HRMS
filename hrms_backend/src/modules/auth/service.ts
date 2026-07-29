@@ -1,11 +1,42 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createJwt, hashPasswordSync, verifyPasswordSync } from "#auth";
-import { EmploymentStatuses, Permissions, Roles, type AdminPolicyConfigRecord, type AdminSecuritySettingsRecord, type AuthUser, type CoreUser, type Department, type Designation, type RoleKey, type UUID } from "#shared";
-import { badRequest, conflict, forbidden, notFound, unauthorized } from "../../platform/errors.js";
-import type { AuthTokenRecord, CompanyProfileRecord, MemoryDataStore, UserCredentialRecord, UserSessionPreferenceRecord } from "../../platform/data-store.js";
-import { buildDefaultAdminPolicies, nowIso, seedIds } from "../../platform/data-store.js";
+import {
+  EmploymentStatuses,
+  Permissions,
+  Roles,
+  type AdminPolicyConfigRecord,
+  type AdminSecuritySettingsRecord,
+  type AuthUser,
+  type CoreUser,
+  type Department,
+  type Designation,
+  type RoleKey,
+  type UUID,
+} from "#shared";
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  unauthorized,
+} from "../../platform/errors.js";
+import type {
+  AuthTokenRecord,
+  CompanyProfileRecord,
+  MemoryDataStore,
+  UserCredentialRecord,
+  UserSessionPreferenceRecord,
+} from "../../platform/data-store.js";
+import {
+  buildDefaultAdminPolicies,
+  nowIso,
+  seedIds,
+} from "../../platform/data-store.js";
 import type { EmailDeliveryService } from "../../platform/email/email-delivery-service.js";
-import type { EmailDeliveryMode, EmailDeliveryStatus } from "../../platform/email/types.js";
+import type {
+  EmailDeliveryMode,
+  EmailDeliveryStatus,
+} from "../../platform/email/types.js";
 import { DocumentService } from "../documents/service.js";
 import { AuthRepository } from "./repository.js";
 import type {
@@ -17,7 +48,7 @@ import type {
   SessionPreferenceInput,
   SetPasswordInput,
   SignupInput,
-  VerifyEmailInput
+  VerifyEmailInput,
 } from "./schemas.js";
 
 export interface SessionRole {
@@ -107,7 +138,7 @@ export class AuthService {
   constructor(
     private readonly store: MemoryDataStore,
     private readonly jwtSecret: string,
-    private readonly emailDelivery?: EmailDeliveryService
+    private readonly emailDelivery?: EmailDeliveryService,
   ) {
     this.repository = new AuthRepository(store);
   }
@@ -121,16 +152,17 @@ export class AuthService {
     company_id?: UUID | null;
     dev_only?: Record<string, unknown>;
   }> {
-    const user = input.email && input.password
-      ? this.authenticatePassword(input.email, input.password)
-      : this.authenticateEmployeeCode(input.employee_code ?? "");
+    const user =
+      input.email && input.password
+        ? this.authenticatePassword(input.email, input.password)
+        : this.authenticateEmployeeCode(input.employee_code ?? "");
     const jwt = createJwt(user, this.jwtSecret, this.sessionTtlSeconds());
     const bootstrap = this.createResumeBootstrapToken(user);
     await this.store.sessionStore.create({
       jti: jwt.jti,
       user_id: user.id,
       expires_at: jwt.expiresAt,
-      revoked_at: null
+      revoked_at: null,
     });
     return {
       user,
@@ -141,9 +173,9 @@ export class AuthService {
         ? {
             next_step: "company_bootstrap" as const,
             company_id: bootstrap.record.company_id,
-            ...devOnly({ company_bootstrap_token: bootstrap.raw })
+            ...devOnly({ company_bootstrap_token: bootstrap.raw }),
           }
-        : {})
+        : {}),
     };
   }
 
@@ -151,12 +183,23 @@ export class AuthService {
     const email = normalizeEmail(input.email);
     const companySlug = slugify(input.company_slug ?? input.company_name);
     const existingCompany = this.repository.findCompanyBySlug(companySlug);
-    if (existingCompany?.status === "active" && existingCompany.bootstrap_completed_at) {
-      throw conflict("Company workspace has already been bootstrapped.", { company_slug: companySlug });
+    if (
+      existingCompany?.status === "active" &&
+      existingCompany.bootstrap_completed_at
+    ) {
+      throw conflict("Company workspace has already been bootstrapped.", {
+        company_slug: companySlug,
+      });
     }
     const existingUser = this.repository.findUserByEmail(email);
-    if (existingUser && existingUser.employment_status === EmploymentStatuses.Active && this.repository.findActiveCredential(existingUser.id)) {
-      throw conflict("Signup email is already verified.", { email: maskEmail(email) });
+    if (
+      existingUser &&
+      existingUser.employment_status === EmploymentStatuses.Active &&
+      this.repository.findActiveCredential(existingUser.id)
+    ) {
+      throw conflict("Signup email is already verified.", {
+        email: maskEmail(email),
+      });
     }
 
     if (existingUser) {
@@ -165,43 +208,63 @@ export class AuthService {
         existingUser.timezone = input.timezone;
         existingUser.email_verification_status = "pending";
         existingUser.version += 1;
-        const company = this.companyForVerification(existingUser, email, companySlug) ?? existingCompany ?? null;
+        const company =
+          this.companyForVerification(existingUser, email, companySlug) ??
+          existingCompany ??
+          null;
         const verification = await this.sendVerificationEmail({
           user: existingUser,
           email,
           company,
           metadata: () => {
             if (input.password) {
-              assertPasswordMatchesSecurityPolicy(input.password, this.store.adminSecuritySettings);
+              assertPasswordMatchesSecurityPolicy(
+                input.password,
+                this.store.adminSecuritySettings,
+              );
             }
             return {
-              password_hash: input.password ? hashPasswordSync(input.password) : null,
+              password_hash: input.password
+                ? hashPasswordSync(input.password)
+                : null,
               company_slug: company?.company_slug ?? companySlug,
               timezone: input.timezone,
               locale: input.locale,
-              signup_retry: true
+              signup_retry: true,
             };
           },
           context,
-          enforceResendLimits: true
+          enforceResendLimits: true,
         });
-        return this.signupVerificationResponse(existingUser, email, verification);
+        return this.signupVerificationResponse(
+          existingUser,
+          email,
+          verification,
+        );
       }
       return this.signupVerificationResponse(existingUser, email, {
         generated: null,
         retryAfterSeconds: this.resendCooldownSeconds(),
         deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
-        deliveryStatus: null
+        deliveryStatus: null,
       });
     }
 
     const now = nowIso();
-    const company = existingCompany ?? this.createCompanyProfile(input.company_name, companySlug, input.timezone, input.locale, now);
+    const company =
+      existingCompany ??
+      this.createCompanyProfile(
+        input.company_name,
+        companySlug,
+        input.timezone,
+        input.locale,
+        now,
+      );
     const user = this.createPendingUser({
       email,
       fullName: input.full_name,
       timezone: input.timezone,
-      now
+      now,
     });
     const verification = await this.sendVerificationEmail({
       user,
@@ -209,17 +272,22 @@ export class AuthService {
       company,
       metadata: () => {
         if (input.password) {
-          assertPasswordMatchesSecurityPolicy(input.password, this.store.adminSecuritySettings);
+          assertPasswordMatchesSecurityPolicy(
+            input.password,
+            this.store.adminSecuritySettings,
+          );
         }
         return {
-          password_hash: input.password ? hashPasswordSync(input.password) : null,
+          password_hash: input.password
+            ? hashPasswordSync(input.password)
+            : null,
           company_slug: company.company_slug,
           timezone: input.timezone,
-          locale: input.locale
+          locale: input.locale,
         };
       },
       context,
-      enforceResendLimits: false
+      enforceResendLimits: false,
     });
 
     return this.signupVerificationResponse(user, email, verification);
@@ -227,7 +295,11 @@ export class AuthService {
 
   verifyEmail(input: VerifyEmailInput) {
     const token = this.requireActiveToken(input.token, "email_verification");
-    if (input.email && token.email && normalizeEmail(input.email) !== normalizeEmail(token.email)) {
+    if (
+      input.email &&
+      token.email &&
+      normalizeEmail(input.email) !== normalizeEmail(token.email)
+    ) {
       throw badRequest("Verification token does not match the supplied email.");
     }
     const user = this.requireTokenUser(token);
@@ -236,7 +308,10 @@ export class AuthService {
     token.used_at = now;
     user.email_verified_at = user.email_verified_at ?? now;
     user.email_verification_status = "verified";
-    const passwordHash = typeof token.metadata.password_hash === "string" ? token.metadata.password_hash : null;
+    const passwordHash =
+      typeof token.metadata.password_hash === "string"
+        ? token.metadata.password_hash
+        : null;
     let passwordSetupToken: GeneratedToken | null = null;
     if (passwordHash) {
       user.employment_status = EmploymentStatuses.Active;
@@ -250,7 +325,7 @@ export class AuthService {
         email: token.email,
         companyId: token.company_id,
         ttlSeconds: 60 * 60,
-        metadata: { reason: "email_verified_no_password" }
+        metadata: { reason: "email_verified_no_password" },
       });
     }
     user.version += 1;
@@ -262,7 +337,7 @@ export class AuthService {
       email: token.email,
       companyId: token.company_id,
       ttlSeconds: 24 * 60 * 60,
-      metadata: { reason: "email_verified" }
+      metadata: { reason: "email_verified" },
     });
 
     return {
@@ -273,27 +348,33 @@ export class AuthService {
       next_step: passwordHash ? "company_bootstrap" : "set_password",
       ...devOnly({
         company_bootstrap_token: bootstrap.raw,
-        password_setup_token: passwordSetupToken?.raw ?? null
-      })
+        password_setup_token: passwordSetupToken?.raw ?? null,
+      }),
     };
   }
 
-  async resendEmailVerification(input: ResendEmailVerificationInput, context: AuthRequestContext = {}) {
+  async resendEmailVerification(
+    input: ResendEmailVerificationInput,
+    context: AuthRequestContext = {},
+  ) {
     const email = normalizeEmail(input.email);
     const user = this.repository.findUserByEmail(email);
     let generated: GeneratedToken | null = null;
     let retryAfterSeconds = this.resendCooldownSeconds();
-    let deliveryMode: EmailDeliveryMode = this.emailDelivery?.deliveryMode() ?? "disabled";
+    let deliveryMode: EmailDeliveryMode =
+      this.emailDelivery?.deliveryMode() ?? "disabled";
     let deliveryStatus: VerificationEmailSendResult["deliveryStatus"] = null;
     if (user && isPendingEmailVerification(user)) {
-      const company = input.company_slug ? this.repository.findCompanyBySlug(input.company_slug) ?? null : this.companyForVerification(user, email);
+      const company = input.company_slug
+        ? (this.repository.findCompanyBySlug(input.company_slug) ?? null)
+        : this.companyForVerification(user, email);
       const result = await this.sendVerificationEmail({
         user,
         email,
         company,
         metadata: () => ({ resend: true }),
         context,
-        enforceResendLimits: true
+        enforceResendLimits: true,
       });
       generated = result.generated;
       retryAfterSeconds = result.retryAfterSeconds;
@@ -307,7 +388,7 @@ export class AuthService {
       email_delivery_mode: deliveryMode,
       email_delivery_status: deliveryStatus,
       email_delivery_notice: emailDeliveryNotice(deliveryMode, deliveryStatus),
-      ...devOnly({ email_verification_token: generated?.raw ?? null })
+      ...devOnly({ email_verification_token: generated?.raw ?? null }),
     };
   }
 
@@ -315,7 +396,10 @@ export class AuthService {
     const token = this.requireActiveToken(input.token, "password_setup");
     const user = this.requireTokenUser(token);
     const now = nowIso();
-    assertPasswordMatchesSecurityPolicy(input.password, this.store.adminSecuritySettings);
+    assertPasswordMatchesSecurityPolicy(
+      input.password,
+      this.store.adminSecuritySettings,
+    );
     this.setCredential(user.id, hashPasswordSync(input.password), now);
     user.employment_status = EmploymentStatuses.Active;
     user.email_verified_at = user.email_verified_at ?? now;
@@ -327,18 +411,43 @@ export class AuthService {
       password_set: true,
       login_allowed: true,
       user_id: user.id,
-      next_step: "login"
+      next_step: "login",
     };
   }
 
-  async requestPasswordReset(input: PasswordResetRequestInput, context: AuthRequestContext = {}) {
+  async requestPasswordReset(
+    input: PasswordResetRequestInput,
+    context: AuthRequestContext = {},
+  ) {
     const email = normalizeEmail(input.email);
     const user = this.repository.findUserByEmail(email);
+
     let generated: GeneratedToken | null = null;
     let company: CompanyProfileRecord | null = null;
-    if (user && user.employment_status === EmploymentStatuses.Active && this.repository.findActiveCredential(user.id)) {
-      company = input.company_slug ? this.repository.findCompanyBySlug(input.company_slug) : this.store.companyProfiles.at(-1) ?? null;
+
+    if (
+      user &&
+      user.employment_status === EmploymentStatuses.Active &&
+      this.repository.findActiveCredential(user.id)
+    ) {
+      // Apply resend abuse protection (cooldown + hourly + daily limits)
+      const rateLimit = this.checkEmailSendLimit(email, "password_reset");
+
+      if (!rateLimit.allowed) {
+        return {
+          accepted: true,
+          masked_email: maskEmail(email),
+          retry_after_seconds: rateLimit.retryAfterSeconds,
+          ...devOnly({ password_reset_token: null }),
+        };
+      }
+
+      company = input.company_slug
+        ? this.repository.findCompanyBySlug(input.company_slug)
+        : (this.store.companyProfiles.at(-1) ?? null);
+
       this.revokeActiveTokensForUser(user.id, "password_reset");
+
       generated = this.createToken({
         type: "password_reset",
         userId: user.id,
@@ -346,20 +455,22 @@ export class AuthService {
         companyId: company?.id ?? null,
         ttlSeconds: 60 * 60,
         metadata: { requested: true },
-        context
+        context,
       });
+
       await this.emailDelivery?.queuePasswordResetEmail({
         user,
         token: generated.record,
         rawToken: generated.raw,
-        companyName: company?.company_name ?? defaultCompany(user).company_name
+        companyName: company?.company_name ?? defaultCompany(user).company_name,
       });
     }
+
     return {
       accepted: true,
       masked_email: maskEmail(email),
       retry_after_seconds: this.resendCooldownSeconds(),
-      ...devOnly({ password_reset_token: generated?.raw ?? null })
+      ...devOnly({ password_reset_token: generated?.raw ?? null }),
     };
   }
 
@@ -370,33 +481,48 @@ export class AuthService {
       throw forbidden("User account is inactive or blocked");
     }
     const now = nowIso();
-    assertPasswordMatchesSecurityPolicy(input.password, this.store.adminSecuritySettings);
+    assertPasswordMatchesSecurityPolicy(
+      input.password,
+      this.store.adminSecuritySettings,
+    );
     this.setCredential(user.id, hashPasswordSync(input.password), now);
     token.status = "used";
     token.used_at = now;
-    const revoked = await this.store.sessionStore.revokeUser?.(user.id, "password_reset") ?? 0;
+    const revoked =
+      (await this.store.sessionStore.revokeUser?.(user.id, "password_reset")) ??
+      0;
     return {
       password_reset: true,
       session_revoked_count: revoked,
-      next_step: "login"
+      next_step: "login",
     };
   }
 
   bootstrapCompany(input: CompanyBootstrapInput) {
-    const token = this.requireActiveToken(input.bootstrap_token, "company_bootstrap");
+    const token = this.requireActiveToken(
+      input.bootstrap_token,
+      "company_bootstrap",
+    );
     const user = this.requireTokenUser(token);
-    const company = token.company_id ? this.repository.findCompanyById(token.company_id) : null;
+    const company = token.company_id
+      ? this.repository.findCompanyById(token.company_id)
+      : null;
     if (!company) {
       throw notFound("Company bootstrap context not found");
     }
     if (company.bootstrap_completed_at || company.status === "active") {
-      throw conflict("Company bootstrap has already been completed.", { company_id: company.id });
+      throw conflict("Company bootstrap has already been completed.", {
+        company_id: company.id,
+      });
     }
     const now = nowIso();
-    company.company_name = input.company_profile.company_name ?? company.company_name;
+    company.company_name =
+      input.company_profile.company_name ?? company.company_name;
     company.timezone = input.company_profile.timezone ?? company.timezone;
     company.locale = input.company_profile.locale ?? company.locale;
-    company.fiscal_year_start_month = input.company_profile.fiscal_year_start_month ?? company.fiscal_year_start_month;
+    company.fiscal_year_start_month =
+      input.company_profile.fiscal_year_start_month ??
+      company.fiscal_year_start_month;
     company.status = "active";
     company.bootstrap_completed_at = now;
     company.updated_at = now;
@@ -408,7 +534,9 @@ export class AuthService {
       user.roles = uniqueRoles([...user.roles, Roles.Admin]);
     }
     user.full_name = input.first_admin_profile.full_name ?? user.full_name;
-    user.employment_status = this.repository.findActiveCredential(user.id) ? EmploymentStatuses.Active : user.employment_status;
+    user.employment_status = this.repository.findActiveCredential(user.id)
+      ? EmploymentStatuses.Active
+      : user.employment_status;
     user.version += 1;
     token.status = "used";
     token.used_at = now;
@@ -418,7 +546,7 @@ export class AuthService {
       company_id: company.id,
       landing_page: input.first_admin_profile.landing_page ?? "/dashboard",
       locale: company.locale,
-      timezone: company.timezone
+      timezone: company.timezone,
     });
 
     return {
@@ -427,22 +555,31 @@ export class AuthService {
       setup_progress: {
         company_profile: "completed",
         first_admin: "completed",
-        finance_governance: this.store.financeGovernanceConfig ? "configured" : "pending"
+        finance_governance: this.store.financeGovernanceConfig
+          ? "configured"
+          : "pending",
       },
       next_steps: ["login", "configure_core_master_data"],
-      preferences: preference
+      preferences: preference,
     };
   }
 
   async uploadCompanyLogo(input: CompanyLogoUploadInput) {
-    const token = this.requireActiveToken(input.bootstrap_token, "company_bootstrap");
+    const token = this.requireActiveToken(
+      input.bootstrap_token,
+      "company_bootstrap",
+    );
     const user = this.requireTokenUser(token);
-    const company = token.company_id ? this.repository.findCompanyById(token.company_id) : null;
+    const company = token.company_id
+      ? this.repository.findCompanyById(token.company_id)
+      : null;
     if (!company) {
       throw notFound("Company bootstrap context not found");
     }
     if (company.bootstrap_completed_at || company.status === "active") {
-      throw conflict("Company bootstrap has already been completed.", { company_id: company.id });
+      throw conflict("Company bootstrap has already been completed.", {
+        company_id: company.id,
+      });
     }
 
     const documentService = new DocumentService(this.store);
@@ -465,12 +602,16 @@ export class AuthService {
       size_bytes: input.size_bytes,
       file_buffer: input.file_buffer,
       storage_metadata: {
-        "x-cloudinary-transformation": this.store.documentProcessing.mediaUploads.cloudinaryTransformation
-      }
+        "x-cloudinary-transformation":
+          this.store.documentProcessing.mediaUploads.cloudinaryTransformation,
+      },
     });
-    const objectUrl = stringFromMetadata(document.metadata.cloudinary_url) ?? stringFromMetadata(document.metadata.object_url);
+    const objectUrl =
+      stringFromMetadata(document.metadata.cloudinary_url) ??
+      stringFromMetadata(document.metadata.object_url);
     company.logo_document_id = document.id;
-    company.logo_url = objectUrl && /^https?:\/\//iu.test(objectUrl) ? objectUrl : null;
+    company.logo_url =
+      objectUrl && /^https?:\/\//iu.test(objectUrl) ? objectUrl : null;
     company.logo_file_name = document.file_name;
     company.logo_mime_type = document.mime_type;
     company.logo_size_bytes = document.size_bytes;
@@ -479,19 +620,28 @@ export class AuthService {
 
     return {
       company: presentCompany(company),
-      document
+      document,
     };
   }
 
   updateSessionPreference(actor: AuthUser, input: SessionPreferenceInput) {
-    const user = this.store.users.find((candidate) => candidate.id === actor.id && !candidate.deleted_at);
+    const user = this.store.users.find(
+      (candidate) => candidate.id === actor.id && !candidate.deleted_at,
+    );
     if (!user) {
       throw unauthorized("User no longer exists");
     }
     const currentPreference = this.repository.sessionPreferenceFor(user.id);
-    const nextCompanyId = input.company_id === undefined ? currentPreference?.company_id ?? null : input.company_id;
+    const nextCompanyId =
+      input.company_id === undefined
+        ? (currentPreference?.company_id ?? null)
+        : input.company_id;
     if (nextCompanyId !== (currentPreference?.company_id ?? null)) {
-      this.requireOrgAdminRecoveryPathAfterCompanyChange(user, currentPreference?.company_id ?? null, nextCompanyId);
+      this.requireOrgAdminRecoveryPathAfterCompanyChange(
+        user,
+        currentPreference?.company_id ?? null,
+        nextCompanyId,
+      );
     }
     this.savePreference(user, input);
     return this.sessionContext(user);
@@ -503,21 +653,31 @@ export class AuthService {
       key: role,
       label: role,
       is_active: true,
-      permissions: permissionsForRole(role)
+      permissions: permissionsForRole(role),
     }));
     const preference = this.repository.sessionPreferenceFor(user.id);
-    const preferredRole = preference && user.roles.includes(preference.active_role as RoleKey) ? preference.active_role : null;
-    const activeRole = availableRoles.find((role) => role.key === preferredRole) ?? availableRoles[0] ?? {
-      key: Roles.Employee,
-      label: Roles.Employee,
-      is_active: true,
-      permissions: permissionsForRole(Roles.Employee)
-    };
+    const preferredRole =
+      preference && user.roles.includes(preference.active_role as RoleKey)
+        ? preference.active_role
+        : null;
+    const activeRole = availableRoles.find(
+      (role) => role.key === preferredRole,
+    ) ??
+      availableRoles[0] ?? {
+        key: Roles.Employee,
+        label: Roles.Employee,
+        is_active: true,
+        permissions: permissionsForRole(Roles.Employee),
+      };
     const permissions = unique(permissionsForRole(activeRole.key));
     const company = preference?.company_id
-      ? this.repository.findCompanyById(preference.company_id) ?? defaultCompany(user)
-      : this.store.companyProfiles.find((candidate) => candidate.status === "active") ?? defaultCompany(user);
-    const timezone = preference?.timezone ?? readTimezone(user) ?? company.timezone;
+      ? (this.repository.findCompanyById(preference.company_id) ??
+        defaultCompany(user))
+      : (this.store.companyProfiles.find(
+          (candidate) => candidate.status === "active",
+        ) ?? defaultCompany(user));
+    const timezone =
+      preference?.timezone ?? readTimezone(user) ?? company.timezone;
     const locale = preference?.locale ?? company.locale;
 
     return {
@@ -531,30 +691,30 @@ export class AuthService {
         name: company.company_name,
         timezone,
         logo_document_id: company.logo_document_id,
-        logo_url: company.logo_url
+        logo_url: company.logo_url,
       },
       preferences: {
         active_role: activeRole.key,
         landing_page: preference?.landing_page ?? "/dashboard",
         locale,
-        timezone
+        timezone,
       },
       session_metadata: {
         auth_mode: "cookie_or_bearer",
         low_bandwidth_defaults: {
           page_size: 25,
           max_page_size: 100,
-          use_include_for_nested_data: true
-        }
+          use_include_for_nested_data: true,
+        },
       },
       ...(bootstrap
         ? {
             setup_required: true,
             next_step: "company_bootstrap" as const,
             company_id: bootstrap.record.company_id,
-            ...devOnly({ company_bootstrap_token: bootstrap.raw })
+            ...devOnly({ company_bootstrap_token: bootstrap.raw }),
           }
-        : {})
+        : {}),
     };
   }
 
@@ -582,14 +742,22 @@ export class AuthService {
   }
 
   private sessionTtlSeconds(): number {
-    return Math.max(60, this.store.adminSecuritySettings.session_timeout_minutes * 60);
+    return Math.max(
+      60,
+      this.store.adminSecuritySettings.session_timeout_minutes * 60,
+    );
   }
 
   async logout(jti: string): Promise<void> {
     await this.store.sessionStore.revoke(jti, "logout");
   }
 
-  private createPendingUser(input: { email: string; fullName: string; timezone: string; now: string }): CoreUser {
+  private createPendingUser(input: {
+    email: string;
+    fullName: string;
+    timezone: string;
+    now: string;
+  }): CoreUser {
     const employeeCode = nextSignupEmployeeCode(this.store);
     const user: CoreUser = {
       id: randomUUID(),
@@ -608,13 +776,19 @@ export class AuthService {
       joined_on: input.now.slice(0, 10),
       terminated_on: null,
       deleted_at: null,
-      version: 1
+      version: 1,
     };
     this.store.users.push(user);
     return user;
   }
 
-  private createCompanyProfile(companyName: string, companySlug: string, timezone: string, locale: string, now: string): CompanyProfileRecord {
+  private createCompanyProfile(
+    companyName: string,
+    companySlug: string,
+    timezone: string,
+    locale: string,
+    now: string,
+  ): CompanyProfileRecord {
     const company: CompanyProfileRecord = {
       id: randomUUID(),
       company_name: companyName,
@@ -638,24 +812,42 @@ export class AuthService {
       bootstrap_completed_at: null,
       created_at: now,
       updated_at: now,
-      version: 1
+      version: 1,
     };
     this.store.companyProfiles.push(company);
     return company;
   }
 
-  private applyOnboardingMasterData(input: CompanyBootstrapInput, companyId: UUID, now: string): void {
-    upsertDepartments(this.store.departments, companyId, input.departments ?? []);
-    upsertDesignations(this.store.designations, companyId, input.designations ?? []);
+  private applyOnboardingMasterData(
+    input: CompanyBootstrapInput,
+    companyId: UUID,
+    now: string,
+  ): void {
+    upsertDepartments(
+      this.store.departments,
+      companyId,
+      input.departments ?? [],
+    );
+    upsertDesignations(
+      this.store.designations,
+      companyId,
+      input.designations ?? [],
+    );
     upsertAdminPolicies(this.store.adminPolicies, companyId, now);
   }
 
   private assignFirstAdminMasterData(user: CoreUser, companyId: UUID): void {
     const department = this.store.departments.find(
-      (candidate) => candidate.company_id === companyId && candidate.status === "active" && !candidate.deleted_at
+      (candidate) =>
+        candidate.company_id === companyId &&
+        candidate.status === "active" &&
+        !candidate.deleted_at,
     );
     const designation = this.store.designations.find(
-      (candidate) => candidate.company_id === companyId && candidate.status === "active" && !candidate.deleted_at
+      (candidate) =>
+        candidate.company_id === companyId &&
+        candidate.status === "active" &&
+        !candidate.deleted_at,
     );
     if (department) {
       user.department_id = department.id;
@@ -692,7 +884,7 @@ export class AuthService {
       last_sent_at: null,
       send_count: 0,
       created_at: now,
-      metadata: input.metadata
+      metadata: input.metadata,
     };
     this.store.authTokens.push(record);
     return { raw, record };
@@ -709,24 +901,33 @@ export class AuthService {
       email: user.email,
       companyId: company.id,
       ttlSeconds: 24 * 60 * 60,
-      metadata: { reason: "resume_company_bootstrap" }
+      metadata: { reason: "resume_company_bootstrap" },
     });
   }
 
-  private pendingBootstrapCompanyForUser(user: AuthUser): CompanyProfileRecord | null {
+  private pendingBootstrapCompanyForUser(
+    user: AuthUser,
+  ): CompanyProfileRecord | null {
     const companyIds = this.store.authTokens
       .filter((token) => token.user_id === user.id && token.company_id)
       .map((token) => token.company_id as UUID);
     for (const companyId of [...new Set(companyIds)].reverse()) {
       const company = this.repository.findCompanyById(companyId);
-      if (company && !company.bootstrap_completed_at && company.status !== "active") {
+      if (
+        company &&
+        !company.bootstrap_completed_at &&
+        company.status !== "active"
+      ) {
         return company;
       }
     }
     return null;
   }
 
-  private requireActiveToken(rawToken: string, type: AuthTokenRecord["token_type"]): AuthTokenRecord {
+  private requireActiveToken(
+    rawToken: string,
+    type: AuthTokenRecord["token_type"],
+  ): AuthTokenRecord {
     const token = this.repository.findTokenByHash(tokenHash(rawToken), type);
     if (!token) {
       throw badRequest("Invalid or expired token.");
@@ -734,7 +935,10 @@ export class AuthService {
     if (token.status === "used") {
       throw conflict("Token has already been used.", { token_type: type });
     }
-    if (token.status !== "active" || Date.parse(token.expires_at) <= Date.now()) {
+    if (
+      token.status !== "active" ||
+      Date.parse(token.expires_at) <= Date.now()
+    ) {
       token.status = token.status === "active" ? "expired" : token.status;
       throw badRequest("Invalid or expired token.");
     }
@@ -742,16 +946,27 @@ export class AuthService {
   }
 
   private requireTokenUser(token: AuthTokenRecord): CoreUser {
-    const user = token.user_id ? this.store.users.find((candidate) => candidate.id === token.user_id && !candidate.deleted_at) : null;
+    const user = token.user_id
+      ? this.store.users.find(
+          (candidate) =>
+            candidate.id === token.user_id && !candidate.deleted_at,
+        )
+      : null;
     if (!user) {
       throw notFound("Token user context not found");
     }
     return user;
   }
 
-  private revokeActiveTokensForUser(userId: UUID, tokenType: AuthTokenRecord["token_type"]): void {
+  private revokeActiveTokensForUser(
+    userId: UUID,
+    tokenType: AuthTokenRecord["token_type"],
+  ): void {
     const now = nowIso();
-    for (const token of this.repository.activeTokensForUser(userId, tokenType)) {
+    for (const token of this.repository.activeTokensForUser(
+      userId,
+      tokenType,
+    )) {
       token.status = "revoked";
       token.revoked_at = now;
     }
@@ -765,40 +980,87 @@ export class AuthService {
     return this.emailDelivery?.resendCooldownSeconds() ?? 60;
   }
 
-  private checkVerificationResendLimit(email: string): { allowed: true; retryAfterSeconds: number } | { allowed: false; retryAfterSeconds: number } {
+  private checkEmailSendLimit(
+    email: string,
+    tokenType: AuthTokenRecord["token_type"],
+  ):
+    | { allowed: true; retryAfterSeconds: number }
+    | { allowed: false; retryAfterSeconds: number } {
     const now = Date.now();
-    const cooldownMs = this.resendCooldownSeconds() * 1000;
+    const cooldownSeconds = this.resendCooldownSeconds();
+    const cooldownMs = cooldownSeconds * 1000;
+
     const hourlyLimit = this.emailDelivery?.resendHourlyLimit() ?? 5;
     const dailyLimit = this.emailDelivery?.resendDailyLimit() ?? 10;
-    const sends = this.store.authTokens
-      .filter((token) => token.token_type === "email_verification" && token.email?.toLowerCase() === email.toLowerCase())
+
+    const sends = this.repository
+      .tokensForEmail(email, tokenType)
       .map((token) => Date.parse(token.last_sent_at ?? token.created_at))
       .filter((sentAt) => Number.isFinite(sentAt))
       .sort((a, b) => b - a);
+
     const latest = sends[0] ?? 0;
+
     if (latest && now - latest < cooldownMs) {
-      return { allowed: false, retryAfterSeconds: Math.ceil((cooldownMs - (now - latest)) / 1000) };
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.ceil((cooldownMs - (now - latest)) / 1000),
+      };
     }
-    const hourlyCount = sends.filter((sentAt) => now - sentAt < 60 * 60 * 1000).length;
-    if (hourlyCount >= hourlyLimit) {
-      return { allowed: false, retryAfterSeconds: this.resendCooldownSeconds() };
+
+    const hourlySends = sends.filter((sentAt) => now - sentAt < 60 * 60 * 1000);
+
+    if (hourlySends.length >= hourlyLimit) {
+      const oldestHourly = Math.min(...hourlySends);
+
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(
+          1,
+          Math.ceil((oldestHourly + 60 * 60 * 1000 - now) / 1000),
+        ),
+      };
     }
-    const dailyCount = sends.filter((sentAt) => now - sentAt < 24 * 60 * 60 * 1000).length;
-    if (dailyCount >= dailyLimit) {
-      return { allowed: false, retryAfterSeconds: this.resendCooldownSeconds() };
+
+    const dailySends = sends.filter(
+      (sentAt) => now - sentAt < 24 * 60 * 60 * 1000,
+    );
+
+    if (dailySends.length >= dailyLimit) {
+      const oldestDaily = Math.min(...dailySends);
+
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(
+          1,
+          Math.ceil((oldestDaily + 24 * 60 * 60 * 1000 - now) / 1000),
+        ),
+      };
     }
-    return { allowed: true, retryAfterSeconds: this.resendCooldownSeconds() };
+
+    return {
+      allowed: true,
+      retryAfterSeconds: cooldownSeconds,
+    };
   }
 
-  private async sendVerificationEmail(input: VerificationEmailSendInput): Promise<VerificationEmailSendResult> {
+  private async sendVerificationEmail(
+    input: VerificationEmailSendInput,
+  ): Promise<VerificationEmailSendResult> {
+    
     if (input.enforceResendLimits) {
-      const rateLimit = this.checkVerificationResendLimit(input.email);
+      console.log("sendVerificationEmail called");
+      const rateLimit = this.checkEmailSendLimit(
+        input.email,
+        "email_verification",
+      );
+      console.log(rateLimit);
       if (!rateLimit.allowed) {
         return {
           generated: null,
           retryAfterSeconds: rateLimit.retryAfterSeconds,
           deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
-          deliveryStatus: null
+          deliveryStatus: null,
         };
       }
     }
@@ -811,23 +1073,28 @@ export class AuthService {
       companyId: input.company?.id ?? null,
       ttlSeconds: this.verificationTokenTtlSeconds(),
       metadata,
-      context: input.context
+      context: input.context,
     });
     const delivery = await this.emailDelivery?.queueVerificationEmail({
       user: input.user,
       token: generated.record,
       rawToken: generated.raw,
-      companyName: input.company?.company_name ?? defaultCompany(input.user).company_name
+      companyName:
+        input.company?.company_name ?? defaultCompany(input.user).company_name,
     });
     return {
       generated,
       retryAfterSeconds: this.resendCooldownSeconds(),
       deliveryMode: this.emailDelivery?.deliveryMode() ?? "disabled",
-      deliveryStatus: delivery?.status ?? "not_configured"
+      deliveryStatus: delivery?.status ?? "not_configured",
     };
   }
 
-  private signupVerificationResponse(user: CoreUser, email: string, verification: VerificationEmailSendResult) {
+  private signupVerificationResponse(
+    user: CoreUser,
+    email: string,
+    verification: VerificationEmailSendResult,
+  ) {
     return {
       signup_id: user.id,
       verification_required: true,
@@ -836,12 +1103,21 @@ export class AuthService {
       retry_after_seconds: verification.retryAfterSeconds,
       email_delivery_mode: verification.deliveryMode,
       email_delivery_status: verification.deliveryStatus,
-      email_delivery_notice: emailDeliveryNotice(verification.deliveryMode, verification.deliveryStatus),
-      ...devOnly({ email_verification_token: verification.generated?.raw ?? null })
+      email_delivery_notice: emailDeliveryNotice(
+        verification.deliveryMode,
+        verification.deliveryStatus,
+      ),
+      ...devOnly({
+        email_verification_token: verification.generated?.raw ?? null,
+      }),
     };
   }
 
-  private companyForVerification(user: CoreUser, email: string, companySlug?: string): CompanyProfileRecord | null {
+  private companyForVerification(
+    user: CoreUser,
+    email: string,
+    companySlug?: string,
+  ): CompanyProfileRecord | null {
     if (companySlug) {
       const company = this.repository.findCompanyBySlug(companySlug);
       if (company) {
@@ -850,13 +1126,26 @@ export class AuthService {
     }
     const tokenCompanyId = [...this.store.authTokens]
       .reverse()
-      .find((token) => token.token_type === "email_verification" && token.user_id === user.id && token.email?.toLowerCase() === email.toLowerCase() && token.company_id)
-      ?.company_id;
-    return tokenCompanyId ? this.repository.findCompanyById(tokenCompanyId) : null;
+      .find(
+        (token) =>
+          token.token_type === "email_verification" &&
+          token.user_id === user.id &&
+          token.email?.toLowerCase() === email.toLowerCase() &&
+          token.company_id,
+      )?.company_id;
+    return tokenCompanyId
+      ? this.repository.findCompanyById(tokenCompanyId)
+      : null;
   }
 
-  private setCredential(userId: UUID, passwordHash: string, now: string): UserCredentialRecord {
-    const existing = this.store.userCredentials.find((credential) => credential.user_id === userId && !credential.deleted_at);
+  private setCredential(
+    userId: UUID,
+    passwordHash: string,
+    now: string,
+  ): UserCredentialRecord {
+    const existing = this.store.userCredentials.find(
+      (credential) => credential.user_id === userId && !credential.deleted_at,
+    );
     if (existing) {
       existing.password_hash = passwordHash;
       existing.status = "active";
@@ -870,19 +1159,31 @@ export class AuthService {
       status: "active",
       created_at: now,
       updated_at: now,
-      deleted_at: null
+      deleted_at: null,
     };
     this.store.userCredentials.push(credential);
     return credential;
   }
 
-  private savePreference(user: CoreUser, input: SessionPreferenceInput): UserSessionPreferenceRecord {
+  private savePreference(
+    user: CoreUser,
+    input: SessionPreferenceInput,
+  ): UserSessionPreferenceRecord {
     const current = this.repository.sessionPreferenceFor(user.id);
-    const activeRole = (input.active_role_id ?? input.active_role ?? current?.active_role ?? user.roles[0] ?? Roles.Employee) as RoleKey;
+    const activeRole = (input.active_role_id ??
+      input.active_role ??
+      current?.active_role ??
+      user.roles[0] ??
+      Roles.Employee) as RoleKey;
     if (!user.roles.includes(activeRole)) {
-      throw forbidden("Selected role is not assigned to this user.", { active_role: activeRole });
+      throw forbidden("Selected role is not assigned to this user.", {
+        active_role: activeRole,
+      });
     }
-    if (input.company_id && !this.repository.findCompanyById(input.company_id)) {
+    if (
+      input.company_id &&
+      !this.repository.findCompanyById(input.company_id)
+    ) {
       throw notFound("Company not found", { company_id: input.company_id });
     }
     const now = nowIso();
@@ -890,33 +1191,64 @@ export class AuthService {
       id: current?.id ?? randomUUID(),
       user_id: user.id,
       active_role: activeRole,
-      company_id: input.company_id === undefined ? current?.company_id ?? null : input.company_id,
+      company_id:
+        input.company_id === undefined
+          ? (current?.company_id ?? null)
+          : input.company_id,
       landing_page: input.landing_page ?? current?.landing_page ?? "/dashboard",
       locale: input.locale ?? current?.locale ?? "en-IN",
-      timezone: input.timezone ?? current?.timezone ?? readTimezone(user) ?? "Asia/Kolkata",
+      timezone:
+        input.timezone ??
+        current?.timezone ??
+        readTimezone(user) ??
+        "Asia/Kolkata",
       created_at: current?.created_at ?? now,
       updated_at: now,
-      version: (current?.version ?? 0) + 1
+      version: (current?.version ?? 0) + 1,
     };
     return this.repository.upsertSessionPreference(preference);
   }
 
-  private requireOrgAdminRecoveryPathAfterCompanyChange(user: CoreUser, currentCompanyId: UUID | null, nextCompanyId: UUID | null): void {
+  private requireOrgAdminRecoveryPathAfterCompanyChange(
+    user: CoreUser,
+    currentCompanyId: UUID | null,
+    nextCompanyId: UUID | null,
+  ): void {
     if (!user.roles.includes(Roles.Admin)) {
       return;
     }
-    if (this.companyRecoveryAdminCountAfterPreferenceChange(user.id, currentCompanyId, nextCompanyId) > 0) {
+    if (
+      this.companyRecoveryAdminCountAfterPreferenceChange(
+        user.id,
+        currentCompanyId,
+        nextCompanyId,
+      ) > 0
+    ) {
       return;
     }
-    throw conflict("At least one active Admin with login access must remain in this organization.");
+    throw conflict(
+      "At least one active Admin with login access must remain in this organization.",
+    );
   }
 
-  private companyRecoveryAdminCountAfterPreferenceChange(userId: UUID, currentCompanyId: UUID | null, nextCompanyId: UUID | null): number {
+  private companyRecoveryAdminCountAfterPreferenceChange(
+    userId: UUID,
+    currentCompanyId: UUID | null,
+    nextCompanyId: UUID | null,
+  ): number {
     return this.store.users.filter((candidate) => {
-      if (candidate.deleted_at || !candidate.roles.includes(Roles.Admin) || candidate.employment_status !== EmploymentStatuses.Active) {
+      if (
+        candidate.deleted_at ||
+        !candidate.roles.includes(Roles.Admin) ||
+        candidate.employment_status !== EmploymentStatuses.Active
+      ) {
         return false;
       }
-      const candidateCompanyId = candidate.id === userId ? nextCompanyId : this.repository.sessionPreferenceFor(candidate.id)?.company_id ?? null;
+      const candidateCompanyId =
+        candidate.id === userId
+          ? nextCompanyId
+          : (this.repository.sessionPreferenceFor(candidate.id)?.company_id ??
+            null);
       if (candidateCompanyId !== currentCompanyId) {
         return false;
       }
@@ -928,7 +1260,13 @@ export class AuthService {
     if (this.repository.findActiveCredential(userId)) {
       return true;
     }
-    return this.store.authTokens.some((token) => token.user_id === userId && token.token_type === "password_setup" && token.status === "active" && Date.parse(token.expires_at) > Date.now());
+    return this.store.authTokens.some(
+      (token) =>
+        token.user_id === userId &&
+        token.token_type === "password_setup" &&
+        token.status === "active" &&
+        Date.parse(token.expires_at) > Date.now(),
+    );
   }
 }
 
@@ -937,14 +1275,32 @@ function permissionsForRole(role: string): string[] {
     case Roles.Admin:
       return Object.values(Permissions);
     case Roles.FinanceManager:
-      return [Permissions.ExpenseFinanceApprove, Permissions.ExpenseFinance, Permissions.ReportRead, Permissions.DocumentRead];
+      return [
+        Permissions.ExpenseFinanceApprove,
+        Permissions.ExpenseFinance,
+        Permissions.ReportRead,
+        Permissions.DocumentRead,
+      ];
     case Roles.Reviewer:
     case Roles.Director:
-      return [Permissions.ExpenseCreate, Permissions.ExpenseManagerVerify, Permissions.ReportRead, Permissions.DocumentRead];
+      return [
+        Permissions.ExpenseCreate,
+        Permissions.ExpenseManagerVerify,
+        Permissions.ReportRead,
+        Permissions.DocumentRead,
+      ];
     case Roles.Auditor:
-      return [Permissions.ExpenseAudit, Permissions.ReportRead, Permissions.DocumentRead];
+      return [
+        Permissions.ExpenseAudit,
+        Permissions.ReportRead,
+        Permissions.DocumentRead,
+      ];
     case Roles.AssetManager:
-      return [Permissions.AssetManage, Permissions.DocumentRead, Permissions.ReportRead];
+      return [
+        Permissions.AssetManage,
+        Permissions.DocumentRead,
+        Permissions.ReportRead,
+      ];
     case Roles.HRManager:
       return [Permissions.ReportRead, Permissions.DocumentRead];
     case Roles.Employee:
@@ -953,29 +1309,74 @@ function permissionsForRole(role: string): string[] {
   }
 }
 
-function navigationFor(permissions: readonly string[], roles: readonly string[]): SessionNavigationItem[] {
+function navigationFor(
+  permissions: readonly string[],
+  roles: readonly string[],
+): SessionNavigationItem[] {
   const permissionSet = new Set(permissions);
   const items: SessionNavigationItem[] = [
-    { key: "dashboard", label: "Dashboard", path: "/dashboard", permission: null },
-    { key: "my-expenses", label: "My Expenses", path: "/expenses", permission: Permissions.ExpenseCreate },
-    { key: "documents", label: "Documents", path: "/documents", permission: Permissions.DocumentRead }
+    {
+      key: "dashboard",
+      label: "Dashboard",
+      path: "/dashboard",
+      permission: null,
+    },
+    {
+      key: "my-expenses",
+      label: "My Expenses",
+      path: "/expenses",
+      permission: Permissions.ExpenseCreate,
+    },
+    {
+      key: "documents",
+      label: "Documents",
+      path: "/documents",
+      permission: Permissions.DocumentRead,
+    },
   ];
   if (permissionSet.has(Permissions.ExpenseManagerVerify)) {
-    items.push({ key: "manager-expenses", label: "Expense Approvals", path: "/expenses/review", permission: Permissions.ExpenseManagerVerify });
+    items.push({
+      key: "manager-expenses",
+      label: "Expense Approvals",
+      path: "/expenses/review",
+      permission: Permissions.ExpenseManagerVerify,
+    });
   }
   if (permissionSet.has(Permissions.ExpenseFinance)) {
-    items.push({ key: "finance", label: "Finance", path: "/expenses/finance", permission: Permissions.ExpenseFinance });
+    items.push({
+      key: "finance",
+      label: "Finance",
+      path: "/expenses/finance",
+      permission: Permissions.ExpenseFinance,
+    });
   }
   if (permissionSet.has(Permissions.AssetManage)) {
-    items.push({ key: "assets", label: "Assets", path: "/assets", permission: Permissions.AssetManage });
+    items.push({
+      key: "assets",
+      label: "Assets",
+      path: "/assets",
+      permission: Permissions.AssetManage,
+    });
   }
   if (permissionSet.has(Permissions.ReportRead)) {
-    items.push({ key: "reports", label: "Reports", path: "/reports", permission: Permissions.ReportRead });
+    items.push({
+      key: "reports",
+      label: "Reports",
+      path: "/reports",
+      permission: Permissions.ReportRead,
+    });
   }
   if (roles.includes(Roles.Admin) || permissionSet.has(Permissions.Admin)) {
-    items.push({ key: "admin-settings", label: "Admin Settings", path: "/admin-settings", permission: Permissions.Admin });
+    items.push({
+      key: "admin-settings",
+      label: "Admin Settings",
+      path: "/admin-settings",
+      permission: Permissions.Admin,
+    });
   }
-  return items.filter((item) => item.permission === null || permissionSet.has(item.permission));
+  return items.filter(
+    (item) => item.permission === null || permissionSet.has(item.permission),
+  );
 }
 
 function unique(values: readonly string[]): string[] {
@@ -986,10 +1387,15 @@ function uniqueRoles(values: readonly RoleKey[]): RoleKey[] {
   return [...new Set(values)];
 }
 
-function assertPasswordMatchesSecurityPolicy(password: string, policy: AdminSecuritySettingsRecord): void {
+function assertPasswordMatchesSecurityPolicy(
+  password: string,
+  policy: AdminSecuritySettingsRecord,
+): void {
   const errors: string[] = [];
   if (password.length < policy.password_min_length) {
-    errors.push(`Password must be at least ${policy.password_min_length} characters.`);
+    errors.push(
+      `Password must be at least ${policy.password_min_length} characters.`,
+    );
   }
   if (!/[A-Z]/u.test(password)) {
     errors.push("Password must include an uppercase letter.");
@@ -1004,12 +1410,16 @@ function assertPasswordMatchesSecurityPolicy(password: string, policy: AdminSecu
     errors.push("Password must include a special character.");
   }
   if (errors.length > 0) {
-    throw badRequest("Password does not meet the current security policy.", { errors });
+    throw badRequest("Password does not meet the current security policy.", {
+      errors,
+    });
   }
 }
 
 function readTimezone(user: AuthUser): string | null {
-  return "timezone" in user && typeof user.timezone === "string" ? user.timezone : null;
+  return "timezone" in user && typeof user.timezone === "string"
+    ? user.timezone
+    : null;
 }
 
 function normalizeEmail(email: string): string {
@@ -1023,7 +1433,11 @@ function maskEmail(email: string): string {
 }
 
 function slugify(value: string): string {
-  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "");
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
   return slug || "hrms";
 }
 
@@ -1046,12 +1460,21 @@ function nextSignupEmployeeCode(store: MemoryDataStore): string {
 }
 
 function devOnly(value: Record<string, unknown>): Record<string, unknown> {
-  const appEnv = process.env.APP_ENV ?? (process.env.NODE_ENV === "production" ? "production" : "local");
+  const appEnv =
+    process.env.APP_ENV ??
+    (process.env.NODE_ENV === "production" ? "production" : "local");
   return ["local", "development"].includes(appEnv) ? { dev_only: value } : {};
 }
 
-function emailDeliveryNotice(mode: EmailDeliveryMode, status: VerificationEmailSendResult["deliveryStatus"]): string | null {
-  if (mode === "disabled" || status === "disabled" || status === "not_configured") {
+function emailDeliveryNotice(
+  mode: EmailDeliveryMode,
+  status: VerificationEmailSendResult["deliveryStatus"],
+): string | null {
+  if (
+    mode === "disabled" ||
+    status === "disabled" ||
+    status === "not_configured"
+  ) {
     return "Email delivery is disabled for this environment. Ask an administrator to complete verification, or use the development setup shortcut in dev.";
   }
   if (mode === "log") {
@@ -1063,11 +1486,23 @@ function emailDeliveryNotice(mode: EmailDeliveryMode, status: VerificationEmailS
   return null;
 }
 
-function upsertDepartments(departments: Department[], companyId: UUID, names: readonly string[]): void {
+function upsertDepartments(
+  departments: Department[],
+  companyId: UUID,
+  names: readonly string[],
+): void {
   for (const name of uniqueMasterNames(names)) {
-    const existing = departments.find((department) => department.company_id === companyId && sameMasterName(department.name, name));
+    const existing = departments.find(
+      (department) =>
+        department.company_id === companyId &&
+        sameMasterName(department.name, name),
+    );
     if (existing) {
-      if (existing.name !== name || existing.status !== "active" || existing.deleted_at !== null) {
+      if (
+        existing.name !== name ||
+        existing.status !== "active" ||
+        existing.deleted_at !== null
+      ) {
         existing.name = name;
         existing.status = "active";
         existing.deleted_at = null;
@@ -1083,7 +1518,7 @@ function upsertDepartments(departments: Department[], companyId: UUID, names: re
         departments
           .filter((department) => department.company_id === companyId)
           .map((department) => department.department_code),
-        "DEPT"
+        "DEPT",
       ),
       name,
       cost_center: null,
@@ -1091,16 +1526,28 @@ function upsertDepartments(departments: Department[], companyId: UUID, names: re
       director_user_id: null,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     });
   }
 }
 
-function upsertDesignations(designations: Designation[], companyId: UUID, names: readonly string[]): void {
+function upsertDesignations(
+  designations: Designation[],
+  companyId: UUID,
+  names: readonly string[],
+): void {
   for (const [index, name] of uniqueMasterNames(names).entries()) {
-    const existing = designations.find((designation) => designation.company_id === companyId && sameMasterName(designation.title, name));
+    const existing = designations.find(
+      (designation) =>
+        designation.company_id === companyId &&
+        sameMasterName(designation.title, name),
+    );
     if (existing) {
-      if (existing.title !== name || existing.status !== "active" || existing.deleted_at !== null) {
+      if (
+        existing.title !== name ||
+        existing.status !== "active" ||
+        existing.deleted_at !== null
+      ) {
         existing.title = name;
         existing.status = "active";
         existing.deleted_at = null;
@@ -1116,22 +1563,26 @@ function upsertDesignations(designations: Designation[], companyId: UUID, names:
         designations
           .filter((designation) => designation.company_id === companyId)
           .map((designation) => designation.designation_code),
-        "DESG"
+        "DESG",
       ),
       title: name,
       level: index + 1,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     });
   }
 }
 
-function upsertAdminPolicies(policies: AdminPolicyConfigRecord[], companyId: UUID, now: string): void {
+function upsertAdminPolicies(
+  policies: AdminPolicyConfigRecord[],
+  companyId: UUID,
+  now: string,
+): void {
   const existingKeys = new Set(
     policies
       .filter((policy) => policy.company_id === companyId && !policy.deleted_at)
-      .map((policy) => policy.policy_key)
+      .map((policy) => policy.policy_key),
   );
   for (const policy of buildDefaultAdminPolicies(now, companyId)) {
     if (!existingKeys.has(policy.policy_key)) {
@@ -1161,9 +1612,19 @@ function normalizedMasterName(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLowerCase();
 }
 
-function uniqueMasterCode(name: string, existingCodes: readonly string[], fallback: string): string {
+function uniqueMasterCode(
+  name: string,
+  existingCodes: readonly string[],
+  fallback: string,
+): string {
   const existing = new Set(existingCodes.map((code) => code.toUpperCase()));
-  const base = (name.trim().toUpperCase().replace(/[^A-Z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || fallback).slice(0, 36);
+  const base = (
+    name
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/gu, "_")
+      .replace(/^_+|_+$/gu, "") || fallback
+  ).slice(0, 36);
   let candidate = base;
   let index = 2;
   while (existing.has(candidate)) {
@@ -1196,7 +1657,7 @@ function presentCompany(company: CompanyProfileRecord) {
     logo_size_bytes: company.logo_size_bytes,
     status: company.status,
     bootstrap_completed_at: company.bootstrap_completed_at,
-    version: company.version
+    version: company.version,
   };
 }
 
@@ -1210,13 +1671,16 @@ function presentUser(user: CoreUser) {
     employment_status: user.employment_status,
     email_verified_at: user.email_verified_at ?? null,
     email_verification_status: user.email_verification_status ?? "unverified",
-    version: user.version
+    version: user.version,
   };
 }
 
 function isPendingEmailVerification(user: CoreUser): boolean {
   const status = user.email_verification_status ?? "unverified";
-  return user.employment_status === EmploymentStatuses.Inactive && (status === "pending" || status === "unverified");
+  return (
+    user.employment_status === EmploymentStatuses.Inactive &&
+    (status === "pending" || status === "unverified")
+  );
 }
 
 function defaultCompany(user: AuthUser): CompanyProfileRecord {
@@ -1243,7 +1707,7 @@ function defaultCompany(user: AuthUser): CompanyProfileRecord {
     bootstrap_completed_at: null,
     created_at: nowIso(),
     updated_at: nowIso(),
-    version: 1
+    version: 1,
   };
 }
 
