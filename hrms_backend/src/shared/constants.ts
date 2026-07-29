@@ -281,6 +281,109 @@ export const AttendanceDayStatuses = {
 export type AttendanceDayStatus =
   (typeof AttendanceDayStatuses)[keyof typeof AttendanceDayStatuses];
 
+export const AttendanceDayClassifications = {
+  WorkingDay: "working_day",
+  Weekend: "weekend",
+  Holiday: "holiday",
+  Leave: "leave",
+  Wfh: "wfh",
+  Future: "future",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceDayClassification =
+  (typeof AttendanceDayClassifications)[keyof typeof AttendanceDayClassifications];
+
+export const AttendancePresenceStates = {
+  NotStarted: "not_started",
+  Present: "present",
+  Partial: "partial",
+  Incomplete: "incomplete",
+  Absent: "absent",
+  NotApplicable: "not_applicable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendancePresenceState =
+  (typeof AttendancePresenceStates)[keyof typeof AttendancePresenceStates];
+
+export const AttendancePunctualityStates = {
+  OnTime: "on_time",
+  Late: "late",
+  EarlyDeparture: "early_departure",
+  LateAndEarlyDeparture: "late_and_early_departure",
+  NotApplicable: "not_applicable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendancePunctualityState =
+  (typeof AttendancePunctualityStates)[keyof typeof AttendancePunctualityStates];
+
+export const AttendanceEvidenceStates = {
+  Complete: "complete",
+  Partial: "partial",
+  Missing: "missing",
+  Disputed: "disputed",
+  NotApplicable: "not_applicable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceEvidenceState =
+  (typeof AttendanceEvidenceStates)[keyof typeof AttendanceEvidenceStates];
+
+export const AttendanceLocationPermissionStates = {
+  Granted: "granted",
+  Denied: "denied",
+  Unavailable: "unavailable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceLocationPermissionState =
+  (typeof AttendanceLocationPermissionStates)[keyof typeof AttendanceLocationPermissionStates];
+
+export const AttendanceLocationProviders = {
+  Browser: "browser",
+  Device: "device",
+  Network: "network",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceLocationProvider =
+  (typeof AttendanceLocationProviders)[keyof typeof AttendanceLocationProviders];
+
+export const AttendanceApprovalKinds = {
+  None: "none",
+  Regularization: "regularization",
+  Leave: "leave",
+  Wfh: "wfh",
+  Multiple: "multiple"
+} as const;
+
+export type AttendanceApprovalKind =
+  (typeof AttendanceApprovalKinds)[keyof typeof AttendanceApprovalKinds];
+
+export const AttendanceApprovalStates = {
+  NotRequired: "not_required",
+  Pending: "pending",
+  Approved: "approved",
+  Returned: "returned",
+  Rejected: "rejected",
+  Mixed: "mixed",
+  Unknown: "unknown"
+} as const;
+
+export type AttendanceApprovalState =
+  (typeof AttendanceApprovalStates)[keyof typeof AttendanceApprovalStates];
+
+export const AttendancePayrollStates = {
+  Unprocessed: "unprocessed",
+  NotApplicable: "not_applicable",
+  Unknown: "unknown"
+} as const;
+
+export type AttendancePayrollState =
+  (typeof AttendancePayrollStates)[keyof typeof AttendancePayrollStates];
+
 export const AttendanceRegularizationStatuses = {
   Pending: "pending",
   Approved: "approved",
@@ -290,6 +393,25 @@ export const AttendanceRegularizationStatuses = {
 
 export type AttendanceRegularizationStatus =
   (typeof AttendanceRegularizationStatuses)[keyof typeof AttendanceRegularizationStatuses];
+
+export const AttendanceRegularizationOperations = {
+  Add: "add",
+  Replace: "replace",
+  Void: "void",
+} as const;
+
+export type AttendanceRegularizationOperation =
+  (typeof AttendanceRegularizationOperations)[keyof typeof AttendanceRegularizationOperations];
+
+export const AttendanceRegularizationActionKinds = {
+  Submitted: "submitted",
+  Approved: "approved",
+  Returned: "returned",
+  Rejected: "rejected",
+} as const;
+
+export type AttendanceRegularizationActionKind =
+  (typeof AttendanceRegularizationActionKinds)[keyof typeof AttendanceRegularizationActionKinds];
 
 export const LeaveTypes = {
   Casual: "casual",
@@ -478,6 +600,7 @@ export const ErrorCodes = {
   RequiredDocumentsMissing: "REQUIRED_DOCUMENTS_MISSING",
   IdempotencyConflict: "IDEMPOTENCY_CONFLICT",
   ValidationFailed: "VALIDATION_FAILED",
+  CompanyContextRequired: "COMPANY_CONTEXT_REQUIRED",
   TooManyRequests: "TOO_MANY_REQUESTS"
 } as const;
 
