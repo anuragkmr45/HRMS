@@ -30,6 +30,7 @@ import {
   canSeeAttendanceUser
 } from "./policy.js";
 import { AttendanceRepository } from "./repository.js";
+import { buildAttendanceDailyExplanation } from "./daily-explanation.js";
 
 export interface AttendancePageQuery {
   page: number;
@@ -353,6 +354,36 @@ export class AttendanceService {
     const range = dateRange(query, timeZone);
     const punches = this.repository.listPunches(actor.id, range.from, range.to, timeZone).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
     return page(punches.map((punch) => this.presentPunch(punch, timeZone)), query.page, query.page_size);
+  }
+
+  dailyExplanation(
+    actor: AuthUser,
+    query: Pick<AttendancePageQuery, "date" | "user_id">
+  ) {
+    const user = query.user_id ? this.requireUser(query.user_id) : this.requireUser(actor.id);
+    if (user.id === actor.id && !canSeeAllAttendance(actor)) {
+      assertCanUseSelfAttendance(actor);
+    }
+    assertCanSeeAttendanceUser(actor, user);
+
+    const timeZone = this.timezoneForUser(user.id);
+    const workDate = query.date ?? todayDate(timeZone);
+    const day = this.resolveDay(user.id, workDate, timeZone);
+    const punches = this.repository.listPunches(user.id, workDate, workDate, timeZone);
+    const regularization = this.repository.listRegularizations({
+      userIds: new Set([user.id]),
+      dateFrom: workDate,
+      dateTo: workDate
+    })[0] ?? null;
+
+    return buildAttendanceDailyExplanation({
+      generatedAt: nowIso(),
+      employee: user,
+      day,
+      punches,
+      regularization,
+      timeZone
+    });
   }
 
   mySummary(actor: AuthUser, query: AttendancePageQuery) {

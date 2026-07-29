@@ -74,6 +74,7 @@ const expectedOperations = [
   "POST /api/v1/assets/vendors",
   "GET /api/v1/attendance/calendar/daily",
   "GET /api/v1/attendance/calendar/monthly",
+  "GET /api/v1/attendance/daily-explanations",
   "GET /api/v1/attendance/exceptions",
   "GET /api/v1/attendance/punches/my",
   "GET /api/v1/attendance/regularizations/my",
@@ -526,6 +527,7 @@ const listOperations = [
   "GET /api/v1/attendance/summary/team",
   "GET /api/v1/attendance/calendar/daily",
   "GET /api/v1/attendance/calendar/monthly",
+  "GET /api/v1/attendance/daily-explanations",
   "GET /api/v1/attendance/regularizations/my",
   "GET /api/v1/attendance/regularizations/queue/manager",
   "GET /api/v1/attendance/exceptions",
@@ -536,6 +538,7 @@ const listOperations = [
   "GET /api/v1/wfh/requests/my",
   "GET /api/v1/wfh/requests/queue/manager",
   "GET /api/v1/leave-wfh/hr-monitor",
+  "GET /api/v1/locations/india",
   "GET /api/v1/holidays",
   "GET /api/v1/ems/profile-change-requests/my",
   "GET /api/v1/ems/profile-change-requests/queue/hr",
@@ -1069,7 +1072,7 @@ describe("API contracts", () => {
 
     expect(spec.openapi).toBe("3.0.3");
     expect(rows.map((row) => row.key).sort()).toEqual([...expectedOperations].sort());
-    expect(rows.length).toBe(245);
+    expect(rows.length).toBe(247);
 
     for (const row of rows) {
       expect(row.operation.tags?.length, `${row.key} tag`).toBeGreaterThan(0);

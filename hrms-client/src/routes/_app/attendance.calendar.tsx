@@ -1,4 +1,4 @@
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -226,6 +226,16 @@ function EmployeeAttendanceCalendar() {
               <p className="rounded-md bg-muted px-2.5 py-1.5 text-xs text-muted-foreground">
                 {selectedDayDetail(selectedRecord, selectedStatus)}
               </p>
+              <Button asChild variant="outline" size="sm" className="w-full">
+                <Link
+                  to="/attendance/daily-detail"
+                  search={{
+                    date: text(selectedRecord.work_date),
+                  }}
+                >
+                  View daily explanation
+                </Link>
+              </Button>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No attendance for this day.</p>

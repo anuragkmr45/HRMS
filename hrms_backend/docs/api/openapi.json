@@ -68189,6 +68189,665 @@
         }
       }
     },
+    "/api/v1/attendance/daily-explanations": {
+      "get": {
+        "summary": "Explain daily attendance",
+        "tags": [
+          "Attendance"
+        ],
+        "description": "Returns an employee or manager-scoped daily summary with independent status dimensions, safe decision reasons, and accepted source events. Restricted location, device, network, and attestation evidence is never included.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-05-20"
+            },
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "description": "Work date to explain"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+            },
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "description": "Optional in-scope employee user UUID"
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "generated_at",
+                    "work_date",
+                    "employee",
+                    "summary",
+                    "dimensions",
+                    "reasons",
+                    "source_events",
+                    "regularization",
+                    "privacy"
+                  ],
+                  "properties": {
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Explanation generation timestamp",
+                      "example": "2026-05-04T10:00:00.000Z"
+                    },
+                    "work_date": {
+                      "type": "string",
+                      "format": "date",
+                      "description": "Explained work date",
+                      "example": "2026-05-04"
+                    },
+                    "employee": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "employee_code",
+                        "full_name"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Employee user UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "employee_code": {
+                          "type": "string",
+                          "example": "E1"
+                        },
+                        "full_name": {
+                          "type": "string",
+                          "example": "Employee E1"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "summary": {
+                      "type": "object",
+                      "required": [
+                        "status",
+                        "first_check_in",
+                        "last_check_out",
+                        "in_time",
+                        "out_time",
+                        "work_minutes",
+                        "break_minutes",
+                        "late_minutes",
+                        "early_out_minutes",
+                        "work_mode"
+                      ],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "present"
+                        },
+                        "first_check_in": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "First accepted check-in",
+                          "example": "2026-05-04T10:00:00.000Z",
+                          "nullable": true
+                        },
+                        "last_check_out": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Last accepted check-out",
+                          "example": "2026-05-04T10:00:00.000Z",
+                          "nullable": true
+                        },
+                        "in_time": {
+                          "type": "string",
+                          "nullable": true,
+                          "example": "09:40:00"
+                        },
+                        "out_time": {
+                          "type": "string",
+                          "nullable": true,
+                          "example": "18:10:00"
+                        },
+                        "work_minutes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 480
+                        },
+                        "break_minutes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 30
+                        },
+                        "late_minutes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 10
+                        },
+                        "early_out_minutes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 0
+                        },
+                        "work_mode": {
+                          "type": "string",
+                          "nullable": true,
+                          "example": "office"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "dimensions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "key",
+                          "label",
+                          "state",
+                          "explanation"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "enum": [
+                              "day_classification",
+                              "presence_state",
+                              "punctuality_state",
+                              "evidence_state",
+                              "approval_state",
+                              "payroll_state"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "example": "Presence"
+                          },
+                          "state": {
+                            "type": "string",
+                            "example": "present"
+                          },
+                          "explanation": {
+                            "type": "string",
+                            "example": "Accepted attendance events produce a presence state of present."
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "minItems": 6,
+                      "maxItems": 6
+                    },
+                    "reasons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "code",
+                          "category",
+                          "message"
+                        ],
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "example": "LATE_ARRIVAL"
+                          },
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "schedule",
+                              "presence",
+                              "punctuality",
+                              "evidence",
+                              "approval"
+                            ]
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "The first check-in was 10 minutes after the allowed start time."
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "source_events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "event_type",
+                          "occurred_at",
+                          "local_time",
+                          "source_channel",
+                          "work_mode",
+                          "origin",
+                          "verdict",
+                          "reason_codes"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Accepted attendance event UUID",
+                            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                          },
+                          "event_type": {
+                            "type": "string",
+                            "enum": [
+                              "check_in",
+                              "break_start",
+                              "break_end",
+                              "check_out"
+                            ]
+                          },
+                          "occurred_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Accepted event timestamp",
+                            "example": "2026-05-04T10:00:00.000Z"
+                          },
+                          "local_time": {
+                            "type": "string",
+                            "nullable": true,
+                            "example": "09:40:00"
+                          },
+                          "source_channel": {
+                            "type": "string",
+                            "enum": [
+                              "web",
+                              "mobile",
+                              "kiosk",
+                              "admin"
+                            ]
+                          },
+                          "work_mode": {
+                            "type": "string",
+                            "enum": [
+                              "office",
+                              "remote",
+                              "wfh",
+                              "field"
+                            ]
+                          },
+                          "origin": {
+                            "type": "string",
+                            "example": "employee_manual_now"
+                          },
+                          "verdict": {
+                            "type": "string",
+                            "enum": [
+                              "accepted"
+                            ]
+                          },
+                          "reason_codes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "EVENT_ACCEPTED",
+                              "CHANNEL_WEB"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "regularization": {
+                      "type": "object",
+                      "nullable": true,
+                      "required": [
+                        "id",
+                        "status",
+                        "reason",
+                        "decision_remarks",
+                        "decided_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Regularization request UUID",
+                          "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                        },
+                        "status": {
+                          "type": "string",
+                          "example": "pending"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "example": "Forgot to punch out."
+                        },
+                        "decision_remarks": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "decided_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Regularization decision timestamp",
+                          "example": "2026-05-04T10:00:00.000Z",
+                          "nullable": true
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "privacy": {
+                      "type": "object",
+                      "required": [
+                        "restricted_evidence_omitted"
+                      ],
+                      "properties": {
+                        "restricted_evidence_omitted": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ],
+                          "description": "Confirms that exact location, device, network, and attestation evidence is excluded."
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or invalid business request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "VALIDATION_FAILED",
+                  "message": "Request validation failed",
+                  "details": {
+                    "formErrors": [
+                      "Invalid input: expected object, received undefined"
+                    ],
+                    "fieldErrors": {}
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated actor is not allowed to perform this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "WORKFLOW_CONFLICT"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "The ticket was modified by another actor. Refresh and retry."
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the documented delay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "TOO_MANY_REQUESTS"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Too many requests. Please wait and try again."
+                    },
+                    "details": {
+                      "type": "object",
+                      "required": [
+                        "retry_after_seconds"
+                      ],
+                      "properties": {
+                        "retry_after_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 60
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "TOO_MANY_REQUESTS",
+                  "message": "Too many requests. Please wait and try again.",
+                  "details": {
+                    "retry_after_seconds": 60
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/attendance/regularizations": {
       "post": {
         "summary": "Submit attendance regularization",
@@ -104238,6 +104897,392 @@
         }
       }
     },
+    "/api/v1/locations/india": {
+      "get": {
+        "summary": "Search India locations",
+        "tags": [
+          "Core / Employees & Hierarchy"
+        ],
+        "description": "Returns a bounded list of India city and state options for authenticated employee and company forms.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "example": "Pune"
+            },
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "description": "Optional city or state search text."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30,
+              "example": 30
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "type",
+                      "city",
+                      "state",
+                      "country",
+                      "country_code",
+                      "label",
+                      "value"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "example": "city:pune:maharashtra"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "city",
+                          "state"
+                        ],
+                        "example": "city"
+                      },
+                      "city": {
+                        "type": "string",
+                        "nullable": true,
+                        "example": "Pune"
+                      },
+                      "state": {
+                        "type": "string",
+                        "example": "Maharashtra"
+                      },
+                      "country": {
+                        "type": "string",
+                        "enum": [
+                          "India"
+                        ],
+                        "example": "India"
+                      },
+                      "country_code": {
+                        "type": "string",
+                        "enum": [
+                          "IN"
+                        ],
+                        "example": "IN"
+                      },
+                      "label": {
+                        "type": "string",
+                        "example": "Pune, Maharashtra, India"
+                      },
+                      "value": {
+                        "type": "string",
+                        "example": "Pune, Maharashtra, India"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or invalid business request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "VALIDATION_FAILED",
+                  "message": "Request validation failed",
+                  "details": {
+                    "formErrors": [
+                      "Invalid input: expected object, received undefined"
+                    ],
+                    "fieldErrors": {}
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated actor is not allowed to perform this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "WORKFLOW_CONFLICT"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "The ticket was modified by another actor. Refresh and retry."
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the documented delay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "TOO_MANY_REQUESTS"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Too many requests. Please wait and try again."
+                    },
+                    "details": {
+                      "type": "object",
+                      "required": [
+                        "retry_after_seconds"
+                      ],
+                      "properties": {
+                        "retry_after_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 60
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "TOO_MANY_REQUESTS",
+                  "message": "Too many requests. Please wait and try again.",
+                  "details": {
+                    "retry_after_seconds": 60
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "summary": "List notifications",
@@ -115185,7 +116230,9 @@
                             },
                             "example": {
                               "graceMinutes": 10,
-                              "allowRegularization": true
+                              "allowRegularization": true,
+                              "autoPunchOutEnabled": true,
+                              "autoPunchOutTime": "23:59"
                             }
                           },
                           "updated_at": {
@@ -115290,7 +116337,9 @@
                             },
                             "example": {
                               "graceMinutes": 10,
-                              "allowRegularization": true
+                              "allowRegularization": true,
+                              "autoPunchOutEnabled": true,
+                              "autoPunchOutTime": "23:59"
                             }
                           },
                           "updated_at": {
@@ -115656,7 +116705,9 @@
                     },
                     "example": {
                       "graceMinutes": 15,
-                      "allowRegularization": true
+                      "allowRegularization": true,
+                      "autoPunchOutEnabled": true,
+                      "autoPunchOutTime": "22:30"
                     }
                   },
                   "expected_version": {
@@ -115794,7 +116845,9 @@
                           },
                           "example": {
                             "graceMinutes": 10,
-                            "allowRegularization": true
+                            "allowRegularization": true,
+                            "autoPunchOutEnabled": true,
+                            "autoPunchOutTime": "23:59"
                           }
                         },
                         "updated_at": {

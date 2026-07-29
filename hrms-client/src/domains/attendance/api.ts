@@ -1,5 +1,6 @@
 import { apiRequest } from "@/shared/api";
 import type { ApiRecord, ExpectedVersionBody, PageQuery, PaginatedResponse } from "@/shared/api";
+import { mapAttendanceDailyExplanation } from "./daily-explanation";
 
 export type AttendancePunchEventType = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -69,6 +70,12 @@ export const attendanceApi = {
         totals?: ApiRecord;
       }
     >("/api/v1/attendance/calendar/daily", { query });
+  },
+  async dailyExplanation(query: Pick<AttendanceQuery, "date" | "user_id"> = {}) {
+    const response = await apiRequest<ApiRecord>("/api/v1/attendance/daily-explanations", {
+      query,
+    });
+    return mapAttendanceDailyExplanation(response);
   },
   createRegularization(input: AttendanceRegularizationBody) {
     return apiRequest<ApiRecord>("/api/v1/attendance/regularizations", {

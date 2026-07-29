@@ -2211,6 +2211,172 @@ const attendanceDailyCalendarSchema = {
   additionalProperties: true
 };
 
+const attendanceDailyExplanationQuerySchema = {
+  type: "object",
+  properties: {
+    date: date("Work date to explain", "2026-05-20"),
+    user_id: uuid("Optional in-scope employee user UUID")
+  },
+  additionalProperties: false
+};
+
+const indiaLocationQuerySchema = {
+  type: "object",
+  properties: {
+    search: {
+      type: "string",
+      maxLength: 100,
+      description: "Optional city or state search text.",
+      example: "Pune"
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: 100,
+      default: 30,
+      example: 30
+    }
+  },
+  additionalProperties: false
+};
+
+const indiaLocationSchema = {
+  type: "object",
+  required: ["id", "type", "city", "state", "country", "country_code", "label", "value"],
+  properties: {
+    id: { type: "string", example: "city:pune:maharashtra" },
+    type: { type: "string", enum: ["city", "state"], example: "city" },
+    city: { type: "string", nullable: true, example: "Pune" },
+    state: { type: "string", example: "Maharashtra" },
+    country: { type: "string", enum: ["India"], example: "India" },
+    country_code: { type: "string", enum: ["IN"], example: "IN" },
+    label: { type: "string", example: "Pune, Maharashtra, India" },
+    value: { type: "string", example: "Pune, Maharashtra, India" }
+  },
+  additionalProperties: false
+};
+
+const attendanceExplanationDimensionSchema = {
+  type: "object",
+  required: ["key", "label", "state", "explanation"],
+  properties: {
+    key: {
+      type: "string",
+      enum: ["day_classification", "presence_state", "punctuality_state", "evidence_state", "approval_state", "payroll_state"]
+    },
+    label: { type: "string", example: "Presence" },
+    state: { type: "string", example: "present" },
+    explanation: { type: "string", example: "Accepted attendance events produce a presence state of present." }
+  },
+  additionalProperties: false
+};
+
+const attendanceExplanationSourceEventSchema = {
+  type: "object",
+  required: ["id", "event_type", "occurred_at", "local_time", "source_channel", "work_mode", "origin", "verdict", "reason_codes"],
+  properties: {
+    id: uuid("Accepted attendance event UUID"),
+    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"] },
+    occurred_at: dateTime("Accepted event timestamp"),
+    local_time: { type: "string", nullable: true, example: "09:40:00" },
+    source_channel: { type: "string", enum: ["web", "mobile", "kiosk", "admin"] },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"] },
+    origin: { type: "string", example: "employee_manual_now" },
+    verdict: { type: "string", enum: ["accepted"] },
+    reason_codes: {
+      type: "array",
+      items: { type: "string" },
+      example: ["EVENT_ACCEPTED", "CHANNEL_WEB"]
+    }
+  },
+  additionalProperties: false
+};
+
+const attendanceDailyExplanationSchema = {
+  type: "object",
+  required: ["generated_at", "work_date", "employee", "summary", "dimensions", "reasons", "source_events", "regularization", "privacy"],
+  properties: {
+    generated_at: dateTime("Explanation generation timestamp"),
+    work_date: date("Explained work date"),
+    employee: {
+      type: "object",
+      required: ["id", "employee_code", "full_name"],
+      properties: {
+        id: uuid("Employee user UUID"),
+        employee_code: { type: "string", example: "E1" },
+        full_name: { type: "string", example: "Employee E1" }
+      },
+      additionalProperties: false
+    },
+    summary: {
+      type: "object",
+      required: ["status", "first_check_in", "last_check_out", "in_time", "out_time", "work_minutes", "break_minutes", "late_minutes", "early_out_minutes", "work_mode"],
+      properties: {
+        status: { type: "string", example: "present" },
+        first_check_in: { ...dateTime("First accepted check-in"), nullable: true },
+        last_check_out: { ...dateTime("Last accepted check-out"), nullable: true },
+        in_time: { type: "string", nullable: true, example: "09:40:00" },
+        out_time: { type: "string", nullable: true, example: "18:10:00" },
+        work_minutes: { type: "integer", minimum: 0, example: 480 },
+        break_minutes: { type: "integer", minimum: 0, example: 30 },
+        late_minutes: { type: "integer", minimum: 0, example: 10 },
+        early_out_minutes: { type: "integer", minimum: 0, example: 0 },
+        work_mode: { type: "string", nullable: true, example: "office" }
+      },
+      additionalProperties: false
+    },
+    dimensions: {
+      type: "array",
+      items: attendanceExplanationDimensionSchema,
+      minItems: 6,
+      maxItems: 6
+    },
+    reasons: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["code", "category", "message"],
+        properties: {
+          code: { type: "string", example: "LATE_ARRIVAL" },
+          category: { type: "string", enum: ["schedule", "presence", "punctuality", "evidence", "approval"] },
+          message: { type: "string", example: "The first check-in was 10 minutes after the allowed start time." }
+        },
+        additionalProperties: false
+      }
+    },
+    source_events: {
+      type: "array",
+      items: attendanceExplanationSourceEventSchema
+    },
+    regularization: {
+      type: "object",
+      nullable: true,
+      required: ["id", "status", "reason", "decision_remarks", "decided_at"],
+      properties: {
+        id: uuid("Regularization request UUID"),
+        status: { type: "string", example: "pending" },
+        reason: { type: "string", example: "Forgot to punch out." },
+        decision_remarks: { type: "string", nullable: true },
+        decided_at: { ...dateTime("Regularization decision timestamp"), nullable: true }
+      },
+      additionalProperties: false
+    },
+    privacy: {
+      type: "object",
+      required: ["restricted_evidence_omitted"],
+      properties: {
+        restricted_evidence_omitted: {
+          type: "boolean",
+          enum: [true],
+          description: "Confirms that exact location, device, network, and attestation evidence is excluded."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  additionalProperties: false
+};
+
 const attendanceRegularizationCreateBody = {
   type: "object",
   required: ["work_date", "reason"],
@@ -4158,6 +4324,15 @@ const routeDocs: Record<string, RouteSchema> = {
   "GET /api/v1/auth/me": operation("Auth & Sessions", "Current session", "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults.", { response200: authSessionContextSchema }),
 
   "GET /api/v1/core/master-data/org-selectors": operation("Core / Employees & Hierarchy", "Org selectors", "Returns active departments, designations, manager candidates, and backend role labels used by employee create/edit forms. The list is scoped by the authenticated actor where manager visibility is restricted.", { response200: orgSelectorsResponseSchema }),
+  "GET /api/v1/locations/india": operation(
+    "Core / Employees & Hierarchy",
+    "Search India locations",
+    "Returns a bounded list of India city and state options for authenticated employee and company forms.",
+    {
+      querystring: indiaLocationQuerySchema,
+      response200: { type: "array", items: indiaLocationSchema }
+    }
+  ),
   "GET /api/v1/core/users": operation("Core / Employees & Hierarchy", "List users", "Paginated employee/user search for authorized modules and admins. Supports frontend table filters, manager scoping, login-state filters, sorting, compact org references, and summary counts.", { querystring: { ...paginationQuerySchema, properties: { ...paginationQuerySchema.properties, q: { type: "string", description: "Optional employee code/name/email search.", example: "E1" }, department_id: uuid("Filter by department UUID"), designation_id: uuid("Filter by designation UUID"), role: { type: "string", description: "Filter by assigned role label.", example: "Employee" }, employment_status: { type: "string", enum: ["active", "inactive", "terminated", "suspended"], example: "active" }, manager_user_id: uuid("Filter by direct manager UUID"), login_state: { type: "string", enum: ["enabled", "disabled", "setup_pending"], example: "enabled" } } }, response200: coreUserListResponseSchema }),
   "POST /api/v1/core/users": operation("Core / Employees & Hierarchy", "Create user", "Creates a Core employee profile with department, designation, reporting manager, roles, lifecycle status, and optional password setup action. The API never creates a shared/default production password; login enablement queues password setup.", { body: coreUserCreateBodySchema, response200: coreUserMutationResponseSchema }),
   "GET /api/v1/core/users/profile-photo-policy": operation("Core / Employees & Hierarchy", "Get profile photo upload policy", "Returns backend-owned profile photo upload limits, allowed image MIME types, compression dimensions, and Cloudinary upload transformation so clients can compress before upload.", { response200: coreProfilePhotoPolicySchema }),
@@ -4258,6 +4433,15 @@ const routeDocs: Record<string, RouteSchema> = {
     "Daily attendance calendar",
     "Returns day-level attendance records for self, a selected in-scope employee, or a visible team with regularization flags and compact exceptions.",
     { querystring: attendanceQuerySchema, response200: attendanceDailyCalendarSchema }
+  ),
+  "GET /api/v1/attendance/daily-explanations": operation(
+    "Attendance",
+    "Explain daily attendance",
+    "Returns an employee or manager-scoped daily summary with independent status dimensions, safe decision reasons, and accepted source events. Restricted location, device, network, and attestation evidence is never included.",
+    {
+      querystring: attendanceDailyExplanationQuerySchema,
+      response200: attendanceDailyExplanationSchema
+    }
   ),
   "POST /api/v1/attendance/regularizations": operation(
     "Attendance",

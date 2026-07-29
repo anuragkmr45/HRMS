@@ -23,6 +23,10 @@ const attendanceQuerySchema = paginationQuerySchema.extend({
   status: z.string().optional(),
   exception_type: z.enum(["late", "missing_punch", "absent", "early_out", "correction"]).optional()
 });
+const dailyExplanationQuerySchema = z.object({
+  date: isoDateQuerySchema.optional(),
+  user_id: z.uuid().optional()
+});
 const attendanceExportSchema = z.object({
   filters: z.record(z.string(), z.unknown()).optional(),
   columns: z.array(z.string().min(1).max(80)).max(80).optional(),
@@ -87,6 +91,16 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     return new AttendanceService(fastify.store).dailyCalendar(
       request.actor,
       attendanceQuerySchema.parse(request.query)
+    );
+  });
+
+  fastify.get("/daily-explanations", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    return new AttendanceService(fastify.store).dailyExplanation(
+      request.actor,
+      dailyExplanationQuerySchema.parse(request.query)
     );
   });
 

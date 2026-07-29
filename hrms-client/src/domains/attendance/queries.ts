@@ -49,6 +49,19 @@ export function useAttendanceDailyCalendar(query: AttendanceQuery = {}, enabled 
   });
 }
 
+export function useAttendanceDailyExplanation(
+  query: Pick<AttendanceQuery, "date" | "user_id"> = {},
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.list("attendance", "daily-explanation", query),
+    queryFn: () => attendanceApi.dailyExplanation(query),
+    enabled,
+    staleTime: queryTimings.listStaleMs,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useAttendanceExceptions(query: AttendanceQuery = {}, enabled = true) {
   return useQuery({
     queryKey: queryKeys.list("attendance", "exceptions", query),

@@ -79,6 +79,7 @@ import { Route as AppEmsApprovalsRouteImport } from './routes/_app/ems.approvals
 import { Route as AppEmsAdminRouteImport } from './routes/_app/ems.admin'
 import { Route as AppEmployeesIdRouteImport } from './routes/_app/employees.$id'
 import { Route as AppAttendanceExceptionsRouteImport } from './routes/_app/attendance.exceptions'
+import { Route as AppAttendanceDailyDetailRouteImport } from './routes/_app/attendance.daily-detail'
 import { Route as AppAttendanceCalendarRouteImport } from './routes/_app/attendance.calendar'
 import { Route as AppAssetsWarrantyRouteImport } from './routes/_app/assets.warranty'
 import { Route as AppAssetsReturnsRouteImport } from './routes/_app/assets.returns'
@@ -445,6 +446,12 @@ const AppAttendanceExceptionsRoute = AppAttendanceExceptionsRouteImport.update({
   path: '/exceptions',
   getParentRoute: () => AppAttendanceRoute,
 } as any)
+const AppAttendanceDailyDetailRoute =
+  AppAttendanceDailyDetailRouteImport.update({
+    id: '/daily-detail',
+    path: '/daily-detail',
+    getParentRoute: () => AppAttendanceRoute,
+  } as any)
 const AppAttendanceCalendarRoute = AppAttendanceCalendarRouteImport.update({
   id: '/calendar',
   path: '/calendar',
@@ -570,6 +577,7 @@ export interface FileRoutesByFullPath {
   '/assets/returns': typeof AppAssetsReturnsRoute
   '/assets/warranty': typeof AppAssetsWarrantyRoute
   '/attendance/calendar': typeof AppAttendanceCalendarRoute
+  '/attendance/daily-detail': typeof AppAttendanceDailyDetailRoute
   '/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/employees/$id': typeof AppEmployeesIdRoute
   '/ems/admin': typeof AppEmsAdminRoute
@@ -648,6 +656,7 @@ export interface FileRoutesByTo {
   '/assets/returns': typeof AppAssetsReturnsRoute
   '/assets/warranty': typeof AppAssetsWarrantyRoute
   '/attendance/calendar': typeof AppAttendanceCalendarRoute
+  '/attendance/daily-detail': typeof AppAttendanceDailyDetailRoute
   '/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/employees/$id': typeof AppEmployeesIdRoute
   '/ems/admin': typeof AppEmsAdminRoute
@@ -737,6 +746,7 @@ export interface FileRoutesById {
   '/_app/assets/returns': typeof AppAssetsReturnsRoute
   '/_app/assets/warranty': typeof AppAssetsWarrantyRoute
   '/_app/attendance/calendar': typeof AppAttendanceCalendarRoute
+  '/_app/attendance/daily-detail': typeof AppAttendanceDailyDetailRoute
   '/_app/attendance/exceptions': typeof AppAttendanceExceptionsRoute
   '/_app/employees/$id': typeof AppEmployeesIdRoute
   '/_app/ems/admin': typeof AppEmsAdminRoute
@@ -826,6 +836,7 @@ export interface FileRouteTypes {
     | '/assets/returns'
     | '/assets/warranty'
     | '/attendance/calendar'
+    | '/attendance/daily-detail'
     | '/attendance/exceptions'
     | '/employees/$id'
     | '/ems/admin'
@@ -904,6 +915,7 @@ export interface FileRouteTypes {
     | '/assets/returns'
     | '/assets/warranty'
     | '/attendance/calendar'
+    | '/attendance/daily-detail'
     | '/attendance/exceptions'
     | '/employees/$id'
     | '/ems/admin'
@@ -992,6 +1004,7 @@ export interface FileRouteTypes {
     | '/_app/assets/returns'
     | '/_app/assets/warranty'
     | '/_app/attendance/calendar'
+    | '/_app/attendance/daily-detail'
     | '/_app/attendance/exceptions'
     | '/_app/employees/$id'
     | '/_app/ems/admin'
@@ -1546,6 +1559,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAttendanceExceptionsRouteImport
       parentRoute: typeof AppAttendanceRoute
     }
+    '/_app/attendance/daily-detail': {
+      id: '/_app/attendance/daily-detail'
+      path: '/daily-detail'
+      fullPath: '/attendance/daily-detail'
+      preLoaderRoute: typeof AppAttendanceDailyDetailRouteImport
+      parentRoute: typeof AppAttendanceRoute
+    }
     '/_app/attendance/calendar': {
       id: '/_app/attendance/calendar'
       path: '/calendar'
@@ -1716,12 +1736,14 @@ const AppAssetsRouteWithChildren = AppAssetsRoute._addFileChildren(
 
 interface AppAttendanceRouteChildren {
   AppAttendanceCalendarRoute: typeof AppAttendanceCalendarRoute
+  AppAttendanceDailyDetailRoute: typeof AppAttendanceDailyDetailRoute
   AppAttendanceExceptionsRoute: typeof AppAttendanceExceptionsRoute
   AppAttendanceIndexRoute: typeof AppAttendanceIndexRoute
 }
 
 const AppAttendanceRouteChildren: AppAttendanceRouteChildren = {
   AppAttendanceCalendarRoute: AppAttendanceCalendarRoute,
+  AppAttendanceDailyDetailRoute: AppAttendanceDailyDetailRoute,
   AppAttendanceExceptionsRoute: AppAttendanceExceptionsRoute,
   AppAttendanceIndexRoute: AppAttendanceIndexRoute,
 }
