@@ -26,7 +26,12 @@ import {
   useAttendancePunchMutation,
   useMyAttendanceSummary,
   useTeamAttendanceSummary,
+  AttendanceWorkContext,
+  AttendanceWorkModeBadge,
+  BROWSER_ATTENDANCE_SOURCE,
+  parseAttendanceWorkMode,
   type AttendancePunchEventType,
+  type AttendanceWorkMode,
 } from "@/domains/attendance";
 import { currentLocalMonth, localIsoDate, liveAttendanceToday } from "@/domains/attendance/live";
 import {
@@ -217,6 +222,7 @@ function AdminView() {
 
 function EmployeeView() {
   const [now, setNow] = useState(new Date());
+  const [selectedWorkMode, setSelectedWorkMode] = useState<AttendanceWorkMode>();
   const query = useMyAttendanceSummary({ month: currentMonth(), page: 1, page_size: 50 });
   const punchMutation = useAttendancePunchMutation();
   const data = asRecord(query.data);
@@ -236,6 +242,8 @@ function EmployeeView() {
   );
   const exceptionHistory = records(data.exception_history);
   const nextAllowedActions = liveToday.nextAllowedActions;
+  const serverWorkMode = parseAttendanceWorkMode(today.work_mode);
+  const workMode = serverWorkMode ?? selectedWorkMode;
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -246,10 +254,8 @@ function EmployeeView() {
     try {
       await punchMutation.mutateAsync({
         event_type: eventType,
-        occurred_at: new Date().toISOString(),
-        work_mode: "office",
-        source: "web",
-        metadata: {},
+        source: BROWSER_ATTENDANCE_SOURCE,
+        ...(workMode ? { work_mode: workMode } : {}),
       });
       toast.success(successMessage);
     } catch (error) {
@@ -333,6 +339,12 @@ function EmployeeView() {
               </p>
             </div>
           </div>
+          <AttendanceWorkContext
+            value={workMode}
+            disabled={disableActions}
+            locked={!canPunch("check_in")}
+            onValueChange={setSelectedWorkMode}
+          />
           <div className="flex flex-wrap gap-2 border-t p-4">
             {canPunch("check_in") && (
               <Button
@@ -404,6 +416,7 @@ function EmployeeView() {
                   </div>
                   <div className="text-right">
                     <p className="text-xs font-semibold">{text(record.hours, "0h 00m")}</p>
+                    <AttendanceWorkModeBadge value={record.work_mode} />
                     <StatusBadge status={text(record.status, "pending")} />
                   </div>
                 </li>
