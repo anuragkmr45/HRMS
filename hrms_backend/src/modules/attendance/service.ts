@@ -392,6 +392,34 @@ export interface AttendanceAutoPunchOutRunResult {
   closures: AttendanceAutoPunchOutClosure[];
 }
 
+type EmployeePunchSource = "web" | "web_geo" | "mobile" | "kiosk";
+
+type EmployeePunchPostgresInput = {
+  event_type: AttendancePunchEventType;
+  occurred_at?: string;
+  work_mode: "office" | "remote" | "wfh" | "field";
+  source: EmployeePunchSource;
+  metadata: Record<string, unknown>;
+  location?: AttendanceLocationEvidenceInput;
+  idempotency_key: string;
+};
+
+function employeePunchSource(source: EmployeePunchSource): EmployeePunchSource {
+  switch (source) {
+    case "web":
+    case "web_geo":
+    case "mobile":
+    case "kiosk":
+      return source;
+    default:
+      return assertNeverSource(source);
+  }
+}
+
+function assertNeverSource(value: never): never {
+  throw badRequest("Unsupported attendance punch source.", { source: String(value) });
+}
+
 export class AttendanceService {
   private readonly repository: AttendanceRepository;
   private readonly core: CoreService;
@@ -407,7 +435,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       occurred_at?: string;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "mobile" | "kiosk" | "admin";
+      source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
@@ -520,7 +548,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       occurred_at?: string;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "mobile" | "kiosk" | "admin";
+      source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
@@ -539,7 +567,7 @@ export class AttendanceService {
     input: {
       event_type: AttendancePunchEventType;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "mobile" | "kiosk";
+      source: "web" | "web_geo" | "mobile" | "kiosk";
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
@@ -547,7 +575,7 @@ export class AttendanceService {
   ) {
     return this.recordPunchInMemory(
       actor,
-      { ...input, occurred_at: nowIso(), source: input.source === "mobile" || input.source === "kiosk" ? input.source : "web" },
+      { ...input, occurred_at: nowIso(), source: employeePunchSource(input.source) },
       actor.id,
       "employee_manual_now",
     );
@@ -2394,9 +2422,7 @@ export class AttendanceService {
 
   async punchPostgres(
     actor: AuthUser,
-    input: Parameters<AttendanceService["punch"]>[1] & {
-      idempotency_key: string;
-    },
+    input: EmployeePunchPostgresInput,
   ): Promise<Record<string, unknown>> {
     const context = this.resolveAttendanceCompanyContext(
       actor,
@@ -2419,12 +2445,12 @@ export class AttendanceService {
 
   async recordEmployeeManualNowPostgres(
     actor: AuthUser,
-    input: Omit<Parameters<AttendanceService["punch"]>[1], "occurred_at">,
+    input: Omit<EmployeePunchPostgresInput, "idempotency_key" | "occurred_at">,
     idempotencyKey: string,
   ): Promise<Record<string, unknown>> {
     return this.punchPostgres(actor, {
       ...input,
-      source: input.source === "mobile" || input.source === "kiosk" ? input.source : "web",
+      source: employeePunchSource(input.source),
       idempotency_key: idempotencyKey,
     });
   }

@@ -4,7 +4,7 @@ import {
   canonicalAttendanceResponseHash,
 } from "../command-service.js";
 import type { CreateAttendanceDecisionInput } from "../command-repository.js";
-import { attendanceLocationEvidenceSchema } from "#shared";
+import { attendanceLocationEvidenceSchema, attendancePunchSchema } from "#shared";
 
 function acceptCommandDecisionReason(
   _reasonCode: CreateAttendanceDecisionInput["reasonCode"],
@@ -184,5 +184,77 @@ describe("attendance location evidence request schema", () => {
         age_ms: 60_000,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("attendance web_geo punch request schema", () => {
+  const point = {
+    latitude: 12.971599,
+    longitude: 77.594566,
+    accuracy_meters: 8.5,
+    captured_at: "2026-07-14T04:00:00.000Z",
+    provider: "browser",
+    permission_state: "granted",
+  };
+
+  it("requires exactly one browser location result when source is web_geo", () => {
+    expect(
+      attendancePunchSchema.safeParse({
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web_geo",
+        metadata: {},
+        location: point,
+      }).success,
+    ).toBe(true);
+    expect(
+      attendancePunchSchema.safeParse({
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web_geo",
+        metadata: {},
+      }).success,
+    ).toBe(false);
+    expect(
+      attendancePunchSchema.safeParse({
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web_geo",
+        metadata: {},
+        location: { ...point, permission_state: "denied" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps legacy web punches compatible without location", () => {
+    expect(
+      attendancePunchSchema.safeParse({
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects browser-submitted geo policy and geofence outcomes", () => {
+    const parsed = attendancePunchSchema.safeParse({
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web_geo",
+      metadata: {
+        geo_policy: { allowed: true },
+        "inside-fence": true,
+      },
+      location: point,
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.path.join("."))).toEqual([
+        "metadata.geo_policy",
+        "metadata.inside-fence",
+      ]);
+    }
   });
 });

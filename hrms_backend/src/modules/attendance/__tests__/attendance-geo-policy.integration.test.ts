@@ -464,6 +464,152 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     expect(JSON.stringify(response.json())).not.toContain("77.595");
   });
 
+  it("preserves web_geo through check-in and check-out command persistence", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId },
+    });
+
+    const checkInKey = `geo-s12-007-web-geo-in-${randomUUID()}`;
+    const checkInPayload = {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web_geo",
+      metadata: { browser: "desktop" },
+      location: coordinateLocation(12.972, 77.595),
+    };
+    const checkIn = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headersWithIdempotency(employee.token, checkInKey),
+      payload: checkInPayload,
+    });
+    expect(checkIn.statusCode).toBe(200);
+    expect(checkIn.json().punch.source).toBe("web_geo");
+    expect(checkIn.json().geo_policy).toMatchObject({
+      factual_outcome: "inside_confident",
+      selected_action: "allow",
+      allowed: true,
+    });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headersWithIdempotency(employee.token, checkInKey),
+      payload: checkInPayload,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(checkIn.json());
+
+    const checkOut = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_out",
+        work_mode: "office",
+        source: "web_geo",
+        metadata: {},
+        location: coordinateLocation(12.972, 77.595),
+      },
+    });
+    expect(checkOut.statusCode).toBe(200);
+    expect(checkOut.json().punch.source).toBe("web_geo");
+
+    const persisted = await app.store.pgPool!.query<{
+      sessions_total: string;
+      sessions_web_geo: string;
+      punches_total: string;
+      punches_web_geo: string;
+      events_total: string;
+      events_web_geo: string;
+      location_rows: string;
+      location_web_geo: string;
+      outbox_total: string;
+      outbox_web_geo: string;
+    }>(
+      `SELECT
+        (SELECT count(*) FROM attendance.sessions) AS sessions_total,
+        (SELECT count(*) FROM attendance.sessions WHERE source = 'web_geo') AS sessions_web_geo,
+        (SELECT count(*) FROM attendance.punch_events) AS punches_total,
+        (SELECT count(*) FROM attendance.punch_events WHERE source = 'web_geo') AS punches_web_geo,
+        (SELECT count(*) FROM attendance.attendance_events) AS events_total,
+        (SELECT count(*) FROM attendance.attendance_events WHERE source = 'web_geo') AS events_web_geo,
+        (SELECT count(*) FROM attendance.location_evidence) AS location_rows,
+        (SELECT count(*) FROM attendance.location_evidence WHERE raw_payload ->> 'source_channel' = 'web_geo') AS location_web_geo,
+        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox_total,
+        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance' AND payload ->> 'source_channel' = 'web_geo') AS outbox_web_geo`,
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      sessions_total: "1",
+      sessions_web_geo: "1",
+      punches_total: "2",
+      punches_web_geo: "2",
+      events_total: "2",
+      events_web_geo: "2",
+      location_rows: "2",
+      location_web_geo: "2",
+      outbox_total: "2",
+      outbox_web_geo: "2",
+    });
+    expect(JSON.stringify(checkIn.json())).not.toContain("77.595");
+    expect(JSON.stringify(checkOut.json())).not.toContain("77.595");
+  });
+
+  it.each([
+    ["denied", "geo_permission_denied"],
+    ["unavailable", "geo_location_unavailable"],
+  ])("records web_geo %s as browser failure evidence without a session transition", async (permissionState, reasonCode) => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: headers(employee.token),
+      payload: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web_geo",
+        metadata: {},
+        location: { permission_state: permissionState, provider: "browser" },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().details.reason_code).toBe(reasonCode);
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    const persisted = await app.store.pgPool!.query<{
+      source_channel: string | null;
+      permission_state: string;
+      latitude: string | null;
+      longitude: string | null;
+    }>(
+      `SELECT
+          raw_payload ->> 'source_channel' AS source_channel,
+          permission_state,
+          latitude::text,
+          longitude::text
+         FROM attendance.location_evidence`,
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      source_channel: "web_geo",
+      permission_state: permissionState,
+      latitude: null,
+      longitude: null,
+    });
+  });
+
   it.each([
     ["confidently inside", coordinateLocation(12.972, 77.595), "inside_confident", 200],
     ["confidently outside", coordinateLocation(12.975, 77.598), "outside_confident", 409],

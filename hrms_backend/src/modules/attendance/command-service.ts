@@ -55,7 +55,7 @@ import {
 export interface AttendanceCommandInput {
   event_type: AttendancePunchEventType;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source: "web" | "mobile" | "kiosk" | "admin";
+  source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
   metadata: Record<string, unknown>;
   location?: AttendanceLocationEvidenceInput;
 }

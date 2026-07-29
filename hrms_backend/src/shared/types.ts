@@ -397,7 +397,7 @@ export interface AttendancePunch {
   event_type: AttendancePunchEventType;
   occurred_at: ISODateTime;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source: "web" | "mobile" | "kiosk" | "admin";
+  source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
   origin: "employee_manual_now" | "manager_assisted_now" | "historical_correction" | "approved_regularization" | "system";
   regularization_request_id: UUID | null;
   metadata: Record<string, unknown>;

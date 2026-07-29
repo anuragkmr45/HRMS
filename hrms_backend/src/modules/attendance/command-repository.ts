@@ -252,7 +252,7 @@ export interface AttendanceSessionRecord {
   active_break_started_at: string | null;
   last_transition_at: string;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source: "web" | "mobile" | "kiosk" | "admin";
+  source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
   metadata: Record<string, unknown>;
   version: number;
   created_at: string;

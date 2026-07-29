@@ -30,7 +30,7 @@ export type AttendancePunchRecordedPayload = AttendanceEventBase & {
   occurred_at: string;
   work_date: string;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source_channel: "web" | "mobile" | "kiosk" | "admin";
+  source_channel: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
   origin: "employee_manual_now" | "manager_assisted_now" | "historical_correction" | "approved_regularization" | "system";
   day_status: string | null;
 };

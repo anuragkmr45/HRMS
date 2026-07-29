@@ -2102,14 +2102,101 @@ const attendanceQuerySchema = {
   }
 };
 
+const attendanceLocationCoordinateEvidenceSchema = {
+  type: "object",
+  required: ["latitude", "longitude", "accuracy_meters", "captured_at"],
+  properties: {
+    latitude: { type: "number", minimum: -90, maximum: 90, example: 12.971599 },
+    longitude: { type: "number", minimum: -180, maximum: 180, example: 77.594566 },
+    accuracy_meters: { type: "number", minimum: 0, example: 12.5 },
+    captured_at: dateTime("One-shot browser capture timestamp from the employee action."),
+    age_ms: { type: "integer", minimum: 0, example: 30000 },
+    provider: { type: "string", enum: ["browser", "gps", "network", "manual", "unknown"], example: "browser" },
+    permission_state: { type: "string", enum: ["granted", "unknown"], default: "unknown", example: "granted" },
+    altitude_meters: { type: "number", example: 920.4 },
+    is_mocked: { type: "boolean", example: false },
+    integrity_status: { type: "string", minLength: 1, maxLength: 80, example: "browser_reported" }
+  },
+  additionalProperties: false
+};
+
+const attendanceLocationFailureEvidenceSchema = {
+  type: "object",
+  required: ["permission_state"],
+  properties: {
+    captured_at: dateTime("Optional one-shot browser failure timestamp."),
+    age_ms: { type: "integer", minimum: 0, example: 30000 },
+    provider: { type: "string", enum: ["browser", "gps", "network", "manual", "unknown"], example: "browser" },
+    permission_state: { type: "string", enum: ["denied", "unavailable"], example: "denied" },
+    integrity_status: { type: "string", minLength: 1, maxLength: 80, example: "permission_denied" }
+  },
+  additionalProperties: false
+};
+
+const attendanceLocationEvidenceSchema = {
+  oneOf: [
+    attendanceLocationCoordinateEvidenceSchema,
+    attendanceLocationFailureEvidenceSchema
+  ],
+  description: "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates."
+};
+
+const attendanceGeoPolicySnapshotSchema = {
+  type: "object",
+  required: ["factual_outcome", "selected_action", "fallback_used", "allowed", "reason_code"],
+  properties: {
+    factual_outcome: {
+      type: "string",
+      enum: [
+        "not_required",
+        "missing",
+        "permission_denied",
+        "location_unavailable",
+        "stale_evidence",
+        "accuracy_exceeded",
+        "fence_not_configured",
+        "inside_confident",
+        "outside_confident",
+        "boundary_uncertain"
+      ],
+      example: "inside_confident"
+    },
+    category: { type: "string", example: "inside_confident" },
+    selected_action: { type: "string", enum: ["allow", "deny", "manual_fallback"], example: "allow" },
+    fallback_used: { type: "boolean", example: false },
+    allowed: { type: "boolean", example: true },
+    reason_code: { type: "string", nullable: true, example: null },
+    evaluator_version: { type: "string", example: "attendance_geo_policy_v1" },
+    geofence_id: { ...uuid("Effective geofence UUID"), nullable: true },
+    geofence_version_id: { ...uuid("Effective geofence version UUID"), nullable: true },
+    work_site_id: { ...uuid("Selected work site UUID"), nullable: true },
+    geofence_version_number: { type: "integer", nullable: true, example: 1 },
+    geofence_shape_type: { type: "string", enum: ["circle", "polygon"], nullable: true, example: "polygon" },
+    geofence_canonical_hash: { type: "string", nullable: true, example: "3f786850e387550fdab836ed7e6dc881de23001b" },
+    evaluation: {
+      type: "object",
+      nullable: true,
+      additionalProperties: true,
+      description: "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+    }
+  },
+  additionalProperties: true
+};
+
 const attendancePunchBody = {
   type: "object",
   required: ["event_type"],
+  description: "Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
   properties: {
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
-    source: { type: "string", enum: ["web", "mobile", "kiosk"], default: "web", example: "web" },
-    metadata: { type: "object", additionalProperties: true }
+    source: { type: "string", enum: ["web", "web_geo", "mobile", "kiosk"], default: "web", example: "web_geo" },
+    metadata: {
+      type: "object",
+      additionalProperties: true,
+      description: "Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here."
+    },
+    location: attendanceLocationEvidenceSchema
   },
   additionalProperties: false
 };
@@ -2215,8 +2302,31 @@ const attendancePunchSchema = {
     work_date: date("Work date"),
     time: { type: "string", nullable: true, example: "09:10" },
     work_mode: { type: "string", example: "office" },
-    source: { type: "string", example: "web" },
+    source: { type: "string", enum: ["web", "web_geo", "mobile", "kiosk", "admin"], example: "web_geo" },
     origin: { type: "string", enum: ["employee_manual_now", "manager_assisted_now", "historical_correction", "approved_regularization", "system"] }
+  },
+  additionalProperties: true
+};
+
+const attendancePunchCommandResponseSchema = {
+  type: "object",
+  required: ["allowed", "command_id", "decision_id", "punch_id", "punch", "day_status", "next_allowed_actions", "geo_policy"],
+  properties: {
+    allowed: { type: "boolean", example: true },
+    command_id: uuid("Attendance command execution UUID"),
+    decision_id: uuid("Attendance command decision UUID"),
+    session_id: { ...uuid("Attendance session UUID"), nullable: true },
+    punch_id: uuid("Attendance punch UUID"),
+    punch: attendancePunchSchema,
+    day_status: { type: "object", additionalProperties: true },
+    next_allowed_actions: {
+      type: "array",
+      items: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"] },
+      example: ["break_start", "check_out"]
+    },
+    next_allowed_action: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], nullable: true, example: "break_start" },
+    punch_policy: { type: "object", additionalProperties: true },
+    geo_policy: attendanceGeoPolicySnapshotSchema
   },
   additionalProperties: true
 };
@@ -4404,7 +4514,7 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
     "Record employee manual-now punch",
-    "Records a current punch for the authenticated employee only. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. This mutation requires an Idempotency-Key: same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+    "Records a current punch for the authenticated employee only. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. This mutation requires an Idempotency-Key: same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
     {
       headers: {
         type: "object",
@@ -4420,7 +4530,13 @@ const routeDocs: Record<string, RouteSchema> = {
         }
       },
       body: attendancePunchBody,
-      response200: { type: "object", additionalProperties: true }
+      response200: attendancePunchCommandResponseSchema,
+      response: {
+        409: {
+          description: "Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable.",
+          content: { "application/json": { schema: errorResponseSchema } }
+        }
+      }
     }
   ),
   "POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches": operation(

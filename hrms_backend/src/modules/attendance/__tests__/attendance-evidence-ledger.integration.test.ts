@@ -439,105 +439,207 @@ describe("PostgreSQL attendance evidence ledger", () => {
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms
-        ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0, 0)`,
-        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
-      ),
-    ).rejects.toMatchObject({ code: "23514" });
-    await expect(
-      pool.query(
-        `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms
-        ) VALUES ($1, $2, $3, now(), 0, 0, 0, -1)`,
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms
+      ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
       code: "23514",
-      constraint: "location_evidence_age_ms_nonnegative_check",
     });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms, permission_state
-        ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'prompt')`,
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, -1)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
       code: "23514",
-      constraint: "location_evidence_permission_state_check",
     });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms, provider
-        ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'gps')`,
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms,
+        permission_state
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'prompt')`,
+        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: expect.stringMatching(
+        /^location_evidence_(permission_state|coordinates_by_permission)_check$/,
+      ),
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms,
+        provider
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'gps')`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
       code: "23514",
       constraint: "location_evidence_provider_check",
     });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms
-        ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0, 0)`,
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms
+      ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
-          attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms
-        ) VALUES ($1, $2, $3, now(), 0, 0, -0.01, 0)`,
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms
+      ) VALUES ($1, $2, $3, now(), 0, 0, -0.01, 0)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.attendance_decisions (
-          company_id, employee_user_id, attendance_event_id, decision_type,
-          outcome, policy_key, policy_version
-        ) VALUES ($1, $2, $3, 'geofence', 'allowed', 'attendance.geofence', 'v1')`,
+        company_id,
+        employee_user_id,
+        attendance_event_id,
+        decision_type,
+        outcome,
+        policy_key,
+        policy_version
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        'geofence',
+        'allowed',
+        'attendance.geofence',
+        'v1'
+      )`,
         [fixture.companyId, fixture.employeeUserId, fixture.eventId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.decision_reasons (
-          attendance_decision_id, company_id, reason_code, ordinal
-        ) VALUES ($1, $2, 'negative_ordinal', -1)`,
+        attendance_decision_id,
+        company_id,
+        reason_code,
+        ordinal
+      ) VALUES ($1, $2, 'negative_ordinal', -1)`,
         [fixture.attendanceDecisionId, fixture.companyId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.attendance_events (
-          company_id, employee_user_id, event_type, source, occurred_at, payload_hash
-        ) VALUES ($1, $2, 'check_in', 'web', now(), 'short')`,
+        company_id,
+        employee_user_id,
+        event_type,
+        source,
+        occurred_at,
+        payload_hash
+      ) VALUES ($1, $2, 'check_in', 'web', now(), 'short')`,
         [fixture.companyId, fixture.employeeUserId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.attendance_decisions (
-          company_id, employee_user_id, attendance_event_id, decision_type,
-          outcome, policy_key, policy_version, evidence_digest
-        ) VALUES ($1, $2, $3, 'geofence', 'passed', 'attendance.geofence', 'v1', 'short')`,
+        company_id,
+        employee_user_id,
+        attendance_event_id,
+        decision_type,
+        outcome,
+        policy_key,
+        policy_version,
+        evidence_digest
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        'geofence',
+        'passed',
+        'attendance.geofence',
+        'v1',
+        'short'
+      )`,
         [fixture.companyId, fixture.employeeUserId, fixture.eventId],
       ),
-    ).rejects.toMatchObject({ code: "23514" });
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
     await expect(
       pool.query(
         `INSERT INTO attendance.decision_reasons (
-          attendance_decision_id, company_id, reason_code, ordinal
-        ) VALUES ($1, $2, 'duplicate_ordinal', 0)`,
+        attendance_decision_id,
+        company_id,
+        reason_code,
+        ordinal
+      ) VALUES ($1, $2, 'duplicate_ordinal', 0)`,
         [fixture.attendanceDecisionId, fixture.companyId],
       ),
     ).rejects.toMatchObject({

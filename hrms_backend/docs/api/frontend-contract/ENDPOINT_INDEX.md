@@ -9158,6 +9158,8 @@ Backend-owned API group.
 
 **Request body**
 
+Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.
+
 Content type: `application/json`
 
 Required: yes
@@ -9166,8 +9168,9 @@ Required: yes
 |---|---|---|---|
 | `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
 | `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
-| `source` | string enum("web", "mobile", "kiosk") | optional | default "web" |
-| `metadata` | object | optional | - |
+| `source` | string enum("web", "web_geo", "mobile", "kiosk") | optional | default "web" |
+| `metadata` | object | optional | Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here. |
+| `location` | unknown | optional | One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates. |
 
 **Responses**
 | Status | Meaning |
@@ -9177,13 +9180,25 @@ Required: yes
 | `401` | Authentication required or invalid session. |
 | `403` | Authenticated actor is not allowed to perform this action. |
 | `404` | Resource not found. |
-| `409` | Optimistic concurrency conflict. |
+| `409` | Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable. |
 | `429` | Rate limit exceeded. Retry after the documented delay. |
 | `500` | Unhandled server error. |
 
 Success body highlights:
 
-Schema: `object`.
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `allowed` | boolean | required | - |
+| `command_id` | string<uuid> | required | Attendance command execution UUID |
+| `decision_id` | string<uuid> | required | Attendance command decision UUID |
+| `session_id` | string<uuid> | optional, nullable | Attendance session UUID |
+| `punch_id` | string<uuid> | required | Attendance punch UUID |
+| `punch` | object | required | - |
+| `day_status` | object | required | - |
+| `next_allowed_actions` | array of string enum("check_in", "break_start", "break_end", "check_out") | required | - |
+| `next_allowed_action` | string enum("check_in", "break_start", "break_end", "check_out") | optional, nullable | - |
+| `punch_policy` | object | optional | - |
+| `geo_policy` | object | required | - |
 
 **Frontend behavior notes**
 

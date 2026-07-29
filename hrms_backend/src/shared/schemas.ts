@@ -347,6 +347,19 @@ export const attendanceLocationEvidenceSchema = z.union([
 
 export type AttendanceLocationEvidenceRequest = z.infer<typeof attendanceLocationEvidenceSchema>;
 
+const attendanceEmployeePunchSourceSchema = z.enum(["web", "web_geo", "mobile", "kiosk"]);
+const untrustedBrowserGeoMetadataKeys = new Set([
+  "geo_policy",
+  "geo_decision",
+  "geo_outcome",
+  "geofence",
+  "geofence_result",
+  "geofence_evaluation",
+  "inside_fence",
+  "outside_fence",
+  "policy_outcome"
+]);
+
 export const attendancePunchSchema = z.object({
   event_type: z.enum([
     AttendancePunchEventTypes.CheckIn,
@@ -355,10 +368,29 @@ export const attendancePunchSchema = z.object({
     AttendancePunchEventTypes.CheckOut
   ]),
   work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
-  source: z.enum(["web", "mobile", "kiosk"]).default("web"),
+  source: attendanceEmployeePunchSourceSchema.default("web"),
   metadata: z.record(z.string(), z.unknown()).default({}),
   location: attendanceLocationEvidenceSchema.optional()
-}).strict();
+}).strict().superRefine((input, context) => {
+  if (input.source !== "web_geo") return;
+  if (!input.location) {
+    context.addIssue({
+      code: "custom",
+      message: "location is required when source is web_geo.",
+      path: ["location"]
+    });
+  }
+  for (const key of Object.keys(input.metadata)) {
+    const normalized = key.trim().toLowerCase().replaceAll("-", "_");
+    if (untrustedBrowserGeoMetadataKeys.has(normalized)) {
+      context.addIssue({
+        code: "custom",
+        message: "Browser geo requests must not submit trusted geo policy or geofence outcomes.",
+        path: ["metadata", key]
+      });
+    }
+  }
+});
 
 export const attendanceAssistedCurrentPunchSchema = z.object({
   event_type: z.enum([
