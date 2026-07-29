@@ -1,4 +1,4 @@
-import type { UUID } from "#shared";
+import { AttendanceCoordinateRetentionDefaults, type UUID } from "#shared";
 
 export const InvalidAttendanceMode = "__invalid_attendance_mode";
 export const InvalidAttendanceGeoPolicyAction = "__invalid_geo_policy_action";
@@ -16,6 +16,12 @@ export type NormalizedAttendanceGeoPolicyAction =
   | typeof InvalidAttendanceGeoPolicyAction;
 export type AttendancePolicySource = "assignment" | "built_in";
 export type AttendanceAssignmentScopeType = "employee" | "department" | "company" | "built_in";
+
+export const AttendanceCoordinateRetentionDefaultClass = AttendanceCoordinateRetentionDefaults.Class;
+export const AttendanceCoordinateRetentionDefaultSeconds = AttendanceCoordinateRetentionDefaults.Seconds;
+export const AttendanceCoordinateRetentionMinSeconds = AttendanceCoordinateRetentionDefaults.MinSeconds;
+export const AttendanceCoordinateRetentionMaxSeconds = AttendanceCoordinateRetentionDefaults.MaxSeconds;
+export const AttendanceCoordinateRetentionClassPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 
 export interface NormalizedAttendancePolicyConfig {
   graceMinutes: number;
@@ -44,6 +50,8 @@ export interface NormalizedAttendancePolicyConfig {
   geofenceGraceMeters: number;
   maxLocationAgeMs: number | null;
   maxAccuracyMeters: number | null;
+  coordinateRetentionClasses: Record<string, number>;
+  defaultCoordinateRetentionClass: string;
 }
 
 export interface EffectiveAttendancePolicy extends NormalizedAttendancePolicyConfig, Record<string, unknown> {
@@ -95,6 +103,10 @@ const defaultAttendancePolicyConfig: NormalizedAttendancePolicyConfig = {
   geofenceGraceMeters: 0,
   maxLocationAgeMs: null,
   maxAccuracyMeters: null,
+  coordinateRetentionClasses: {
+    [AttendanceCoordinateRetentionDefaultClass]: AttendanceCoordinateRetentionDefaultSeconds,
+  },
+  defaultCoordinateRetentionClass: AttendanceCoordinateRetentionDefaultClass,
 };
 
 export function normalizeAttendancePolicyConfig(
@@ -113,6 +125,7 @@ export function normalizeAttendancePolicyConfig(
     "location_unavailable_action",
     actionDefault(config, "locationUnavailableAction", "location_unavailable_action"),
   );
+  const coordinateRetentionClasses = coordinateRetentionClassesConfig(config);
   return {
     graceMinutes: numberConfig(config, "graceMinutes", defaultAttendancePolicyConfig.graceMinutes),
     halfDayAfterMinutes: numberConfig(config, "halfDayAfterMinutes", defaultAttendancePolicyConfig.halfDayAfterMinutes),
@@ -155,7 +168,23 @@ export function normalizeAttendancePolicyConfig(
     geofenceGraceMeters: numberAliasConfig(config, "geofenceGraceMeters", "geofence_grace_meters", defaultAttendancePolicyConfig.geofenceGraceMeters),
     maxLocationAgeMs: positiveIntegerOrNullConfig(config, "maxLocationAgeMs", "max_location_age_ms"),
     maxAccuracyMeters: positiveNumberOrNullConfig(config, "maxAccuracyMeters", "max_accuracy_meters"),
+    coordinateRetentionClasses,
+    defaultCoordinateRetentionClass: defaultCoordinateRetentionClassConfig(config, coordinateRetentionClasses),
   };
+}
+
+export function resolveCoordinateRetention(
+  policy: Pick<NormalizedAttendancePolicyConfig, "coordinateRetentionClasses" | "defaultCoordinateRetentionClass">,
+): { retentionClass: string; retentionSeconds: number } {
+  const retentionClass = policy.defaultCoordinateRetentionClass;
+  const retentionSeconds = policy.coordinateRetentionClasses[retentionClass];
+  if (!retentionSeconds) {
+    return {
+      retentionClass: AttendanceCoordinateRetentionDefaultClass,
+      retentionSeconds: AttendanceCoordinateRetentionDefaultSeconds,
+    };
+  }
+  return { retentionClass, retentionSeconds };
 }
 
 export function builtInAttendancePolicy(asOf: string): EffectiveAttendancePolicy {
@@ -310,4 +339,46 @@ function positiveNumberOrNullConfig(
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
+}
+
+function coordinateRetentionClassesConfig(config: Record<string, unknown>): Record<string, number> {
+  const value = config["coordinateRetentionClasses"] ?? config["coordinate_retention_classes"];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ...defaultAttendancePolicyConfig.coordinateRetentionClasses };
+  }
+  const classes: Record<string, number> = {};
+  for (const [key, seconds] of Object.entries(value as Record<string, unknown>)) {
+    const normalizedKey = key.trim();
+    if (
+      AttendanceCoordinateRetentionClassPattern.test(normalizedKey) &&
+      typeof seconds === "number" &&
+      Number.isInteger(seconds) &&
+      Number.isFinite(seconds) &&
+      seconds >= AttendanceCoordinateRetentionMinSeconds &&
+      seconds <= AttendanceCoordinateRetentionMaxSeconds
+    ) {
+      classes[normalizedKey] = seconds;
+    }
+  }
+  return Object.keys(classes).length > 0
+    ? classes
+    : { ...defaultAttendancePolicyConfig.coordinateRetentionClasses };
+}
+
+function defaultCoordinateRetentionClassConfig(
+  config: Record<string, unknown>,
+  classes: Record<string, number>,
+): string {
+  const value = config["defaultCoordinateRetentionClass"] ?? config["default_coordinate_retention_class"];
+  if (typeof value !== "string") {
+    return classes[AttendanceCoordinateRetentionDefaultClass]
+      ? AttendanceCoordinateRetentionDefaultClass
+      : Object.keys(classes)[0]!;
+  }
+  const normalized = value.trim();
+  return classes[normalized]
+    ? normalized
+    : classes[AttendanceCoordinateRetentionDefaultClass]
+      ? AttendanceCoordinateRetentionDefaultClass
+      : Object.keys(classes)[0]!;
 }

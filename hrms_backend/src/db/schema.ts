@@ -601,24 +601,49 @@ export const attendanceLocationEvidence = attendance.table(
     ageMs: integer("age_ms").notNull(),
     permissionState: text("permission_state").notNull().default("unknown"),
     coordinatesExpireAt: timestamp("coordinates_expire_at", { withTimezone: true }),
+    coordinateRetentionClass: text("coordinate_retention_class"),
+    coordinateRetentionSeconds: integer("coordinate_retention_seconds"),
+    coordinatesPurgedAt: timestamp("coordinates_purged_at", { withTimezone: true }),
+    retentionPolicyVersionId: uuid("retention_policy_version_id"),
     createdAt
   },
   (table) => [
     index("location_evidence_event_captured_idx").on(table.attendanceEventId, table.capturedAt),
     index("location_evidence_employee_captured_idx").on(table.companyId, table.employeeUserId, table.capturedAt.desc()),
+    index("location_evidence_coordinate_purge_due_idx")
+      .on(table.coordinatesExpireAt, table.id)
+      .where(sql`${table.coordinatesExpireAt} IS NOT NULL AND ${table.coordinatesPurgedAt} IS NULL`),
     check("location_evidence_latitude_check", sql`${table.latitude} BETWEEN -90 AND 90`),
     check("location_evidence_longitude_check", sql`${table.longitude} BETWEEN -180 AND 180`),
     check("location_evidence_accuracy_meters_check", sql`${table.accuracyMeters} >= 0`),
     check("location_evidence_age_ms_nonnegative_check", sql`${table.ageMs} >= 0`),
     check("location_evidence_permission_state_check", sql`${table.permissionState} IN ('granted', 'denied', 'unavailable', 'unknown')`),
     check("location_evidence_provider_check", sql`${table.provider} IS NULL OR ${table.provider} IN ('browser', 'device', 'network', 'unknown')`),
+    check("location_evidence_retention_class_check", sql`${table.coordinateRetentionClass} IS NULL OR btrim(${table.coordinateRetentionClass}) <> ''`),
+    check("location_evidence_retention_seconds_check", sql`${table.coordinateRetentionSeconds} IS NULL OR ${table.coordinateRetentionSeconds} BETWEEN 60 AND 315360000`),
     check("location_evidence_coordinates_expire_after_received_check", sql`${table.coordinatesExpireAt} IS NULL OR ${table.coordinatesExpireAt} > ${table.receivedAt}`),
+    check("location_evidence_coordinates_purge_after_received_check", sql`${table.coordinatesPurgedAt} IS NULL OR ${table.coordinatesPurgedAt} >= ${table.receivedAt}`),
     check("location_evidence_coordinates_by_permission_check", sql`(
       (
         ${table.permissionState} IN ('granted', 'unknown')
+        AND ${table.coordinatesPurgedAt} IS NULL
         AND ${table.latitude} IS NOT NULL
         AND ${table.longitude} IS NOT NULL
         AND ${table.accuracyMeters} IS NOT NULL
+        AND ${table.coordinatesExpireAt} IS NOT NULL
+        AND ${table.coordinateRetentionClass} IS NOT NULL
+        AND ${table.coordinateRetentionSeconds} IS NOT NULL
+      )
+      OR
+      (
+        ${table.permissionState} IN ('granted', 'unknown')
+        AND ${table.coordinatesPurgedAt} IS NOT NULL
+        AND ${table.latitude} IS NULL
+        AND ${table.longitude} IS NULL
+        AND ${table.altitudeMeters} IS NULL
+        AND ${table.coordinatesExpireAt} IS NOT NULL
+        AND ${table.coordinateRetentionClass} IS NOT NULL
+        AND ${table.coordinateRetentionSeconds} IS NOT NULL
       )
       OR
       (
@@ -629,6 +654,10 @@ export const attendanceLocationEvidence = attendance.table(
         AND ${table.altitudeMeters} IS NULL
         AND ${table.isMocked} IS NULL
         AND ${table.coordinatesExpireAt} IS NULL
+        AND ${table.coordinatesPurgedAt} IS NULL
+        AND ${table.coordinateRetentionClass} IS NULL
+        AND ${table.coordinateRetentionSeconds} IS NULL
+        AND ${table.retentionPolicyVersionId} IS NULL
       )
     )`),
     foreignKey({
@@ -636,6 +665,49 @@ export const attendanceLocationEvidence = attendance.table(
       columns: [table.attendanceEventId, table.companyId],
       foreignColumns: [attendanceEvents.id, attendanceEvents.companyId]
     }).onUpdate("restrict").onDelete("restrict")
+  ]
+);
+
+export const attendanceLocationAccessAuditLogs = attendance.table(
+  "location_access_audit_logs",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    subjectEmployeeUserId: uuid("subject_employee_user_id"),
+    locationEvidenceId: uuid("location_evidence_id"),
+    attendanceEventId: uuid("attendance_event_id"),
+    action: text("action").notNull(),
+    outcome: text("outcome").notNull().default("allowed"),
+    reasonCode: text("reason_code"),
+    requestId: text("request_id"),
+    operationContext: text("operation_context"),
+    exportRecordCount: integer("export_record_count"),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt
+  },
+  (table) => [
+    index("location_access_audit_company_created_idx").on(table.companyId, table.createdAt.desc()),
+    index("location_access_audit_actor_created_idx").on(table.companyId, table.actorUserId, table.createdAt.desc()),
+    index("location_access_audit_subject_created_idx")
+      .on(table.companyId, table.subjectEmployeeUserId, table.createdAt.desc())
+      .where(sql`${table.subjectEmployeeUserId} IS NOT NULL`),
+    index("location_access_audit_evidence_idx")
+      .on(table.companyId, table.locationEvidenceId, table.createdAt.desc())
+      .where(sql`${table.locationEvidenceId} IS NOT NULL`),
+    check("location_access_audit_action_check", sql`${table.action} IN ('attendance.location_coordinates.viewed', 'attendance.location_coordinates.exported')`),
+    check("location_access_audit_outcome_check", sql`${table.outcome} IN ('allowed', 'denied')`),
+    check("location_access_audit_metadata_object_check", sql`jsonb_typeof(${table.metadata}) = 'object'`),
+    check("location_access_audit_no_coordinate_metadata_check", sql`attendance.location_access_audit_metadata_is_safe(${table.metadata})`),
+    check("location_access_audit_reason_code_check", sql`attendance.location_audit_code_is_safe(${table.reasonCode})`),
+    check("location_access_audit_request_id_check", sql`${table.requestId} IS NULL OR (${table.requestId} ~ '^[A-Za-z0-9_.:-]{1,128}$' AND ${table.requestId} !~ '-?[0-9]{1,3}\\.[0-9]{3,}')`),
+    check("location_access_audit_operation_context_check", sql`attendance.location_audit_code_is_safe(${table.operationContext})`),
+    check("location_access_audit_export_count_check", sql`${table.exportRecordCount} IS NULL OR ${table.exportRecordCount} >= 0`),
+    check("location_access_audit_action_scope_check", sql`(
+      (${table.action} = 'attendance.location_coordinates.viewed' AND ${table.locationEvidenceId} IS NOT NULL AND ${table.attendanceEventId} IS NOT NULL AND ${table.subjectEmployeeUserId} IS NOT NULL)
+      OR
+      (${table.action} = 'attendance.location_coordinates.exported' AND ${table.exportRecordCount} IS NOT NULL)
+    )`),
   ]
 );
 
@@ -2156,6 +2228,7 @@ export const schema = {
   attendanceEmployeeCommandStates,
   attendanceEvents,
   attendanceLocationEvidence,
+  attendanceLocationAccessAuditLogs,
   attendanceDecisions,
   attendanceDecisionReasons,
   attendanceDailyRecords,

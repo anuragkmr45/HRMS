@@ -2,6 +2,7 @@ import {
   AdminNotificationEventKeys,
   AdminPolicyKeys,
   AdminWorkflowApproverTypes,
+  AttendanceCoordinateRetentionDefaults,
   RbacPermissionActions,
   RbacPermissionGroups,
   Roles,
@@ -1787,6 +1788,7 @@ const attendanceModeFields: Record<string, readonly string[]> = {
 const attendanceTimePolicyPattern = /^([01]\d|2[0-3]):[0-5]\d$/u;
 const uuidPolicyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const coordinateRetentionClassPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 
 function normalizeAdminPolicyConfig(
   policyKey: AdminPolicyKey,
@@ -1831,6 +1833,72 @@ function normalizeAdminPolicyConfig(
           field: key,
         });
       }
+    }
+    if (policyKey === "attendance" && key === "coordinateRetentionClasses") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw badRequest("Attendance coordinate retention classes must be an object.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 0 || entries.length > 20) {
+        throw badRequest("Attendance coordinate retention classes must include between 1 and 20 classes.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+      const normalized: Record<string, number> = {};
+      for (const [classId, seconds] of entries) {
+        const normalizedClassId = classId.trim();
+        if (!coordinateRetentionClassPattern.test(normalizedClassId)) {
+          throw badRequest("Attendance coordinate retention class name is invalid.", {
+            policy_key: policyKey,
+            field: key,
+          });
+        }
+        if (
+          typeof seconds !== "number" ||
+          !Number.isInteger(seconds) ||
+          !Number.isFinite(seconds) ||
+          seconds < AttendanceCoordinateRetentionDefaults.MinSeconds ||
+          seconds > AttendanceCoordinateRetentionDefaults.MaxSeconds
+        ) {
+          throw badRequest("Attendance coordinate retention duration is outside the supported range.", {
+            policy_key: policyKey,
+            field: key,
+            min_seconds: AttendanceCoordinateRetentionDefaults.MinSeconds,
+            max_seconds: AttendanceCoordinateRetentionDefaults.MaxSeconds,
+          });
+        }
+        normalized[normalizedClassId] = seconds;
+      }
+      next[key] = normalized;
+      continue;
+    }
+    if (policyKey === "attendance" && key === "defaultCoordinateRetentionClass") {
+      if (typeof value !== "string" || !coordinateRetentionClassPattern.test(value.trim())) {
+        throw badRequest("Attendance default coordinate retention class is invalid.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+      const classes = next.coordinateRetentionClasses;
+      const patchClasses = patch.coordinateRetentionClasses;
+      const classMap =
+        classes && typeof classes === "object" && !Array.isArray(classes)
+          ? classes as Record<string, unknown>
+          : patchClasses && typeof patchClasses === "object" && !Array.isArray(patchClasses)
+            ? patchClasses as Record<string, unknown>
+          : { [AttendanceCoordinateRetentionDefaults.Class]: AttendanceCoordinateRetentionDefaults.Seconds };
+      if (!(value.trim() in classMap)) {
+        throw badRequest("Attendance default coordinate retention class must exist in coordinateRetentionClasses.", {
+          policy_key: policyKey,
+          field: key,
+        });
+      }
+      next[key] = value.trim();
+      continue;
     }
     if (
       policyKey === "attendance" &&
@@ -1915,6 +1983,22 @@ function normalizeAdminPolicyConfig(
       next[key] = trimmed;
     } else {
       next[key] = value;
+    }
+  }
+  if (policyKey === "attendance") {
+    const classes = next.coordinateRetentionClasses;
+    const defaultClass = next.defaultCoordinateRetentionClass;
+    if (
+      classes &&
+      typeof classes === "object" &&
+      !Array.isArray(classes) &&
+      typeof defaultClass === "string" &&
+      !(defaultClass in classes)
+    ) {
+      throw badRequest("Attendance default coordinate retention class must exist in coordinateRetentionClasses.", {
+        policy_key: policyKey,
+        field: "defaultCoordinateRetentionClass",
+      });
     }
   }
   return next;
@@ -2016,6 +2100,8 @@ function adminPolicyConfigKeys(policyKey: AdminPolicyKey): Set<string> {
       "geofenceGraceMeters",
       "maxLocationAgeMs",
       "maxAccuracyMeters",
+      "coordinateRetentionClasses",
+      "defaultCoordinateRetentionClass",
     ],
     leave: [
       "casualPerYear",

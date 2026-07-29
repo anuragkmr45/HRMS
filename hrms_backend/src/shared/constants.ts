@@ -31,6 +31,13 @@ export const Permissions = {
 
 export type PermissionKey = (typeof Permissions)[keyof typeof Permissions];
 
+export const AttendanceCoordinateRetentionDefaults = {
+  Class: "standard",
+  Seconds: 30 * 24 * 60 * 60,
+  MinSeconds: 60,
+  MaxSeconds: 10 * 365 * 24 * 60 * 60
+} as const;
+
 export const RbacPermissionGroups = [
   "Dashboard",
   "Employees",

@@ -48,7 +48,7 @@ import type {
   AdminWorkflowConfigRecord,
   TimesheetSubmission,
   UUID,
-  WfhRequest
+  WfhRequest,
 } from "#shared";
 import {
   type AssetAssignmentRecord,
@@ -73,17 +73,21 @@ import {
   type WorkflowDefinitionRecord,
   buildDefaultAdminMasterDataItems,
   buildDefaultAdminSecuritySettings,
-  createMemoryDataStore
+  createMemoryDataStore,
 } from "./data-store.js";
 import type { EmailDeliveryRecord, EmailEventRecord } from "./email/types.js";
 import { CloudinaryObjectStorage } from "./object-storage.js";
 import { normalizeAttendancePolicyConfig } from "../modules/attendance/policy-config.js";
 
-function optionalSet(values: readonly string[] | undefined): ReadonlySet<string> | undefined {
+function optionalSet(
+  values: readonly string[] | undefined,
+): ReadonlySet<string> | undefined {
   return values?.length ? new Set(values) : undefined;
 }
 
-function hasAnyDomainFlushOption(options: DomainPersistenceFlushOptions): boolean {
+function hasAnyDomainFlushOption(
+  options: DomainPersistenceFlushOptions,
+): boolean {
   return Boolean(
     options.userIds?.length ||
     options.companyIds?.length ||
@@ -94,11 +98,15 @@ function hasAnyDomainFlushOption(options: DomainPersistenceFlushOptions): boolea
     options.emsLetterIds?.length ||
     options.emsPolicyIds?.length ||
     options.emsAdminChecklistIds?.length ||
-    options.emsProbationReviewIds?.length
+    options.emsProbationReviewIds?.length,
   );
 }
 
-function shouldFlushId(id: string, filter: ReadonlySet<string> | undefined, filtered: boolean): boolean {
+function shouldFlushId(
+  id: string,
+  filter: ReadonlySet<string> | undefined,
+  filtered: boolean,
+): boolean {
   return filtered ? Boolean(filter?.has(id)) : true;
 }
 
@@ -152,6 +160,7 @@ const resetTables = [
   "attendance.employee_command_states",
   "attendance.command_decisions",
   "attendance.command_executions",
+  "attendance.location_access_audit_logs",
   "attendance.decision_reasons",
   "attendance.attendance_decisions",
   "attendance.location_evidence",
@@ -212,7 +221,7 @@ const resetTables = [
   "core.roles",
   "core.users",
   "core.designations",
-  "core.departments"
+  "core.departments",
 ];
 
 function asIso(value: unknown): string {
@@ -238,16 +247,22 @@ function asDateOrNull(value: unknown): string | null {
 }
 
 function asMoney(value: unknown): string | null {
-  return value === null || value === undefined ? null : Number(value).toFixed(2);
+  return value === null || value === undefined
+    ? null
+    : Number(value).toFixed(2);
 }
 
 function json(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function booleanRecord(value: unknown): Record<string, boolean> {
   return Object.fromEntries(
-    Object.entries(json(value)).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
+    Object.entries(json(value)).filter(
+      (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+    ),
   );
 }
 
@@ -309,8 +324,10 @@ function copyData(target: DataStore, source: DataStore): void {
   target.attendancePunches = source.attendancePunches;
   target.attendanceDayRecords = source.attendanceDayRecords;
   target.attendanceRegularizations = source.attendanceRegularizations;
-  target.attendanceRegularizationActions = source.attendanceRegularizationActions;
-  target.attendanceRegularizationCorrectionApplications = source.attendanceRegularizationCorrectionApplications;
+  target.attendanceRegularizationActions =
+    source.attendanceRegularizationActions;
+  target.attendanceRegularizationCorrectionApplications =
+    source.attendanceRegularizationCorrectionApplications;
   target.leaveRequests = source.leaveRequests;
   target.wfhRequests = source.wfhRequests;
   target.holidays = source.holidays;
@@ -336,13 +353,19 @@ function migrationSql(): string {
       .filter((file) => file.endsWith(".sql"))
       .sort();
     if (files.length > 0) {
-      return files.map((file) => readFileSync(`${directory}/${file}`, "utf8")).join("\n");
+      return files
+        .map((file) => readFileSync(`${directory}/${file}`, "utf8"))
+        .join("\n");
     }
   }
-  throw new Error("SQL migrations are missing from src/db/migrations or dist/src/db/migrations");
+  throw new Error(
+    "SQL migrations are missing from src/db/migrations or dist/src/db/migrations",
+  );
 }
 
-export async function resetPostgresDatabase(databaseUrl: string): Promise<void> {
+export async function resetPostgresDatabase(
+  databaseUrl: string,
+): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   let schemaLockAcquired = false;
@@ -361,7 +384,9 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
   } finally {
     if (schemaLockAcquired) {
       await client
-        .query("SELECT pg_advisory_unlock(hashtext('hrms_postgres_schema_reset'))")
+        .query(
+          "SELECT pg_advisory_unlock(hashtext('hrms_postgres_schema_reset'))",
+        )
         .catch(() => undefined);
     }
     client.release();
@@ -369,7 +394,9 @@ export async function resetPostgresDatabase(databaseUrl: string): Promise<void> 
   }
 }
 
-export async function createPostgresDataStore(options: PostgresDataStoreOptions): Promise<DataStore> {
+export async function createPostgresDataStore(
+  options: PostgresDataStoreOptions,
+): Promise<DataStore> {
   const pool = new Pool({ connectionString: options.databaseUrl });
   const objectStorage = new CloudinaryObjectStorage(options.objectStorage);
   await objectStorage.ensureReady();
@@ -407,7 +434,7 @@ export async function createPostgresDataStore(options: PostgresDataStoreOptions)
 class PostgresPersistence {
   constructor(
     private readonly pool: Pool,
-    private readonly store: DataStore
+    private readonly store: DataStore,
   ) {}
 
   async reload(): Promise<void> {
@@ -422,16 +449,21 @@ class PostgresPersistence {
       loaded.adminWorkflows = await this.loadAdminWorkflows(client);
       loaded.adminPolicies = await this.loadAdminPolicies(client);
       loaded.adminEmailTemplates = await this.loadAdminEmailTemplates(client);
-      loaded.adminNotificationChannels = await this.loadAdminNotificationChannels(client);
-      loaded.adminSecuritySettings = await this.loadAdminSecuritySettings(client);
+      loaded.adminNotificationChannels =
+        await this.loadAdminNotificationChannels(client);
+      loaded.adminSecuritySettings =
+        await this.loadAdminSecuritySettings(client);
       loaded.adminMasterDataItems = await this.loadAdminMasterDataItems(client);
       loaded.users = await this.loadUsers(client);
       loaded.userCredentials = await this.loadUserCredentials(client);
       loaded.authTokens = await this.loadAuthTokens(client);
       loaded.companyProfiles = await this.loadCompanyProfiles(client);
-      loaded.userSessionPreferences = await this.loadUserSessionPreferences(client);
-      loaded.financeGovernanceConfig = await this.loadFinanceGovernanceConfig(client);
-      loaded.managerBackupAssignments = await this.loadManagerBackupAssignments(client);
+      loaded.userSessionPreferences =
+        await this.loadUserSessionPreferences(client);
+      loaded.financeGovernanceConfig =
+        await this.loadFinanceGovernanceConfig(client);
+      loaded.managerBackupAssignments =
+        await this.loadManagerBackupAssignments(client);
       loaded.tickets = await this.loadTickets(client);
       loaded.lineItems = await this.loadLineItems(client);
       loaded.expenseApprovals = await this.loadExpenseApprovals(client);
@@ -449,8 +481,10 @@ class PostgresPersistence {
       loaded.assetAssignments = await this.loadAssetAssignments(client);
       loaded.assetStateEvents = await this.loadAssetStateEvents(client);
       loaded.assetRequests = await this.loadAssetRequests(client);
-      loaded.assetAcknowledgements = await this.loadAssetAcknowledgements(client);
-      loaded.assetMaintenanceRecords = await this.loadAssetMaintenanceRecords(client);
+      loaded.assetAcknowledgements =
+        await this.loadAssetAcknowledgements(client);
+      loaded.assetMaintenanceRecords =
+        await this.loadAssetMaintenanceRecords(client);
       loaded.assetVendors = await this.loadAssetVendors(client);
       loaded.assetRecoveryTickets = await this.loadAssetRecoveryTickets(client);
       loaded.licenseEntitlements = await this.loadLicenseEntitlements(client);
@@ -471,21 +505,29 @@ class PostgresPersistence {
       loaded.helpdeskEvents = await this.loadHelpdeskEvents(client);
       loaded.attendancePunches = await this.loadAttendancePunches(client);
       loaded.attendanceDayRecords = await this.loadAttendanceDayRecords(client);
-      loaded.attendanceRegularizations = await this.loadAttendanceRegularizations(client);
-      loaded.attendanceRegularizationActions = await this.loadAttendanceRegularizationActions(client);
-      loaded.attendanceRegularizationCorrectionApplications = await this.loadAttendanceRegularizationCorrectionApplications(client);
+      loaded.attendanceRegularizations =
+        await this.loadAttendanceRegularizations(client);
+      loaded.attendanceRegularizationActions =
+        await this.loadAttendanceRegularizationActions(client);
+      loaded.attendanceRegularizationCorrectionApplications =
+        await this.loadAttendanceRegularizationCorrectionApplications(client);
       loaded.leaveRequests = await this.loadLeaveRequests(client);
       loaded.wfhRequests = await this.loadWfhRequests(client);
       loaded.holidays = await this.loadHolidays(client);
       loaded.emsEmployeeProfiles = await this.loadEmsEmployeeProfiles(client);
-      loaded.emsProfileChangeRequests = await this.loadEmsProfileChangeRequests(client);
+      loaded.emsProfileChangeRequests =
+        await this.loadEmsProfileChangeRequests(client);
       loaded.emsServiceRequests = await this.loadEmsServiceRequests(client);
       loaded.emsLetters = await this.loadEmsLetters(client);
       loaded.emsPolicies = await this.loadEmsPolicies(client);
-      loaded.emsPolicyAcknowledgements = await this.loadEmsPolicyAcknowledgements(client);
+      loaded.emsPolicyAcknowledgements =
+        await this.loadEmsPolicyAcknowledgements(client);
       loaded.emsAdminChecklists = await this.loadEmsAdminChecklists(client);
       loaded.emsProbationReviews = await this.loadEmsProbationReviews(client);
-      loaded.nextOutboxId = Math.max(1, ...loaded.outbox.map((event) => event.id + 1));
+      loaded.nextOutboxId = Math.max(
+        1,
+        ...loaded.outbox.map((event) => event.id + 1),
+      );
       loaded.nextTicketNo = this.nextTicketNumber(loaded.tickets);
       copyData(this.store, loaded);
     } finally {
@@ -532,7 +574,9 @@ class PostgresPersistence {
     }
   }
 
-  async flushCompanyBootstrap(options: AuthPersistenceFlushOptions = {}): Promise<void> {
+  async flushCompanyBootstrap(
+    options: AuthPersistenceFlushOptions = {},
+  ): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -548,7 +592,9 @@ class PostgresPersistence {
     }
   }
 
-  async flushCompanyLogo(options: CompanyLogoPersistenceFlushOptions = {}): Promise<void> {
+  async flushCompanyLogo(
+    options: CompanyLogoPersistenceFlushOptions = {},
+  ): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -565,7 +611,10 @@ class PostgresPersistence {
     }
   }
 
-  async flushDomain(domain: PersistenceDomain, options: DomainPersistenceFlushOptions = {}): Promise<void> {
+  async flushDomain(
+    domain: PersistenceDomain,
+    options: DomainPersistenceFlushOptions = {},
+  ): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -575,12 +624,15 @@ class PostgresPersistence {
           await this.flushAuthCore(client, { userIds: options.userIds });
           await this.flushAuthPlatform(client, {
             userIds: options.userIds,
-            companyIds: options.companyIds
+            companyIds: options.companyIds,
           });
           if (options.documentIds?.length) {
             await this.flushDocuments(client, optionalSet(options.documentIds));
           }
-          await this.flushOutbox(client, aggregateIds ?? optionalSet(options.userIds));
+          await this.flushOutbox(
+            client,
+            aggregateIds ?? optionalSet(options.userIds),
+          );
           break;
         case "platform":
           await this.flushPlatform(client);
@@ -591,7 +643,10 @@ class PostgresPersistence {
           break;
         case "documents":
           await this.flushDocuments(client, optionalSet(options.documentIds));
-          await this.flushOutbox(client, aggregateIds ?? optionalSet(options.documentIds));
+          await this.flushOutbox(
+            client,
+            aggregateIds ?? optionalSet(options.documentIds),
+          );
           break;
         case "assets":
           await this.flushAssets(client);
@@ -635,7 +690,10 @@ class PostgresPersistence {
   }
 
   async close(): Promise<void> {
-    if ("close" in this.store.sessionStore && typeof this.store.sessionStore.close === "function") {
+    if (
+      "close" in this.store.sessionStore &&
+      typeof this.store.sessionStore.close === "function"
+    ) {
       await this.store.sessionStore.close();
     }
     await this.pool.end();
@@ -649,7 +707,10 @@ class PostgresPersistence {
     return max + 1;
   }
 
-  private async flushAuthPlatform(client: PoolClient, options: AuthPersistenceFlushOptions): Promise<void> {
+  private async flushAuthPlatform(
+    client: PoolClient,
+    options: AuthPersistenceFlushOptions,
+  ): Promise<void> {
     const companyIds = optionalSet(options.companyIds);
     const userIds = optionalSet(options.userIds);
 
@@ -675,13 +736,18 @@ class PostgresPersistence {
           preference.timezone,
           preference.created_at,
           preference.updated_at,
-          preference.version
-        ]
+          preference.version,
+        ],
       );
     }
     for (const token of this.store.authTokens) {
       if (userIds && (!token.user_id || !userIds.has(token.user_id))) continue;
-      if (!userIds && companyIds && (!token.company_id || !companyIds.has(token.company_id))) continue;
+      if (
+        !userIds &&
+        companyIds &&
+        (!token.company_id || !companyIds.has(token.company_id))
+      )
+        continue;
       await client.query(
         `INSERT INTO platform.auth_tokens (
           id, token_hash, token_type, user_id, email, company_id, status, expires_at, used_at,
@@ -711,12 +777,13 @@ class PostgresPersistence {
           token.last_sent_at,
           token.send_count,
           token.created_at,
-          JSON.stringify(token.metadata)
-        ]
+          JSON.stringify(token.metadata),
+        ],
       );
     }
     for (const delivery of this.store.emailDeliveries) {
-      if (userIds && (!delivery.user_id || !userIds.has(delivery.user_id))) continue;
+      if (userIds && (!delivery.user_id || !userIds.has(delivery.user_id)))
+        continue;
       await client.query(
         `INSERT INTO platform.email_deliveries (
           id, provider, template_key, purpose, user_id, email, subject, status, provider_email_id,
@@ -759,13 +826,16 @@ class PostgresPersistence {
           JSON.stringify(delivery.metadata),
           delivery.created_at,
           delivery.updated_at,
-          delivery.version
-        ]
+          delivery.version,
+        ],
       );
     }
   }
 
-  private async flushCompanyProfiles(client: PoolClient, companyIds?: ReadonlySet<string>): Promise<void> {
+  private async flushCompanyProfiles(
+    client: PoolClient,
+    companyIds?: ReadonlySet<string>,
+  ): Promise<void> {
     for (const company of this.store.companyProfiles) {
       if (companyIds && !companyIds.has(company.id)) continue;
       await client.query(
@@ -813,26 +883,36 @@ class PostgresPersistence {
           company.bootstrap_completed_at,
           company.created_at,
           company.updated_at,
-          company.version
-        ]
+          company.version,
+        ],
       );
     }
   }
 
   private async loadDepartments(client: PoolClient): Promise<Department[]> {
     const { rows } = await client.query(
-      "SELECT id, company_id, department_code, name, cost_center, parent_department_id, director_user_id, status, deleted_at, version FROM core.departments ORDER BY department_code"
+      "SELECT id, company_id, department_code, name, cost_center, parent_department_id, director_user_id, status, deleted_at, version FROM core.departments ORDER BY department_code",
     );
-    return rows.map((row) => ({ ...row, deleted_at: asIsoOrNull(row.deleted_at) }));
+    return rows.map((row) => ({
+      ...row,
+      deleted_at: asIsoOrNull(row.deleted_at),
+    }));
   }
 
   private async loadDesignations(client: PoolClient): Promise<Designation[]> {
-    const { rows } = await client.query("SELECT id, company_id, designation_code, title, level, status, deleted_at, version FROM core.designations ORDER BY level NULLS LAST, designation_code");
-    return rows.map((row) => ({ ...row, deleted_at: asIsoOrNull(row.deleted_at) }));
+    const { rows } = await client.query(
+      "SELECT id, company_id, designation_code, title, level, status, deleted_at, version FROM core.designations ORDER BY level NULLS LAST, designation_code",
+    );
+    return rows.map((row) => ({
+      ...row,
+      deleted_at: asIsoOrNull(row.deleted_at),
+    }));
   }
 
   private async loadRbacRoles(client: PoolClient) {
-    const { rows } = await client.query("SELECT id, role_key, name, description, status, builtin, created_at, updated_at, deleted_at, version FROM core.roles ORDER BY role_key");
+    const { rows } = await client.query(
+      "SELECT id, role_key, name, description, status, builtin, created_at, updated_at, deleted_at, version FROM core.roles ORDER BY role_key",
+    );
     return rows.map((row) => ({
       id: row.id,
       role_key: row.role_key,
@@ -843,12 +923,14 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
   private async loadRbacRolePermissions(client: PoolClient) {
-    const { rows } = await client.query("SELECT id, role_key, permission_id, status, created_at, updated_at, deleted_at FROM core.role_permissions ORDER BY role_key, permission_id");
+    const { rows } = await client.query(
+      "SELECT id, role_key, permission_id, status, created_at, updated_at, deleted_at FROM core.role_permissions ORDER BY role_key, permission_id",
+    );
     return rows.map((row) => ({
       id: row.id,
       role_key: row.role_key,
@@ -856,11 +938,13 @@ class PostgresPersistence {
       status: row.status,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAdminWorkflows(client: PoolClient): Promise<AdminWorkflowConfigRecord[]> {
+  private async loadAdminWorkflows(
+    client: PoolClient,
+  ): Promise<AdminWorkflowConfigRecord[]> {
     const { rows } = await client.query(`
       SELECT id, workflow_key, module, label, status, stages, created_at, updated_at, deleted_at, version
       FROM platform.admin_workflows
@@ -876,11 +960,13 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadAdminPolicies(client: PoolClient): Promise<AdminPolicyConfigRecord[]> {
+  private async loadAdminPolicies(
+    client: PoolClient,
+  ): Promise<AdminPolicyConfigRecord[]> {
     const { rows } = await client.query(`
       SELECT id, company_id, policy_key, module, label, status, config, created_at, updated_at, deleted_at, version
       FROM platform.admin_policies
@@ -897,11 +983,13 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadAdminEmailTemplates(client: PoolClient): Promise<AdminEmailTemplateRecord[]> {
+  private async loadAdminEmailTemplates(
+    client: PoolClient,
+  ): Promise<AdminEmailTemplateRecord[]> {
     const { rows } = await client.query(`
       SELECT id, template_key, module, name, subject, body, locale, status, created_at, updated_at, deleted_at, version
       FROM platform.admin_email_templates
@@ -919,11 +1007,13 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadAdminNotificationChannels(client: PoolClient): Promise<AdminNotificationChannelRecord[]> {
+  private async loadAdminNotificationChannels(
+    client: PoolClient,
+  ): Promise<AdminNotificationChannelRecord[]> {
     const { rows } = await client.query(`
       SELECT id, event_key, module, label, in_app_enabled, email_enabled, push_enabled, status, created_at, updated_at, deleted_at, version
       FROM platform.admin_notification_channels
@@ -941,11 +1031,13 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadAdminSecuritySettings(client: PoolClient): Promise<AdminSecuritySettingsRecord> {
+  private async loadAdminSecuritySettings(
+    client: PoolClient,
+  ): Promise<AdminSecuritySettingsRecord> {
     const { rows } = await client.query(`
       SELECT
         id, settings_key, password_min_length, password_require_special, password_require_number,
@@ -974,11 +1066,13 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     };
   }
 
-  private async loadAdminMasterDataItems(client: PoolClient): Promise<AdminMasterDataItemRecord[]> {
+  private async loadAdminMasterDataItems(
+    client: PoolClient,
+  ): Promise<AdminMasterDataItemRecord[]> {
     const { rows } = await client.query(`
       SELECT id, master_key, code, name, description, status, sort_order, metadata, created_at, updated_at, deleted_at, version
       FROM platform.admin_master_data_items
@@ -999,7 +1093,7 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
@@ -1024,11 +1118,13 @@ class PostgresPersistence {
       email_verification_status: row.email_verification_status ?? "unverified",
       joined_on: asDateOrNull(row.joined_on),
       terminated_on: asDateOrNull(row.terminated_on),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadUserCredentials(client: PoolClient): Promise<DataStore["userCredentials"]> {
+  private async loadUserCredentials(
+    client: PoolClient,
+  ): Promise<DataStore["userCredentials"]> {
     const { rows } = await client.query(`
       SELECT id, user_id, password_hash, status, created_at, updated_at, deleted_at
       FROM platform.user_credentials
@@ -1042,10 +1138,9 @@ class PostgresPersistence {
       status: row.status,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
-
 
   private async loadAuthTokens(client: PoolClient): Promise<AuthTokenRecord[]> {
     const { rows } = await client.query(`
@@ -1070,11 +1165,13 @@ class PostgresPersistence {
       last_sent_at: asIsoOrNull(row.last_sent_at),
       send_count: row.send_count ?? 0,
       created_at: asIso(row.created_at),
-      metadata: json(row.metadata)
+      metadata: json(row.metadata),
     }));
   }
 
-  private async loadCompanyProfiles(client: PoolClient): Promise<CompanyProfileRecord[]> {
+  private async loadCompanyProfiles(
+    client: PoolClient,
+  ): Promise<CompanyProfileRecord[]> {
     const { rows } = await client.query(`
       SELECT id, company_name, company_slug, website, industry, address, timezone, locale, currency,
         fiscal_year_start_month, working_week, work_hours_per_day, logo_label,
@@ -1101,16 +1198,19 @@ class PostgresPersistence {
       logo_url: row.logo_url,
       logo_file_name: row.logo_file_name,
       logo_mime_type: row.logo_mime_type,
-      logo_size_bytes: row.logo_size_bytes === null ? null : Number(row.logo_size_bytes),
+      logo_size_bytes:
+        row.logo_size_bytes === null ? null : Number(row.logo_size_bytes),
       status: row.status,
       bootstrap_completed_at: asIsoOrNull(row.bootstrap_completed_at),
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadUserSessionPreferences(client: PoolClient): Promise<UserSessionPreferenceRecord[]> {
+  private async loadUserSessionPreferences(
+    client: PoolClient,
+  ): Promise<UserSessionPreferenceRecord[]> {
     const { rows } = await client.query(`
       SELECT id, user_id, active_role, company_id, landing_page, locale, timezone, created_at, updated_at, version
       FROM platform.user_session_preferences
@@ -1126,11 +1226,13 @@ class PostgresPersistence {
       timezone: row.timezone,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadFinanceGovernanceConfig(client: PoolClient): Promise<FinanceGovernanceConfig | null> {
+  private async loadFinanceGovernanceConfig(
+    client: PoolClient,
+  ): Promise<FinanceGovernanceConfig | null> {
     const { rows } = await client.query(`
       SELECT
         id,
@@ -1161,7 +1263,9 @@ class PostgresPersistence {
       scope_key: row.scope_key,
       primary_finance_manager_user_id: row.primary_finance_manager_user_id,
       manager_backup_user_id: row.manager_backup_user_id,
-      finance_approval_backup_user_id: row.finance_approval_backup_user_id ?? row.finance_self_request_fallback_user_id,
+      finance_approval_backup_user_id:
+        row.finance_approval_backup_user_id ??
+        row.finance_self_request_fallback_user_id,
       status: row.status,
       effective_from: asDate(row.effective_from),
       effective_to: asDateOrNull(row.effective_to),
@@ -1169,16 +1273,21 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     };
   }
 
-  private async loadManagerBackupAssignments(client: PoolClient): Promise<ManagerBackupAssignment[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.employee_reviewer_mappings ORDER BY created_at, id");
+  private async loadManagerBackupAssignments(
+    client: PoolClient,
+  ): Promise<ManagerBackupAssignment[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.employee_reviewer_mappings ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
-      backup_manager_user_id: row.backup_manager_user_id ?? row.reviewer_user_id,
+      backup_manager_user_id:
+        row.backup_manager_user_id ?? row.reviewer_user_id,
       assigned_by_user_id: row.assigned_by_user_id,
       effective_from: asDate(row.effective_from),
       effective_to: asDateOrNull(row.effective_to),
@@ -1186,12 +1295,14 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
       deleted_at: asIsoOrNull(row.deleted_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
   private async loadTickets(client: PoolClient): Promise<ExpenseTicket[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_tickets ORDER BY created_at, ticket_no");
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_tickets ORDER BY created_at, ticket_no",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_no: row.ticket_no,
@@ -1211,7 +1322,10 @@ class PostgresPersistence {
       payment_type: row.payment_type,
       advance_amount: asMoney(row.advance_amount),
       advance_justification: row.advance_justification,
-      manager_verifier_id: row.manager_verifier_id ?? row.assigned_reviewer_id ?? row.director_approver_id,
+      manager_verifier_id:
+        row.manager_verifier_id ??
+        row.assigned_reviewer_id ??
+        row.director_approver_id,
       manager_backup_user_id: row.manager_backup_user_id,
       finance_approver_id: row.finance_approver_id ?? row.finance_manager_id,
       status: row.status,
@@ -1227,12 +1341,14 @@ class PostgresPersistence {
       updated_at: asIso(row.updated_at),
       submitted_at: asIsoOrNull(row.submitted_at),
       closed_at: asIsoOrNull(row.closed_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
   private async loadLineItems(client: PoolClient): Promise<ExpenseLineItem[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_line_items ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_line_items ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1242,12 +1358,16 @@ class PostgresPersistence {
       unit_cost: asMoney(row.unit_cost),
       line_total: asMoney(row.line_total) ?? "0.00",
       tax_amount: asMoney(row.tax_amount),
-      vendor_name: row.vendor_name
+      vendor_name: row.vendor_name,
     }));
   }
 
-  private async loadExpenseApprovals(client: PoolClient): Promise<ExpenseApprovalRecord[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_approvals ORDER BY created_at, id");
+  private async loadExpenseApprovals(
+    client: PoolClient,
+  ): Promise<ExpenseApprovalRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_approvals ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1259,12 +1379,14 @@ class PostgresPersistence {
       designation_snapshot: row.designation_snapshot,
       route_snapshot: json(row.route_snapshot),
       action_at: asIso(row.action_at),
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
   private async loadAuditLogs(client: PoolClient): Promise<ExpenseAuditLog[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_audit_logs ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_audit_logs ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1274,17 +1396,23 @@ class PostgresPersistence {
       new_value: row.new_value,
       remarks: row.remarks,
       payload_hash: row.payload_hash,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
-  private async loadExpenseDocuments(client: PoolClient): Promise<ExpenseDocument[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_documents ORDER BY uploaded_at, id");
+  private async loadExpenseDocuments(
+    client: PoolClient,
+  ): Promise<ExpenseDocument[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_documents ORDER BY uploaded_at, id",
+    );
     return rows.map((row) => ({ ...row, uploaded_at: asIso(row.uploaded_at) }));
   }
 
   private async loadPayments(client: PoolClient): Promise<ExpensePayment[]> {
-    const { rows } = await client.query("SELECT * FROM expenses.expense_payments ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM expenses.expense_payments ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1297,12 +1425,14 @@ class PostgresPersistence {
       settlement_status: row.settlement_status,
       settlement_amount: asMoney(row.settlement_amount),
       processed_by_user_id: row.processed_by_user_id,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
   private async loadDocuments(client: PoolClient): Promise<DocumentMetadata[]> {
-    const { rows } = await client.query("SELECT * FROM documents.doc_metadata ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM documents.doc_metadata ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       business_object_type: row.business_object_type,
@@ -1320,12 +1450,16 @@ class PostgresPersistence {
       created_by_user_id: row.created_by_user_id,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadDocumentVersions(client: PoolClient): Promise<DocumentVersionRecord[]> {
-    const { rows } = await client.query("SELECT * FROM documents.doc_versions ORDER BY created_at, id");
+  private async loadDocumentVersions(
+    client: PoolClient,
+  ): Promise<DocumentVersionRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM documents.doc_versions ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       document_id: row.document_id,
@@ -1335,12 +1469,16 @@ class PostgresPersistence {
       size_bytes: Number(row.size_bytes),
       checksum_sha256: row.checksum_sha256,
       created_by_user_id: row.created_by_user_id,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
-  private async loadDocumentAccessLogs(client: PoolClient): Promise<DocumentAccessLogRecord[]> {
-    const { rows } = await client.query("SELECT * FROM documents.doc_access_logs ORDER BY created_at, id");
+  private async loadDocumentAccessLogs(
+    client: PoolClient,
+  ): Promise<DocumentAccessLogRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM documents.doc_access_logs ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       document_id: row.document_id,
@@ -1348,12 +1486,16 @@ class PostgresPersistence {
       action: row.action,
       decision: row.decision,
       reason: row.reason,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
-  private async loadNotifications(client: PoolClient): Promise<NotificationRecord[]> {
-    const { rows } = await client.query("SELECT * FROM platform.notifications ORDER BY created_at, id");
+  private async loadNotifications(
+    client: PoolClient,
+  ): Promise<NotificationRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM platform.notifications ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       actor_user_id: row.actor_user_id,
@@ -1364,11 +1506,13 @@ class PostgresPersistence {
       read_at: asIsoOrNull(row.read_at),
       version: row.version,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadEmailDeliveries(client: PoolClient): Promise<EmailDeliveryRecord[]> {
+  private async loadEmailDeliveries(
+    client: PoolClient,
+  ): Promise<EmailDeliveryRecord[]> {
     const { rows } = await client.query(`
       SELECT id, provider, template_key, purpose, user_id, email, subject, status, provider_email_id,
         idempotency_key, error_code, error_message, queued_at, sent_at, delivered_at, failed_at,
@@ -1398,11 +1542,13 @@ class PostgresPersistence {
       metadata: json(row.metadata),
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      version: row.version
+      version: row.version,
     }));
   }
 
-  private async loadEmailEvents(client: PoolClient): Promise<EmailEventRecord[]> {
+  private async loadEmailEvents(
+    client: PoolClient,
+  ): Promise<EmailEventRecord[]> {
     const { rows } = await client.query(`
       SELECT id, provider, provider_event_id, provider_email_id, event_type, email, delivery_id, payload, received_at, processed_at
       FROM platform.email_events
@@ -1418,12 +1564,14 @@ class PostgresPersistence {
       delivery_id: row.delivery_id,
       payload: json(row.payload),
       received_at: asIso(row.received_at),
-      processed_at: asIsoOrNull(row.processed_at)
+      processed_at: asIsoOrNull(row.processed_at),
     }));
   }
 
   private async loadOutbox(client: PoolClient): Promise<OutboxEvent[]> {
-    const { rows } = await client.query("SELECT * FROM platform.outbox_events ORDER BY id");
+    const { rows } = await client.query(
+      "SELECT * FROM platform.outbox_events ORDER BY id",
+    );
     return rows.map((row) => ({
       id: Number(row.id),
       event_id: row.event_id,
@@ -1438,12 +1586,14 @@ class PostgresPersistence {
       created_at: asIso(row.created_at),
       published_at: asIsoOrNull(row.published_at),
       failed_at: asIsoOrNull(row.failed_at),
-      last_error: row.last_error
+      last_error: row.last_error,
     }));
   }
 
   private async loadAssets(client: PoolClient): Promise<AssetRecord[]> {
-    const { rows } = await client.query("SELECT * FROM assets.assets ORDER BY created_at, asset_code");
+    const { rows } = await client.query(
+      "SELECT * FROM assets.assets ORDER BY created_at, asset_code",
+    );
     return rows.map((row) => ({
       id: row.id,
       asset_code: row.asset_code,
@@ -1457,12 +1607,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAssetAssignments(client: PoolClient): Promise<AssetAssignmentRecord[]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_assignments ORDER BY created_at, id");
+  private async loadAssetAssignments(
+    client: PoolClient,
+  ): Promise<AssetAssignmentRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_assignments ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       asset_id: row.asset_id,
@@ -1472,24 +1626,32 @@ class PostgresPersistence {
       returned_at: asIsoOrNull(row.returned_at),
       status: row.status,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadAssetStateEvents(client: PoolClient): Promise<AssetStateEventRecord[]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_state_events ORDER BY created_at, id");
+  private async loadAssetStateEvents(
+    client: PoolClient,
+  ): Promise<AssetStateEventRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_state_events ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       asset_id: row.asset_id,
       actor_user_id: row.actor_user_id,
       event_type: row.event_type,
       payload: json(row.payload),
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
-  private async loadAssetRequests(client: PoolClient): Promise<DataStore["assetRequests"]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_requests ORDER BY created_at, id");
+  private async loadAssetRequests(
+    client: PoolClient,
+  ): Promise<DataStore["assetRequests"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_requests ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       request_code: row.request_code,
@@ -1509,12 +1671,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAssetAcknowledgements(client: PoolClient): Promise<DataStore["assetAcknowledgements"]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_acknowledgements ORDER BY created_at, id");
+  private async loadAssetAcknowledgements(
+    client: PoolClient,
+  ): Promise<DataStore["assetAcknowledgements"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_acknowledgements ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       asset_id: row.asset_id,
@@ -1525,12 +1691,16 @@ class PostgresPersistence {
       acknowledged_at: asIsoOrNull(row.acknowledged_at),
       version: row.version,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadAssetMaintenanceRecords(client: PoolClient): Promise<DataStore["assetMaintenanceRecords"]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_maintenance_records ORDER BY created_at, id");
+  private async loadAssetMaintenanceRecords(
+    client: PoolClient,
+  ): Promise<DataStore["assetMaintenanceRecords"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_maintenance_records ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       asset_id: row.asset_id,
@@ -1544,12 +1714,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAssetVendors(client: PoolClient): Promise<DataStore["assetVendors"]> {
-    const { rows } = await client.query("SELECT * FROM assets.software_vendors ORDER BY name, id");
+  private async loadAssetVendors(
+    client: PoolClient,
+  ): Promise<DataStore["assetVendors"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.software_vendors ORDER BY name, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -1560,12 +1734,16 @@ class PostgresPersistence {
       version: row.version ?? 1,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at ?? row.created_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAssetRecoveryTickets(client: PoolClient): Promise<DataStore["assetRecoveryTickets"]> {
-    const { rows } = await client.query("SELECT * FROM assets.asset_recovery_tickets ORDER BY created_at, id");
+  private async loadAssetRecoveryTickets(
+    client: PoolClient,
+  ): Promise<DataStore["assetRecoveryTickets"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.asset_recovery_tickets ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -1578,24 +1756,32 @@ class PostgresPersistence {
       settled_at: asIsoOrNull(row.settled_at),
       version: row.version ?? 1,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadLicenseEntitlements(client: PoolClient): Promise<LicenseEntitlement[]> {
-    const { rows } = await client.query("SELECT * FROM assets.license_entitlements ORDER BY created_at, id");
+  private async loadLicenseEntitlements(
+    client: PoolClient,
+  ): Promise<LicenseEntitlement[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.license_entitlements ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       product_id: row.product_id,
       seat_count: row.seat_count,
       status: row.status,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadLicenseActivations(client: PoolClient): Promise<LicenseActivation[]> {
-    const { rows } = await client.query("SELECT * FROM assets.license_activations ORDER BY created_at, id");
+  private async loadLicenseActivations(
+    client: PoolClient,
+  ): Promise<LicenseActivation[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.license_activations ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       product_id: row.product_id,
@@ -1603,22 +1789,28 @@ class PostgresPersistence {
       hardware_fingerprint_hash: row.hardware_fingerprint_hash,
       status: row.status,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadCompromisedKeys(client: PoolClient): Promise<DataStore["compromisedKeys"]> {
-    const { rows } = await client.query("SELECT * FROM assets.compromised_keys ORDER BY created_at, id");
+  private async loadCompromisedKeys(
+    client: PoolClient,
+  ): Promise<DataStore["compromisedKeys"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM assets.compromised_keys ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       key_hash: row.key_hash,
       status: row.status,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
   private async loadWorkSegments(client: PoolClient): Promise<WorkSegment[]> {
-    const { rows } = await client.query("SELECT * FROM timesheets.work_segments ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM timesheets.work_segments ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -1630,12 +1822,16 @@ class PostgresPersistence {
       billable: row.billable,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadWorkflowDefinitions(client: PoolClient): Promise<WorkflowDefinitionRecord[]> {
-    const { rows } = await client.query("SELECT * FROM timesheets.workflow_definitions ORDER BY created_at, id");
+  private async loadWorkflowDefinitions(
+    client: PoolClient,
+  ): Promise<WorkflowDefinitionRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM timesheets.workflow_definitions ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -1644,12 +1840,16 @@ class PostgresPersistence {
       version: row.version,
       status: row.status,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadTimesheetSubmissions(client: PoolClient): Promise<TimesheetSubmission[]> {
-    const { rows } = await client.query("SELECT * FROM timesheets.timesheet_submissions ORDER BY created_at, id");
+  private async loadTimesheetSubmissions(
+    client: PoolClient,
+  ): Promise<TimesheetSubmission[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM timesheets.timesheet_submissions ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -1663,24 +1863,30 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadTimesheetActions(client: PoolClient): Promise<DataStore["timesheetActions"]> {
-    const { rows } = await client.query("SELECT * FROM timesheets.timesheet_approval_actions ORDER BY created_at, id");
+  private async loadTimesheetActions(
+    client: PoolClient,
+  ): Promise<DataStore["timesheetActions"]> {
+    const { rows } = await client.query(
+      "SELECT * FROM timesheets.timesheet_approval_actions ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       submission_id: row.submission_id,
       actor_user_id: row.actor_user_id,
       decision: row.decision,
       remarks: row.remarks,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
   private async loadProjects(client: PoolClient): Promise<ProjectRecord[]> {
-    const { rows } = await client.query("SELECT * FROM projects.projects ORDER BY project_code");
+    const { rows } = await client.query(
+      "SELECT * FROM projects.projects ORDER BY project_code",
+    );
     return rows.map((row) => ({
       id: row.id,
       project_code: row.project_code,
@@ -1705,12 +1911,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadProjectMembers(client: PoolClient): Promise<ProjectMemberRecord[]> {
-    const { rows } = await client.query("SELECT * FROM projects.project_members ORDER BY created_at, id");
+  private async loadProjectMembers(
+    client: PoolClient,
+  ): Promise<ProjectMemberRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM projects.project_members ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       project_id: row.project_id,
@@ -1725,12 +1935,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadProjectAllocations(client: PoolClient): Promise<ProjectAllocationRecord[]> {
-    const { rows } = await client.query("SELECT * FROM projects.project_allocations ORDER BY date_from DESC, id");
+  private async loadProjectAllocations(
+    client: PoolClient,
+  ): Promise<ProjectAllocationRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM projects.project_allocations ORDER BY date_from DESC, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       project_id: row.project_id,
@@ -1743,12 +1957,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadProjectMilestones(client: PoolClient): Promise<ProjectMilestoneRecord[]> {
-    const { rows } = await client.query("SELECT * FROM projects.project_milestones ORDER BY due_date, id");
+  private async loadProjectMilestones(
+    client: PoolClient,
+  ): Promise<ProjectMilestoneRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM projects.project_milestones ORDER BY due_date, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       project_id: row.project_id,
@@ -1761,12 +1979,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadHelpdeskCategories(client: PoolClient): Promise<HelpdeskCategory[]> {
-    const { rows } = await client.query("SELECT * FROM helpdesk.categories ORDER BY category_key");
+  private async loadHelpdeskCategories(
+    client: PoolClient,
+  ): Promise<HelpdeskCategory[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM helpdesk.categories ORDER BY category_key",
+    );
     return rows.map((row) => ({
       id: row.id,
       category_key: row.category_key,
@@ -1776,16 +1998,22 @@ class PostgresPersistence {
       default_assignee_role: row.default_assignee_role,
       team: row.team,
       active: Boolean(row.active),
-      sub_categories: Array.isArray(row.sub_categories) ? row.sub_categories : [],
+      sub_categories: Array.isArray(row.sub_categories)
+        ? row.sub_categories
+        : [],
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadHelpdeskTickets(client: PoolClient): Promise<HelpdeskTicket[]> {
-    const { rows } = await client.query("SELECT * FROM helpdesk.tickets ORDER BY created_at DESC, ticket_no DESC");
+  private async loadHelpdeskTickets(
+    client: PoolClient,
+  ): Promise<HelpdeskTicket[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM helpdesk.tickets ORDER BY created_at DESC, ticket_no DESC",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_no: row.ticket_no,
@@ -1814,12 +2042,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadHelpdeskComments(client: PoolClient): Promise<HelpdeskTicketComment[]> {
-    const { rows } = await client.query("SELECT * FROM helpdesk.ticket_comments ORDER BY created_at, id");
+  private async loadHelpdeskComments(
+    client: PoolClient,
+  ): Promise<HelpdeskTicketComment[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM helpdesk.ticket_comments ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1830,12 +2062,16 @@ class PostgresPersistence {
       internal: Boolean(row.internal),
       document_ids: Array.isArray(row.document_ids) ? row.document_ids : [],
       created_at: asIso(row.created_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadHelpdeskAttachments(client: PoolClient): Promise<HelpdeskTicketAttachment[]> {
-    const { rows } = await client.query("SELECT * FROM helpdesk.ticket_attachments ORDER BY created_at, id");
+  private async loadHelpdeskAttachments(
+    client: PoolClient,
+  ): Promise<HelpdeskTicketAttachment[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM helpdesk.ticket_attachments ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1846,12 +2082,16 @@ class PostgresPersistence {
       uploaded_by_user_id: row.uploaded_by_user_id,
       uploaded_by_name: row.uploaded_by_name,
       created_at: asIso(row.created_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadHelpdeskEvents(client: PoolClient): Promise<HelpdeskTicketEvent[]> {
-    const { rows } = await client.query("SELECT * FROM helpdesk.ticket_events ORDER BY created_at, id");
+  private async loadHelpdeskEvents(
+    client: PoolClient,
+  ): Promise<HelpdeskTicketEvent[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM helpdesk.ticket_events ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       ticket_id: row.ticket_id,
@@ -1859,12 +2099,16 @@ class PostgresPersistence {
       actor_name: row.actor_name,
       action: row.action,
       detail: row.detail,
-      created_at: asIso(row.created_at)
+      created_at: asIso(row.created_at),
     }));
   }
 
-  private async loadAttendancePunches(client: PoolClient): Promise<AttendancePunch[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.punch_events ORDER BY occurred_at, id");
+  private async loadAttendancePunches(
+    client: PoolClient,
+  ): Promise<AttendancePunch[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM attendance.punch_events ORDER BY occurred_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -1878,12 +2122,16 @@ class PostgresPersistence {
       regularization_request_id: row.regularization_request_id ?? null,
       metadata: json(row.metadata),
       created_at: asIso(row.created_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAttendanceDayRecords(client: PoolClient): Promise<AttendanceDayRecord[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.daily_records ORDER BY work_date, employee_user_id");
+  private async loadAttendanceDayRecords(
+    client: PoolClient,
+  ): Promise<AttendanceDayRecord[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM attendance.daily_records ORDER BY work_date, employee_user_id",
+    );
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -1915,16 +2163,25 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAttendanceRegularizations(client: PoolClient): Promise<AttendanceRegularizationRequest[]> {
+  private async loadAttendanceRegularizations(
+    client: PoolClient,
+  ): Promise<AttendanceRegularizationRequest[]> {
     const { rows } = await client.query(
       "SELECT regularization_requests.*, work_date::text AS work_date FROM attendance.regularization_requests ORDER BY created_at, id",
     );
-    const itemRows = (await client.query("SELECT * FROM attendance.regularization_request_items ORDER BY regularization_request_id, ordinal, id")).rows;
-    const itemsByRequest = new Map<UUID, AttendanceRegularizationRequestItem[]>();
+    const itemRows = (
+      await client.query(
+        "SELECT * FROM attendance.regularization_request_items ORDER BY regularization_request_id, ordinal, id",
+      )
+    ).rows;
+    const itemsByRequest = new Map<
+      UUID,
+      AttendanceRegularizationRequestItem[]
+    >();
     for (const row of itemRows) {
       const item: AttendanceRegularizationRequestItem = {
         id: row.id,
@@ -1962,12 +2219,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadAttendanceRegularizationActions(client: PoolClient): Promise<AttendanceRegularizationAction[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.regularization_actions ORDER BY regularization_request_id, resulting_version, id");
+  private async loadAttendanceRegularizationActions(
+    client: PoolClient,
+  ): Promise<AttendanceRegularizationAction[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM attendance.regularization_actions ORDER BY regularization_request_id, resulting_version, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -1984,8 +2245,12 @@ class PostgresPersistence {
     }));
   }
 
-  private async loadAttendanceRegularizationCorrectionApplications(client: PoolClient): Promise<AttendanceRegularizationCorrectionApplication[]> {
-    const { rows } = await client.query("SELECT * FROM attendance.regularization_correction_applications ORDER BY applied_at, id");
+  private async loadAttendanceRegularizationCorrectionApplications(
+    client: PoolClient,
+  ): Promise<AttendanceRegularizationCorrectionApplication[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM attendance.regularization_correction_applications ORDER BY applied_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -2002,7 +2267,9 @@ class PostgresPersistence {
   }
 
   private async loadLeaveRequests(client: PoolClient): Promise<LeaveRequest[]> {
-    const { rows } = await client.query("SELECT * FROM leave_wfh.leave_requests ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM leave_wfh.leave_requests ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       request_code: row.request_code,
@@ -2023,12 +2290,14 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
   private async loadWfhRequests(client: PoolClient): Promise<WfhRequest[]> {
-    const { rows } = await client.query("SELECT * FROM leave_wfh.wfh_requests ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM leave_wfh.wfh_requests ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       request_code: row.request_code,
@@ -2048,12 +2317,14 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
   private async loadHolidays(client: PoolClient): Promise<Holiday[]> {
-    const { rows } = await client.query("SELECT * FROM leave_wfh.holidays ORDER BY holiday_date, name");
+    const { rows } = await client.query(
+      "SELECT * FROM leave_wfh.holidays ORDER BY holiday_date, name",
+    );
     return rows.map((row) => ({
       id: row.id,
       company_id: row.company_id,
@@ -2064,12 +2335,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadEmsEmployeeProfiles(client: PoolClient): Promise<EmsEmployeeProfile[]> {
-    const { rows } = await client.query("SELECT * FROM ems.employee_profiles ORDER BY created_at, id");
+  private async loadEmsEmployeeProfiles(
+    client: PoolClient,
+  ): Promise<EmsEmployeeProfile[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.employee_profiles ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -2086,12 +2361,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadEmsProfileChangeRequests(client: PoolClient): Promise<EmsProfileChangeRequest[]> {
-    const { rows } = await client.query("SELECT * FROM ems.profile_change_requests ORDER BY created_at, id");
+  private async loadEmsProfileChangeRequests(
+    client: PoolClient,
+  ): Promise<EmsProfileChangeRequest[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.profile_change_requests ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       request_code: row.request_code,
@@ -2101,7 +2380,9 @@ class PostgresPersistence {
       old_value: row.old_value,
       new_value: row.new_value,
       reason: row.reason,
-      supporting_document_ids: Array.isArray(row.supporting_document_ids) ? row.supporting_document_ids : [],
+      supporting_document_ids: Array.isArray(row.supporting_document_ids)
+        ? row.supporting_document_ids
+        : [],
       status: row.status,
       current_approver_user_id: row.current_approver_user_id,
       decision_remarks: row.decision_remarks,
@@ -2110,12 +2391,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadEmsServiceRequests(client: PoolClient): Promise<EmsServiceRequest[]> {
-    const { rows } = await client.query("SELECT * FROM ems.service_requests ORDER BY created_at, id");
+  private async loadEmsServiceRequests(
+    client: PoolClient,
+  ): Promise<EmsServiceRequest[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.service_requests ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       request_code: row.request_code,
@@ -2132,12 +2417,14 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
   private async loadEmsLetters(client: PoolClient): Promise<EmsLetter[]> {
-    const { rows } = await client.query("SELECT * FROM ems.letters ORDER BY created_at, id");
+    const { rows } = await client.query(
+      "SELECT * FROM ems.letters ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -2151,12 +2438,14 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
   private async loadEmsPolicies(client: PoolClient): Promise<EmsPolicy[]> {
-    const { rows } = await client.query("SELECT * FROM ems.policies ORDER BY effective_from DESC, title");
+    const { rows } = await client.query(
+      "SELECT * FROM ems.policies ORDER BY effective_from DESC, title",
+    );
     return rows.map((row) => ({
       id: row.id,
       policy_code: row.policy_code,
@@ -2169,12 +2458,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadEmsPolicyAcknowledgements(client: PoolClient): Promise<EmsPolicyAcknowledgement[]> {
-    const { rows } = await client.query("SELECT * FROM ems.policy_acknowledgements ORDER BY created_at, id");
+  private async loadEmsPolicyAcknowledgements(
+    client: PoolClient,
+  ): Promise<EmsPolicyAcknowledgement[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.policy_acknowledgements ORDER BY created_at, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       policy_id: row.policy_id,
@@ -2183,12 +2476,16 @@ class PostgresPersistence {
       acknowledged_at: asIsoOrNull(row.acknowledged_at),
       version: row.version,
       created_at: asIso(row.created_at),
-      updated_at: asIso(row.updated_at)
+      updated_at: asIso(row.updated_at),
     }));
   }
 
-  private async loadEmsAdminChecklists(client: PoolClient): Promise<EmsAdminChecklist[]> {
-    const { rows } = await client.query("SELECT * FROM ems.admin_checklists ORDER BY updated_at DESC, id");
+  private async loadEmsAdminChecklists(
+    client: PoolClient,
+  ): Promise<EmsAdminChecklist[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.admin_checklists ORDER BY updated_at DESC, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       checklist_type: row.checklist_type,
@@ -2201,12 +2498,16 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
-  private async loadEmsProbationReviews(client: PoolClient): Promise<EmsProbationReview[]> {
-    const { rows } = await client.query("SELECT * FROM ems.probation_reviews ORDER BY due_on, id");
+  private async loadEmsProbationReviews(
+    client: PoolClient,
+  ): Promise<EmsProbationReview[]> {
+    const { rows } = await client.query(
+      "SELECT * FROM ems.probation_reviews ORDER BY due_on, id",
+    );
     return rows.map((row) => ({
       id: row.id,
       employee_user_id: row.employee_user_id,
@@ -2220,7 +2521,7 @@ class PostgresPersistence {
       version: row.version,
       created_at: asIso(row.created_at),
       updated_at: asIso(row.updated_at),
-      deleted_at: asIsoOrNull(row.deleted_at)
+      deleted_at: asIsoOrNull(row.deleted_at),
     }));
   }
 
@@ -2234,7 +2535,16 @@ class PostgresPersistence {
          SET name = EXCLUDED.name, description = EXCLUDED.description, status = EXCLUDED.status,
              builtin = EXCLUDED.builtin, deleted_at = EXCLUDED.deleted_at, version = EXCLUDED.version,
              updated_at = now()`,
-        [role.id, role.role_key, role.name, role.description, role.status, role.builtin, role.deleted_at, role.version]
+        [
+          role.id,
+          role.role_key,
+          role.name,
+          role.description,
+          role.status,
+          role.builtin,
+          role.deleted_at,
+          role.version,
+        ],
       );
     }
     for (const permission of this.store.rbacRolePermissions) {
@@ -2243,7 +2553,13 @@ class PostgresPersistence {
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (role_key, permission_id) DO UPDATE
          SET status = EXCLUDED.status, deleted_at = EXCLUDED.deleted_at, updated_at = now()`,
-        [permission.id, permission.role_key, permission.permission_id, permission.status, permission.deleted_at]
+        [
+          permission.id,
+          permission.role_key,
+          permission.permission_id,
+          permission.status,
+          permission.deleted_at,
+        ],
       );
     }
     await this.flushCoreUsersAndCredentials(client);
@@ -2259,7 +2575,16 @@ class PostgresPersistence {
              designation_code = EXCLUDED.designation_code, title = EXCLUDED.title, level = EXCLUDED.level,
              status = EXCLUDED.status, deleted_at = EXCLUDED.deleted_at, version = EXCLUDED.version,
              updated_at = now()`,
-        [designation.id, designation.company_id, designation.designation_code, designation.title, designation.level, designation.status, designation.deleted_at, designation.version]
+        [
+          designation.id,
+          designation.company_id,
+          designation.designation_code,
+          designation.title,
+          designation.level,
+          designation.status,
+          designation.deleted_at,
+          designation.version,
+        ],
       );
     }
     for (const department of this.store.departments) {
@@ -2284,17 +2609,26 @@ class PostgresPersistence {
           department.director_user_id,
           department.status,
           department.deleted_at,
-          department.version
-        ]
+          department.version,
+        ],
       );
     }
   }
 
-  private async flushAuthCore(client: PoolClient, options: AuthPersistenceFlushOptions): Promise<void> {
-    await this.flushCoreUsersAndCredentials(client, optionalSet(options.userIds));
+  private async flushAuthCore(
+    client: PoolClient,
+    options: AuthPersistenceFlushOptions,
+  ): Promise<void> {
+    await this.flushCoreUsersAndCredentials(
+      client,
+      optionalSet(options.userIds),
+    );
   }
 
-  private async flushCoreUsersAndCredentials(client: PoolClient, userIds?: ReadonlySet<string>): Promise<void> {
+  private async flushCoreUsersAndCredentials(
+    client: PoolClient,
+    userIds?: ReadonlySet<string>,
+  ): Promise<void> {
     for (const user of this.store.users) {
       if (userIds && !userIds.has(user.id)) continue;
       await client.query(
@@ -2334,15 +2668,17 @@ class PostgresPersistence {
           user.joined_on,
           user.terminated_on,
           user.deleted_at,
-          user.version
-        ]
+          user.version,
+        ],
       );
-      await client.query("DELETE FROM core.user_roles WHERE user_id = $1", [user.id]);
+      await client.query("DELETE FROM core.user_roles WHERE user_id = $1", [
+        user.id,
+      ]);
       for (const role of user.roles) {
         await client.query(
           `INSERT INTO core.user_roles (user_id, role_key, status, effective_from)
            VALUES ($1, $2, 'active', '2026-01-01')`,
-          [user.id, role]
+          [user.id, role],
         );
       }
     }
@@ -2365,8 +2701,8 @@ class PostgresPersistence {
           credential.status,
           credential.created_at,
           credential.updated_at,
-          credential.deleted_at
-        ]
+          credential.deleted_at,
+        ],
       );
     }
   }
@@ -2418,8 +2754,8 @@ class PostgresPersistence {
           company.bootstrap_completed_at,
           company.created_at,
           company.updated_at,
-          company.version
-        ]
+          company.version,
+        ],
       );
     }
     for (const workflow of this.store.adminWorkflows) {
@@ -2442,8 +2778,8 @@ class PostgresPersistence {
           workflow.created_at,
           workflow.updated_at,
           workflow.deleted_at,
-          workflow.version
-        ]
+          workflow.version,
+        ],
       );
     }
     for (const policy of this.store.adminPolicies) {
@@ -2469,8 +2805,8 @@ class PostgresPersistence {
           policy.created_at,
           policy.updated_at,
           policy.deleted_at,
-          policy.version
-        ]
+          policy.version,
+        ],
       );
       await this.publishAttendanceAdminPolicyVersion(client, policy);
     }
@@ -2497,8 +2833,8 @@ class PostgresPersistence {
           template.created_at,
           template.updated_at,
           template.deleted_at,
-          template.version
-        ]
+          template.version,
+        ],
       );
     }
     for (const channel of this.store.adminNotificationChannels) {
@@ -2525,8 +2861,8 @@ class PostgresPersistence {
           channel.created_at,
           channel.updated_at,
           channel.deleted_at,
-          channel.version
-        ]
+          channel.version,
+        ],
       );
     }
     for (const item of this.store.adminMasterDataItems) {
@@ -2558,8 +2894,8 @@ class PostgresPersistence {
           item.created_at,
           item.updated_at,
           item.deleted_at,
-          item.version
-        ]
+          item.version,
+        ],
       );
     }
     const security = this.store.adminSecuritySettings;
@@ -2596,8 +2932,8 @@ class PostgresPersistence {
         security.created_at,
         security.updated_at,
         security.deleted_at,
-        security.version
-      ]
+        security.version,
+      ],
     );
     for (const preference of this.store.userSessionPreferences) {
       await client.query(
@@ -2619,8 +2955,8 @@ class PostgresPersistence {
           preference.timezone,
           preference.created_at,
           preference.updated_at,
-          preference.version
-        ]
+          preference.version,
+        ],
       );
     }
     for (const token of this.store.authTokens) {
@@ -2653,8 +2989,8 @@ class PostgresPersistence {
           token.last_sent_at,
           token.send_count,
           token.created_at,
-          JSON.stringify(token.metadata)
-        ]
+          JSON.stringify(token.metadata),
+        ],
       );
     }
     if (this.store.financeGovernanceConfig) {
@@ -2703,8 +3039,8 @@ class PostgresPersistence {
           config.created_at,
           config.updated_at,
           config.deleted_at,
-          config.version
-        ]
+          config.version,
+        ],
       );
     }
     for (const notification of this.store.notifications) {
@@ -2732,8 +3068,8 @@ class PostgresPersistence {
           notification.read_at,
           notification.version,
           notification.created_at,
-          notification.updated_at
-        ]
+          notification.updated_at,
+        ],
       );
     }
     for (const delivery of this.store.emailDeliveries) {
@@ -2779,8 +3115,8 @@ class PostgresPersistence {
           JSON.stringify(delivery.metadata),
           delivery.created_at,
           delivery.updated_at,
-          delivery.version
-        ]
+          delivery.version,
+        ],
       );
     }
     for (const event of this.store.emailEvents) {
@@ -2805,8 +3141,8 @@ class PostgresPersistence {
           event.delivery_id,
           JSON.stringify(event.payload),
           event.received_at,
-          event.processed_at
-        ]
+          event.processed_at,
+        ],
       );
     }
     await this.flushOutbox(client);
@@ -2814,9 +3150,13 @@ class PostgresPersistence {
 
   private async publishAttendanceAdminPolicyVersion(
     client: PoolClient,
-    policy: AdminPolicyConfigRecord
+    policy: AdminPolicyConfigRecord,
   ): Promise<void> {
-    if (policy.policy_key !== "attendance" || !policy.company_id || policy.deleted_at) {
+    if (
+      policy.policy_key !== "attendance" ||
+      !policy.company_id ||
+      policy.deleted_at
+    ) {
       return;
     }
     const effectiveFrom = policy.updated_at ?? policy.created_at;
@@ -2845,12 +3185,13 @@ class PostgresPersistence {
         policy.created_at,
         policy.updated_at,
         policy.deleted_at,
-        policy.version
-      ]
+        policy.version,
+      ],
     );
 
-    const openVersion = (await client.query<{ id: string; version_number: number }>(
-      `SELECT id, version_number
+    const openVersion = (
+      await client.query<{ id: string; version_number: number }>(
+        `SELECT id, version_number
         FROM attendance.policy_versions
         WHERE company_id = $1
           AND policy_id = $2
@@ -2858,8 +3199,9 @@ class PostgresPersistence {
         ORDER BY version_number DESC
         LIMIT 1
         FOR UPDATE`,
-      [policy.company_id, policy.id]
-    )).rows[0];
+        [policy.company_id, policy.id],
+      )
+    ).rows[0];
     if (openVersion && openVersion.version_number < policy.version) {
       await client.query(
         `UPDATE attendance.policy_versions
@@ -2867,7 +3209,7 @@ class PostgresPersistence {
           WHERE id = $1
             AND company_id = $2
             AND effective_until IS NULL`,
-        [openVersion.id, policy.company_id, effectiveFrom]
+        [openVersion.id, policy.company_id, effectiveFrom],
       );
     }
 
@@ -2882,12 +3224,13 @@ class PostgresPersistence {
         policy.id,
         Math.max(1, policy.version),
         effectiveFrom,
-        JSON.stringify(normalizedConfig)
-      ]
+        JSON.stringify(normalizedConfig),
+      ],
     );
 
-    const existingAssignment = (await client.query<{ id: string }>(
-      `SELECT id
+    const existingAssignment = (
+      await client.query<{ id: string }>(
+        `SELECT id
         FROM attendance.policy_assignments
         WHERE company_id = $1
           AND policy_id = $2
@@ -2897,8 +3240,9 @@ class PostgresPersistence {
         ORDER BY created_at
         LIMIT 1
         FOR UPDATE`,
-      [policy.company_id, policy.id]
-    )).rows[0];
+        [policy.company_id, policy.id],
+      )
+    ).rows[0];
     const assignmentStatus = policy.status === "active" ? "active" : "inactive";
     if (existingAssignment) {
       await client.query(
@@ -2908,7 +3252,12 @@ class PostgresPersistence {
               version = version + 1
           WHERE id = $1
             AND company_id = $2`,
-        [existingAssignment.id, policy.company_id, assignmentStatus, effectiveFrom]
+        [
+          existingAssignment.id,
+          policy.company_id,
+          assignmentStatus,
+          effectiveFrom,
+        ],
       );
       return;
     }
@@ -2919,11 +3268,14 @@ class PostgresPersistence {
           created_at, updated_at
         )
         VALUES ($1, $2, 'company', NULL, $3, $4, $3, $3)`,
-      [policy.company_id, policy.id, effectiveFrom, assignmentStatus]
+      [policy.company_id, policy.id, effectiveFrom, assignmentStatus],
     );
   }
 
-  private async flushOutbox(client: PoolClient, aggregateIds?: ReadonlySet<string>): Promise<void> {
+  private async flushOutbox(
+    client: PoolClient,
+    aggregateIds?: ReadonlySet<string>,
+  ): Promise<void> {
     for (const event of this.store.outbox) {
       if (aggregateIds && !aggregateIds.has(event.aggregate_id)) continue;
       await client.query(
@@ -2951,8 +3303,8 @@ class PostgresPersistence {
           event.created_at,
           event.published_at,
           event.failed_at,
-          event.last_error
-        ]
+          event.last_error,
+        ],
       );
     }
     await client.query(
@@ -2987,8 +3339,8 @@ class PostgresPersistence {
           mapping.created_at,
           mapping.updated_at,
           mapping.deleted_at,
-          mapping.version
-        ]
+          mapping.version,
+        ],
       );
     }
     for (const ticket of this.store.tickets) {
@@ -3057,8 +3409,8 @@ class PostgresPersistence {
           ticket.updated_at,
           ticket.submitted_at,
           ticket.closed_at,
-          ticket.deleted_at
-        ]
+          ticket.deleted_at,
+        ],
       );
     }
     for (const item of this.store.lineItems) {
@@ -3082,8 +3434,8 @@ class PostgresPersistence {
           item.unit_cost,
           item.line_total,
           item.tax_amount,
-          item.vendor_name
-        ]
+          item.vendor_name,
+        ],
       );
     }
     for (const approval of this.store.expenseApprovals) {
@@ -3105,8 +3457,8 @@ class PostgresPersistence {
           approval.designation_snapshot,
           JSON.stringify(approval.route_snapshot),
           approval.action_at,
-          approval.created_at
-        ]
+          approval.created_at,
+        ],
       );
     }
     for (const audit of this.store.auditLogs) {
@@ -3125,8 +3477,8 @@ class PostgresPersistence {
           audit.new_value ? JSON.stringify(audit.new_value) : null,
           audit.remarks,
           audit.payload_hash,
-          audit.created_at
-        ]
+          audit.created_at,
+        ],
       );
     }
     for (const document of this.store.expenseDocuments) {
@@ -3144,8 +3496,8 @@ class PostgresPersistence {
           document.document_type,
           document.verification_status,
           document.uploaded_by,
-          document.uploaded_at
-        ]
+          document.uploaded_at,
+        ],
       );
     }
     for (const payment of this.store.payments) {
@@ -3170,13 +3522,16 @@ class PostgresPersistence {
           payment.settlement_status,
           payment.settlement_amount,
           payment.processed_by_user_id,
-          payment.created_at
-        ]
+          payment.created_at,
+        ],
       );
     }
   }
 
-  private async flushDocuments(client: PoolClient, documentIds?: ReadonlySet<string>): Promise<void> {
+  private async flushDocuments(
+    client: PoolClient,
+    documentIds?: ReadonlySet<string>,
+  ): Promise<void> {
     for (const document of this.store.documents) {
       if (documentIds && !documentIds.has(document.id)) continue;
       await client.query(
@@ -3208,8 +3563,8 @@ class PostgresPersistence {
           document.created_by_user_id,
           document.created_at,
           document.updated_at,
-          document.deleted_at
-        ]
+          document.deleted_at,
+        ],
       );
     }
     for (const version of this.store.documentVersions) {
@@ -3230,8 +3585,8 @@ class PostgresPersistence {
           version.size_bytes,
           version.checksum_sha256,
           version.created_by_user_id,
-          version.created_at
-        ]
+          version.created_at,
+        ],
       );
     }
     for (const log of this.store.documentAccessLogs) {
@@ -3240,7 +3595,15 @@ class PostgresPersistence {
         `INSERT INTO documents.doc_access_logs (id, document_id, actor_user_id, action, decision, reason, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (id) DO NOTHING`,
-        [log.id, log.document_id, log.actor_user_id, log.action, log.decision, log.reason, log.created_at]
+        [
+          log.id,
+          log.document_id,
+          log.actor_user_id,
+          log.action,
+          log.decision,
+          log.reason,
+          log.created_at,
+        ],
       );
     }
   }
@@ -3272,8 +3635,8 @@ class PostgresPersistence {
           asset.created_at,
           asset.updated_at,
           asset.deleted_at,
-          asset.version
-        ]
+          asset.version,
+        ],
       );
     }
     for (const assignment of this.store.assetAssignments) {
@@ -3294,8 +3657,8 @@ class PostgresPersistence {
           assignment.returned_at,
           assignment.status,
           assignment.created_at,
-          assignment.updated_at
-        ]
+          assignment.updated_at,
+        ],
       );
     }
     for (const event of this.store.assetStateEvents) {
@@ -3303,7 +3666,14 @@ class PostgresPersistence {
         `INSERT INTO assets.asset_state_events (id, asset_id, actor_user_id, event_type, payload, created_at)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6)
          ON CONFLICT (id) DO NOTHING`,
-        [event.id, event.asset_id, event.actor_user_id, event.event_type, JSON.stringify(event.payload), event.created_at]
+        [
+          event.id,
+          event.asset_id,
+          event.actor_user_id,
+          event.event_type,
+          JSON.stringify(event.payload),
+          event.created_at,
+        ],
       );
     }
     for (const request of this.store.assetRequests) {
@@ -3338,8 +3708,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const acknowledgement of this.store.assetAcknowledgements) {
@@ -3362,8 +3732,8 @@ class PostgresPersistence {
           acknowledgement.acknowledged_at,
           acknowledgement.version,
           acknowledgement.created_at,
-          acknowledgement.updated_at
-        ]
+          acknowledgement.updated_at,
+        ],
       );
     }
     for (const maintenance of this.store.assetMaintenanceRecords) {
@@ -3389,8 +3759,8 @@ class PostgresPersistence {
           maintenance.version,
           maintenance.created_at,
           maintenance.updated_at,
-          maintenance.deleted_at
-        ]
+          maintenance.deleted_at,
+        ],
       );
     }
     for (const vendor of this.store.assetVendors) {
@@ -3413,8 +3783,8 @@ class PostgresPersistence {
           vendor.version,
           vendor.created_at,
           vendor.updated_at,
-          vendor.deleted_at
-        ]
+          vendor.deleted_at,
+        ],
       );
     }
     for (const ticket of this.store.assetRecoveryTickets) {
@@ -3445,8 +3815,8 @@ class PostgresPersistence {
           ticket.settled_at,
           ticket.version,
           ticket.created_at,
-          ticket.updated_at
-        ]
+          ticket.updated_at,
+        ],
       );
     }
     for (const entitlement of this.store.licenseEntitlements) {
@@ -3461,8 +3831,8 @@ class PostgresPersistence {
           entitlement.seat_count,
           entitlement.status,
           entitlement.created_at,
-          entitlement.updated_at
-        ]
+          entitlement.updated_at,
+        ],
       );
     }
     for (const activation of this.store.licenseActivations) {
@@ -3480,8 +3850,8 @@ class PostgresPersistence {
           activation.hardware_fingerprint_hash,
           activation.status,
           activation.created_at,
-          activation.updated_at
-        ]
+          activation.updated_at,
+        ],
       );
     }
     for (const key of this.store.compromisedKeys) {
@@ -3490,7 +3860,7 @@ class PostgresPersistence {
          VALUES ($1, $2, $3, $4, $4)
          ON CONFLICT (key_hash) DO UPDATE
          SET status = EXCLUDED.status, updated_at = now()`,
-        [key.id, key.key_hash, key.status, key.created_at]
+        [key.id, key.key_hash, key.status, key.created_at],
       );
     }
   }
@@ -3517,8 +3887,8 @@ class PostgresPersistence {
           segment.billable,
           segment.created_at,
           segment.updated_at,
-          segment.deleted_at
-        ]
+          segment.deleted_at,
+        ],
       );
     }
     for (const workflow of this.store.workflowDefinitions) {
@@ -3538,8 +3908,8 @@ class PostgresPersistence {
           workflow.version,
           workflow.status,
           workflow.created_at,
-          workflow.updated_at
-        ]
+          workflow.updated_at,
+        ],
       );
     }
     for (const submission of this.store.timesheetSubmissions) {
@@ -3569,8 +3939,8 @@ class PostgresPersistence {
           submission.version,
           submission.created_at,
           submission.updated_at,
-          submission.deleted_at
-        ]
+          submission.deleted_at,
+        ],
       );
     }
     for (const action of this.store.timesheetActions) {
@@ -3586,8 +3956,8 @@ class PostgresPersistence {
           action.actor_user_id,
           action.decision,
           action.remarks,
-          action.created_at
-        ]
+          action.created_at,
+        ],
       );
     }
   }
@@ -3649,8 +4019,8 @@ class PostgresPersistence {
           project.version,
           project.created_at,
           project.updated_at,
-          project.deleted_at
-        ]
+          project.deleted_at,
+        ],
       );
     }
     for (const member of this.store.projectMembers) {
@@ -3686,8 +4056,8 @@ class PostgresPersistence {
           member.version,
           member.created_at,
           member.updated_at,
-          member.deleted_at
-        ]
+          member.deleted_at,
+        ],
       );
     }
     for (const allocation of this.store.projectAllocations) {
@@ -3718,8 +4088,8 @@ class PostgresPersistence {
           allocation.version,
           allocation.created_at,
           allocation.updated_at,
-          allocation.deleted_at
-        ]
+          allocation.deleted_at,
+        ],
       );
     }
     for (const milestone of this.store.projectMilestones) {
@@ -3751,8 +4121,8 @@ class PostgresPersistence {
           milestone.version,
           milestone.created_at,
           milestone.updated_at,
-          milestone.deleted_at
-        ]
+          milestone.deleted_at,
+        ],
       );
     }
   }
@@ -3791,8 +4161,8 @@ class PostgresPersistence {
           category.version,
           category.created_at,
           category.updated_at,
-          category.deleted_at
-        ]
+          category.deleted_at,
+        ],
       );
     }
     for (const ticket of this.store.helpdeskTickets) {
@@ -3860,8 +4230,8 @@ class PostgresPersistence {
           ticket.version,
           ticket.created_at,
           ticket.updated_at,
-          ticket.deleted_at
-        ]
+          ticket.deleted_at,
+        ],
       );
     }
     for (const comment of this.store.helpdeskComments) {
@@ -3889,8 +4259,8 @@ class PostgresPersistence {
           comment.internal,
           JSON.stringify(comment.document_ids),
           comment.created_at,
-          comment.deleted_at
-        ]
+          comment.deleted_at,
+        ],
       );
     }
     for (const attachment of this.store.helpdeskAttachments) {
@@ -3918,8 +4288,8 @@ class PostgresPersistence {
           attachment.uploaded_by_user_id,
           attachment.uploaded_by_name,
           attachment.created_at,
-          attachment.deleted_at
-        ]
+          attachment.deleted_at,
+        ],
       );
     }
     for (const event of this.store.helpdeskEvents) {
@@ -3940,8 +4310,8 @@ class PostgresPersistence {
           event.actor_name,
           event.action,
           event.detail,
-          event.created_at
-        ]
+          event.created_at,
+        ],
       );
     }
   }
@@ -3978,8 +4348,8 @@ class PostgresPersistence {
           punch.regularization_request_id,
           JSON.stringify(punch.metadata),
           punch.created_at,
-          punch.deleted_at
-        ]
+          punch.deleted_at,
+        ],
       );
     }
     for (const day of this.store.attendanceDayRecords) {
@@ -4054,8 +4424,8 @@ class PostgresPersistence {
           day.version,
           day.created_at,
           day.updated_at,
-          day.deleted_at
-        ]
+          day.deleted_at,
+        ],
       );
     }
     for (const request of this.store.attendanceRegularizations) {
@@ -4086,11 +4456,18 @@ class PostgresPersistence {
           request.submitted_by_user_id,
           request.work_date,
           request.reason,
-          JSON.stringify(request.items.flatMap((item) =>
-            item.event_type && item.occurred_at
-              ? [{ event_type: item.event_type, occurred_at: item.occurred_at }]
-              : [],
-          )),
+          JSON.stringify(
+            request.items.flatMap((item) =>
+              item.event_type && item.occurred_at
+                ? [
+                    {
+                      event_type: item.event_type,
+                      occurred_at: item.occurred_at,
+                    },
+                  ]
+                : [],
+            ),
+          ),
           request.status,
           request.current_approver_user_id,
           request.decision_remarks,
@@ -4099,8 +4476,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const request of this.store.attendanceRegularizations) {
@@ -4149,7 +4526,8 @@ class PostgresPersistence {
         ],
       );
     }
-    for (const application of this.store.attendanceRegularizationCorrectionApplications) {
+    for (const application of this.store
+      .attendanceRegularizationCorrectionApplications) {
       await client.query(
         `INSERT INTO attendance.regularization_correction_applications (
            id, company_id, regularization_request_id, regularization_request_item_id,
@@ -4222,8 +4600,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const request of this.store.wfhRequests) {
@@ -4271,8 +4649,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const holiday of this.store.holidays) {
@@ -4299,16 +4677,21 @@ class PostgresPersistence {
           holiday.version,
           holiday.created_at,
           holiday.updated_at,
-          holiday.deleted_at
-        ]
+          holiday.deleted_at,
+        ],
       );
     }
   }
 
-  private async flushEms(client: PoolClient, options: DomainPersistenceFlushOptions = {}): Promise<void> {
+  private async flushEms(
+    client: PoolClient,
+    options: DomainPersistenceFlushOptions = {},
+  ): Promise<void> {
     const filtered = hasAnyDomainFlushOption(options);
     const userIds = optionalSet(options.userIds);
-    const profileChangeRequestIds = optionalSet(options.emsProfileChangeRequestIds);
+    const profileChangeRequestIds = optionalSet(
+      options.emsProfileChangeRequestIds,
+    );
     const serviceRequestIds = optionalSet(options.emsServiceRequestIds);
     const letterIds = optionalSet(options.emsLetterIds);
     const policyIds = optionalSet(options.emsPolicyIds);
@@ -4353,12 +4736,13 @@ class PostgresPersistence {
           profile.version,
           profile.created_at,
           profile.updated_at,
-          profile.deleted_at
-        ]
+          profile.deleted_at,
+        ],
       );
     }
     for (const request of this.store.emsProfileChangeRequests) {
-      if (!shouldFlushId(request.id, profileChangeRequestIds, filtered)) continue;
+      if (!shouldFlushId(request.id, profileChangeRequestIds, filtered))
+        continue;
       await client.query(
         `INSERT INTO ems.profile_change_requests (
           id, request_code, employee_user_id, field_key, field_label, old_value,
@@ -4398,8 +4782,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const request of this.store.emsServiceRequests) {
@@ -4439,8 +4823,8 @@ class PostgresPersistence {
           request.version,
           request.created_at,
           request.updated_at,
-          request.deleted_at
-        ]
+          request.deleted_at,
+        ],
       );
     }
     for (const letter of this.store.emsLetters) {
@@ -4474,8 +4858,8 @@ class PostgresPersistence {
           letter.version,
           letter.created_at,
           letter.updated_at,
-          letter.deleted_at
-        ]
+          letter.deleted_at,
+        ],
       );
     }
     for (const policy of this.store.emsPolicies) {
@@ -4508,8 +4892,8 @@ class PostgresPersistence {
           policy.version,
           policy.created_at,
           policy.updated_at,
-          policy.deleted_at
-        ]
+          policy.deleted_at,
+        ],
       );
     }
     for (const acknowledgement of this.store.emsPolicyAcknowledgements) {
@@ -4538,8 +4922,8 @@ class PostgresPersistence {
           acknowledgement.acknowledged_at,
           acknowledgement.version,
           acknowledgement.created_at,
-          acknowledgement.updated_at
-        ]
+          acknowledgement.updated_at,
+        ],
       );
     }
     for (const checklist of this.store.emsAdminChecklists) {
@@ -4571,8 +4955,8 @@ class PostgresPersistence {
           checklist.version,
           checklist.created_at,
           checklist.updated_at,
-          checklist.deleted_at
-        ]
+          checklist.deleted_at,
+        ],
       );
     }
     for (const review of this.store.emsProbationReviews) {
@@ -4606,8 +4990,8 @@ class PostgresPersistence {
           review.version,
           review.created_at,
           review.updated_at,
-          review.deleted_at
-        ]
+          review.deleted_at,
+        ],
       );
     }
   }

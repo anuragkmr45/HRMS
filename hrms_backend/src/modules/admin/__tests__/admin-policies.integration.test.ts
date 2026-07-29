@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
@@ -88,7 +89,6 @@ describe("admin policy settings", () => {
     if (!geofenceId) throw new Error("Geofence fixture was not created.");
     return geofenceId;
   }
-  
   it("lists policy configurations for admins only", async () => {
     const admin = await loginAs(app, "ADM");
     const employee = await loginAs(app, "E1");
@@ -192,6 +192,11 @@ describe("admin policy settings", () => {
           geofenceGraceMeters: 12.5,
           maxLocationAgeMs: 120000,
           maxAccuracyMeters: 50,
+          coordinateRetentionClasses: {
+            standard: 2592000,
+            short: 86400,
+          },
+          defaultCoordinateRetentionClass: "short",
         },
       },
     });
@@ -243,6 +248,11 @@ describe("admin policy settings", () => {
         geofenceGraceMeters: 12.5,
         maxLocationAgeMs: 120000,
         maxAccuracyMeters: 50,
+        coordinateRetentionClasses: {
+          standard: 2592000,
+          short: 86400,
+        },
+        defaultCoordinateRetentionClass: "short",
       }),
     });
 
@@ -276,6 +286,11 @@ describe("admin policy settings", () => {
         geofenceGraceMeters: 12.5,
         maxLocationAgeMs: 120000,
         maxAccuracyMeters: 50,
+        coordinateRetentionClasses: {
+          standard: 2592000,
+          short: 86400,
+        },
+        defaultCoordinateRetentionClass: "short",
       }),
     });
 
@@ -376,6 +391,44 @@ describe("admin policy settings", () => {
     });
 
     expect(invalidMaxAccuracy.statusCode).toBe(400);
+
+    for (const seconds of [
+      0,
+      -1,
+      1.5,
+      Number.POSITIVE_INFINITY,
+      AttendanceCoordinateRetentionDefaults.MaxSeconds + 1,
+    ]) {
+      const invalidRetention = await app.inject({
+        method: "PUT",
+        url: "/api/v1/admin/policies/attendance",
+        headers: authHeader(admin.token),
+        payload: {
+          expected_version: 2,
+          config: {
+            coordinateRetentionClasses: {
+              standard: seconds,
+            },
+          },
+        },
+      });
+      expect(invalidRetention.statusCode).toBe(400);
+    }
+
+    const orphanedDefault = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          coordinateRetentionClasses: {
+            standard: AttendanceCoordinateRetentionDefaults.Seconds,
+          },
+        },
+      },
+    });
+    expect(orphanedDefault.statusCode).toBe(400);
 
     expect(app.store.outbox.at(-1)?.event_type).toBe("admin.policy.updated");
   });

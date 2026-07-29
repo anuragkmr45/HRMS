@@ -227,6 +227,9 @@ export interface CreateAttendanceLocationEvidenceInput {
   ageMs: number;
   rawPayload: Record<string, unknown>;
   coordinatesExpireAt?: string | null;
+  coordinateRetentionClass?: string | null;
+  coordinateRetentionSeconds?: number | null;
+  retentionPolicyVersionId?: UUID | null;
 }
 
 export interface CompleteAttendanceCommandInput {
@@ -756,9 +759,10 @@ export class AttendanceCommandTransactionRepository {
           attendance_event_id, company_id, employee_user_id, captured_at,
           received_at, latitude, longitude, accuracy_meters, altitude_meters,
           provider, is_mocked, integrity_status, raw_payload, age_ms,
-          permission_state, coordinates_expire_at
+          permission_state, coordinates_expire_at, coordinate_retention_class,
+          coordinate_retention_seconds, retention_policy_version_id
         ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19
         )
         RETURNING id`,
       [
@@ -778,6 +782,9 @@ export class AttendanceCommandTransactionRepository {
         input.ageMs,
         input.location.permission_state,
         input.coordinatesExpireAt ?? null,
+        input.coordinateRetentionClass ?? null,
+        input.coordinateRetentionSeconds ?? null,
+        input.retentionPolicyVersionId ?? null,
       ],
     );
     const evidence = result.rows[0];

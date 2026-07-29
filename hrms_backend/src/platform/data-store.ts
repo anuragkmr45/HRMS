@@ -84,6 +84,7 @@ import {
   AdminWorkflowApproverTypes,
   AdminWorkflowKeys,
   type AdminWorkflowKey,
+  AttendanceCoordinateRetentionDefaults,
   RbacPermissionActions,
   RbacPermissionGroups,
 } from "#shared";
@@ -961,6 +962,10 @@ export function buildDefaultAdminPolicies(
         geofenceGraceMeters: 0,
         maxLocationAgeMs: null,
         maxAccuracyMeters: null,
+        coordinateRetentionClasses: {
+          [AttendanceCoordinateRetentionDefaults.Class]: AttendanceCoordinateRetentionDefaults.Seconds,
+        },
+        defaultCoordinateRetentionClass: AttendanceCoordinateRetentionDefaults.Class,
       },
     },
     {

@@ -1004,11 +1004,11 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
   });
 
-  it("sanitizes legacy denied or unavailable coordinate rows before adding the permission constraint", async () => {
+  it("sanitizes legacy denied or unavailable coordinate rows before adding the retention permission constraint", async () => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const migrationSql = readFileSync(
-      "src/db/migrations/0045_attendance_geo_policy_modes.sql",
+      "src/db/migrations/0047_location_access_audit_retention.sql",
       "utf8",
     );
 

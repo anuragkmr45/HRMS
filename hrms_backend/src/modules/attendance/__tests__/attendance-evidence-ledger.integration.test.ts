@@ -23,6 +23,7 @@ async function truncateLedgerTables(pool: Pool): Promise<void> {
       attendance.regularization_correction_applications,
       attendance.decision_reasons,
       attendance.attendance_decisions,
+      attendance.location_access_audit_logs,
       attendance.location_evidence,
       attendance.attendance_events,
       attendance.command_decisions,
@@ -81,8 +82,12 @@ async function createLedgerFixture(pool: Pool): Promise<LedgerFixture> {
     `
     INSERT INTO attendance.location_evidence (
       attendance_event_id, company_id, employee_user_id, captured_at,
-      latitude, longitude, accuracy_meters, is_mocked, raw_payload, age_ms
-    ) VALUES ($1, $2, $3, now(), 12.971599, 77.594566, 8.5, false, '{}'::jsonb, 0)
+      latitude, longitude, accuracy_meters, is_mocked, raw_payload, age_ms,
+      coordinates_expire_at, coordinate_retention_class, coordinate_retention_seconds
+    ) VALUES (
+      $1, $2, $3, now(), 12.971599, 77.594566, 8.5, false, '{}'::jsonb, 0,
+      now() + interval '30 days', 'standard', 2592000
+    )
     RETURNING id
   `,
     [eventRow.id, eventRow.company_id, eventRow.employee_user_id],
@@ -274,6 +279,7 @@ describe("PostgreSQL attendance evidence ledger", () => {
 
     expect(schema.attendanceEvents).toBeDefined();
     expect(schema.attendanceLocationEvidence).toBeDefined();
+    expect(schema.attendanceLocationAccessAuditLogs).toBeDefined();
     expect(schema.attendanceDecisions).toBeDefined();
     expect(schema.attendanceDecisionReasons).toBeDefined();
 
@@ -288,8 +294,12 @@ describe("PostgreSQL attendance evidence ledger", () => {
          AND table_name = 'location_evidence'
          AND column_name IN (
            'age_ms',
+           'coordinate_retention_class',
+           'coordinate_retention_seconds',
+           'coordinates_expire_at',
+           'coordinates_purged_at',
            'permission_state',
-           'coordinates_expire_at'
+           'retention_policy_version_id'
          )
        ORDER BY column_name`,
     );
@@ -300,7 +310,22 @@ describe("PostgreSQL attendance evidence ledger", () => {
         column_default: null,
       },
       {
+        column_name: "coordinate_retention_class",
+        is_nullable: "YES",
+        column_default: null,
+      },
+      {
+        column_name: "coordinate_retention_seconds",
+        is_nullable: "YES",
+        column_default: null,
+      },
+      {
         column_name: "coordinates_expire_at",
+        is_nullable: "YES",
+        column_default: null,
+      },
+      {
+        column_name: "coordinates_purged_at",
         is_nullable: "YES",
         column_default: null,
       },
@@ -308,6 +333,11 @@ describe("PostgreSQL attendance evidence ledger", () => {
         column_name: "permission_state",
         is_nullable: "NO",
         column_default: "'unknown'::text",
+      },
+      {
+        column_name: "retention_policy_version_id",
+        is_nullable: "YES",
+        column_default: null,
       },
     ]);
 
@@ -324,7 +354,15 @@ describe("PostgreSQL attendance evidence ledger", () => {
            'location_evidence_age_ms_nonnegative_check',
            'location_evidence_permission_state_check',
            'location_evidence_provider_check',
-           'location_evidence_coordinates_expire_after_received_check'
+           'location_evidence_coordinates_expire_after_received_check',
+           'location_evidence_coordinates_purge_after_received_check',
+           'location_evidence_retention_class_check',
+           'location_evidence_retention_seconds_check',
+           'location_access_audit_action_scope_check',
+           'location_access_audit_no_coordinate_metadata_check',
+           'location_access_audit_reason_code_check',
+           'location_access_audit_request_id_check',
+           'location_access_audit_operation_context_check'
          )
        ORDER BY conname`,
     );
@@ -347,11 +385,35 @@ describe("PostgreSQL attendance evidence ledger", () => {
         contype: "f",
       },
       {
+        conname: "location_access_audit_action_scope_check",
+        contype: "c",
+      },
+      {
+        conname: "location_access_audit_no_coordinate_metadata_check",
+        contype: "c",
+      },
+      {
+        conname: "location_access_audit_operation_context_check",
+        contype: "c",
+      },
+      {
+        conname: "location_access_audit_reason_code_check",
+        contype: "c",
+      },
+      {
+        conname: "location_access_audit_request_id_check",
+        contype: "c",
+      },
+      {
         conname: "location_evidence_age_ms_nonnegative_check",
         contype: "c",
       },
       {
         conname: "location_evidence_coordinates_expire_after_received_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_coordinates_purge_after_received_check",
         contype: "c",
       },
       {
@@ -364,6 +426,14 @@ describe("PostgreSQL attendance evidence ledger", () => {
       },
       {
         conname: "location_evidence_provider_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_retention_class_check",
+        contype: "c",
+      },
+      {
+        conname: "location_evidence_retention_seconds_check",
         contype: "c",
       },
     ]);
@@ -446,26 +516,11 @@ describe("PostgreSQL attendance evidence ledger", () => {
         latitude,
         longitude,
         accuracy_meters,
-        age_ms
-      ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0, 0)`,
-        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
-      ),
-    ).rejects.toMatchObject({
-      code: "23514",
-    });
-
-    await expect(
-      pool.query(
-        `INSERT INTO attendance.location_evidence (
-        attendance_event_id,
-        company_id,
-        employee_user_id,
-        captured_at,
-        latitude,
-        longitude,
-        accuracy_meters,
-        age_ms
-      ) VALUES ($1, $2, $3, now(), 0, 0, 0, -1)`,
+        age_ms,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 90.000001, 0, 0, 0, now() + interval '30 days', 'standard', 2592000)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -483,8 +538,32 @@ describe("PostgreSQL attendance evidence ledger", () => {
         longitude,
         accuracy_meters,
         age_ms,
-        permission_state
-      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'prompt')`,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, -1, now() + interval '30 days', 'standard', 2592000)`,
+        [fixture.eventId, fixture.companyId, fixture.employeeUserId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms,
+        permission_state,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'prompt', now() + interval '30 days', 'standard', 2592000)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -505,8 +584,11 @@ describe("PostgreSQL attendance evidence ledger", () => {
         longitude,
         accuracy_meters,
         age_ms,
-        provider
-      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'gps')`,
+        provider,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, 'gps', now() + interval '30 days', 'standard', 2592000)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -514,6 +596,41 @@ describe("PostgreSQL attendance evidence ledger", () => {
       constraint: "location_evidence_provider_check",
     });
 
+    const otherPolicyVersion = await pool.query<{ id: string }>(`
+      WITH company AS (
+        INSERT INTO platform.company_profiles (
+          company_name,
+          company_slug,
+          status
+        ) VALUES (
+          'GEO S12 trigger fixture',
+          'geo-s12-trigger-' || replace(gen_random_uuid()::text, '-', ''),
+          'active'
+        )
+        RETURNING id
+      ),
+      policy AS (
+        INSERT INTO attendance.policies (
+          company_id,
+          policy_key,
+          name,
+          label
+        )
+        SELECT id, 'attendance', 'geo-s12-trigger', 'GEO S12 Trigger'
+        FROM company
+        RETURNING id, company_id
+      )
+      INSERT INTO attendance.policy_versions (
+        company_id,
+        policy_id,
+        version_number,
+        effective_from,
+        config
+      )
+      SELECT company_id, id, 1, now(), '{}'::jsonb
+      FROM policy
+      RETURNING id
+    `);
     await expect(
       pool.query(
         `INSERT INTO attendance.location_evidence (
@@ -524,8 +641,39 @@ describe("PostgreSQL attendance evidence ledger", () => {
         latitude,
         longitude,
         accuracy_meters,
-        age_ms
-      ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0, 0)`,
+        age_ms,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds,
+        retention_policy_version_id
+      ) VALUES ($1, $2, $3, now(), 0, 0, 0, 0, now() + interval '30 days', 'standard', 2592000, $4)`,
+        [
+          fixture.eventId,
+          fixture.companyId,
+          fixture.employeeUserId,
+          otherPolicyVersion.rows[0]?.id,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "location_evidence_policy_version_company_check",
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO attendance.location_evidence (
+        attendance_event_id,
+        company_id,
+        employee_user_id,
+        captured_at,
+        latitude,
+        longitude,
+        accuracy_meters,
+        age_ms,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 0, 180.000001, 0, 0, now() + interval '30 days', 'standard', 2592000)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -542,8 +690,11 @@ describe("PostgreSQL attendance evidence ledger", () => {
         latitude,
         longitude,
         accuracy_meters,
-        age_ms
-      ) VALUES ($1, $2, $3, now(), 0, 0, -0.01, 0)`,
+        age_ms,
+        coordinates_expire_at,
+        coordinate_retention_class,
+        coordinate_retention_seconds
+      ) VALUES ($1, $2, $3, now(), 0, 0, -0.01, 0, now() + interval '30 days', 'standard', 2592000)`,
         [fixture.eventId, fixture.companyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -657,8 +808,12 @@ describe("PostgreSQL attendance evidence ledger", () => {
       pool.query(
         `INSERT INTO attendance.location_evidence (
           attendance_event_id, company_id, employee_user_id, captured_at,
-          latitude, longitude, accuracy_meters, age_ms
-        ) VALUES ($1, $2, $3, now(), 12.971599, 77.594566, 8.5, 0)`,
+          latitude, longitude, accuracy_meters, age_ms,
+          coordinates_expire_at, coordinate_retention_class, coordinate_retention_seconds
+        ) VALUES (
+          $1, $2, $3, now(), 12.971599, 77.594566, 8.5, 0,
+          now() + interval '30 days', 'standard', 2592000
+        )`,
         [fixture.eventId, otherCompanyId, fixture.employeeUserId],
       ),
     ).rejects.toMatchObject({
@@ -700,7 +855,10 @@ describe("PostgreSQL attendance evidence ledger", () => {
       WHERE NOT tg.tgisinternal
         AND (tg.tgname, tg.tgrelid) IN (
           ('attendance_events_immutable_trg', 'attendance.attendance_events'::regclass),
+          ('location_access_audit_insert_validate_trg', 'attendance.location_access_audit_logs'::regclass),
           ('location_evidence_immutable_trg', 'attendance.location_evidence'::regclass),
+          ('location_evidence_insert_validate_trg', 'attendance.location_evidence'::regclass),
+          ('location_access_audit_immutable_trg', 'attendance.location_access_audit_logs'::regclass),
           ('attendance_decisions_immutable_trg', 'attendance.attendance_decisions'::regclass),
           ('decision_reasons_immutable_trg', 'attendance.decision_reasons'::regclass),
           ('command_decisions_immutable_trg', 'attendance.command_decisions'::regclass)
@@ -726,7 +884,19 @@ describe("PostgreSQL attendance evidence ledger", () => {
         table_name: "attendance.decision_reasons",
       },
       {
+        tgname: "location_access_audit_immutable_trg",
+        table_name: "attendance.location_access_audit_logs",
+      },
+      {
+        tgname: "location_access_audit_insert_validate_trg",
+        table_name: "attendance.location_access_audit_logs",
+      },
+      {
         tgname: "location_evidence_immutable_trg",
+        table_name: "attendance.location_evidence",
+      },
+      {
+        tgname: "location_evidence_insert_validate_trg",
         table_name: "attendance.location_evidence",
       },
     ]);

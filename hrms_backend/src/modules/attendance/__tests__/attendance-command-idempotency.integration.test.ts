@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
@@ -43,6 +44,17 @@ async function clearAttendanceRuntimeFixtures(
     DELETE FROM platform.idempotency_keys
     WHERE scope LIKE 'attendance.punch:%'
   `);
+}
+
+function assertNoExactCoordinateLeak(value: unknown): void {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toContain("12.971599");
+  expect(serialized).not.toContain("77.594566");
+  expect(serialized).not.toContain("latitude");
+  expect(serialized).not.toContain("longitude");
+  expect(serialized).not.toContain("altitude");
+  expect(serialized).not.toContain("raw_payload");
+  expect(serialized).not.toContain("geometry");
 }
 
 describe("PostgreSQL attendance command idempotency", () => {
@@ -601,6 +613,10 @@ describe("PostgreSQL attendance command idempotency", () => {
       provider: string | null;
       raw_payload: Record<string, unknown>;
       coordinates_expire_at: Date | null;
+      coordinate_retention_class: string | null;
+      coordinate_retention_seconds: number | null;
+      retention_policy_version_id: string | null;
+      joined_policy_version_id: string | null;
       evaluation_context: Record<string, unknown>;
       outbox_payload: Record<string, unknown>;
       day_record: Record<string, unknown>;
@@ -621,6 +637,10 @@ describe("PostgreSQL attendance command idempotency", () => {
         location.provider,
         location.raw_payload,
         location.coordinates_expire_at,
+        location.coordinate_retention_class,
+        location.coordinate_retention_seconds,
+        location.retention_policy_version_id,
+        policy_version.id AS joined_policy_version_id,
         audit.evaluation_context,
         outbox.payload AS outbox_payload,
         to_jsonb(day.*) AS day_record,
@@ -639,6 +659,9 @@ describe("PostgreSQL attendance command idempotency", () => {
          ON event.command_execution_id = command.id
        JOIN attendance.location_evidence location
          ON location.attendance_event_id = event.id
+       LEFT JOIN attendance.policy_versions policy_version
+         ON policy_version.id = location.retention_policy_version_id
+        AND policy_version.company_id = location.company_id
        JOIN attendance.attendance_decisions audit
          ON audit.command_execution_id = command.id
        JOIN attendance.punch_events punch
@@ -662,10 +685,14 @@ describe("PostgreSQL attendance command idempotency", () => {
       altitude_meters: "920.12",
       permission_state: "granted",
       provider: "browser",
-      coordinates_expire_at: null,
+      coordinate_retention_class: AttendanceCoordinateRetentionDefaults.Class,
+      coordinate_retention_seconds: AttendanceCoordinateRetentionDefaults.Seconds,
       location_rows: "1",
       reason_rows: "1",
     });
+    expect(row.coordinates_expire_at).toBeInstanceOf(Date);
+    expect(row.coordinates_expire_at!.getTime()).toBeGreaterThan(row.command_at.getTime());
+    expect(row.retention_policy_version_id).toBe(row.joined_policy_version_id);
     expect(row.age_ms).toBe(
       Math.max(0, row.command_at.getTime() - Date.parse(capturedAt)),
     );
@@ -702,6 +729,30 @@ describe("PostgreSQL attendance command idempotency", () => {
       expect(serialized).not.toContain("latitude");
       expect(serialized).not.toContain("longitude");
     }
+
+    const punchHistory = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/punches/my",
+      headers: authHeader(employee.token),
+    });
+    expect(punchHistory.statusCode).toBe(200);
+    assertNoExactCoordinateLeak(punchHistory.json());
+
+    const admin = await loginAs(app, "ADM");
+    const exportJob = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/exports",
+      headers: authHeader(admin.token),
+      payload: {
+        format: "json",
+        filters: {
+          employee_user_id: employee.user.id,
+        },
+      },
+    });
+    expect(exportJob.statusCode).toBe(200);
+    assertNoExactCoordinateLeak(exportJob.json());
+    assertNoExactCoordinateLeak(app.store.outbox.at(-1)?.payload ?? {});
 
     const changedCoordinates = await app.inject({
       method: "POST",

@@ -26,7 +26,10 @@ import {
   buildPunchRecordedEvent,
   buildRegularizationDecisionEvent,
 } from "./events.js";
-import type { EffectiveAttendancePolicy } from "./policy-config.js";
+import {
+  resolveCoordinateRetention,
+  type EffectiveAttendancePolicy,
+} from "./policy-config.js";
 import {
   evaluateAttendanceGeoPolicy,
   type AttendanceGeoDecision,
@@ -444,6 +447,7 @@ export class AttendanceCommandService {
                 receivedAt: occurredAt,
                 sourceChannel: commandInput.source,
                 location: commandInput.location,
+                policy,
               })
             : null;
           const locationContext = locationEvidenceDecisionContext(locationEvidence);
@@ -1690,12 +1694,16 @@ export class AttendanceCommandService {
       receivedAt: string;
       sourceChannel: AttendanceCommandInput["source"];
       location: AttendanceLocationEvidenceInput;
+      policy: EffectiveAttendancePolicy;
     },
   ): Promise<PersistedLocationEvidence> {
     const evaluatedAgeMs = Math.max(
       0,
       Date.parse(input.receivedAt) - Date.parse(input.location.captured_at ?? input.receivedAt),
     );
+    const coordinateRetention = hasCoordinateEvidence(input.location)
+      ? resolveCoordinateRetention(input.policy)
+      : null;
     const evidence = await tx.createAttendanceLocationEvidence({
       attendanceEventId: input.attendanceEventId,
       companyId: input.companyId,
@@ -1704,14 +1712,19 @@ export class AttendanceCommandService {
       receivedAt: input.receivedAt,
       location: input.location,
       ageMs: evaluatedAgeMs,
-      coordinatesExpireAt: null,
+      coordinatesExpireAt: coordinateRetention
+        ? new Date(Date.parse(input.receivedAt) + coordinateRetention.retentionSeconds * 1000).toISOString()
+        : null,
+      coordinateRetentionClass: coordinateRetention?.retentionClass ?? null,
+      coordinateRetentionSeconds: coordinateRetention?.retentionSeconds ?? null,
+      retentionPolicyVersionId: coordinateRetention ? input.policy.policyVersionId : null,
       rawPayload: {
         schema_version: 1,
         source_channel: input.sourceChannel,
-      provider: input.location.provider ?? null,
-      permission_state: input.location.permission_state,
-      client_age_ms: input.location.age_ms ?? null,
-      evaluated_age_ms: evaluatedAgeMs,
+        provider: input.location.provider ?? null,
+        permission_state: input.location.permission_state,
+        client_age_ms: input.location.age_ms ?? null,
+        evaluated_age_ms: evaluatedAgeMs,
       },
     });
     return {

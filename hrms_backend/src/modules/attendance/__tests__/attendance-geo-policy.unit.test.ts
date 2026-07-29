@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import {
   AttendanceGeoDecisionReasonCodes,
   evaluateAttendanceGeoPolicy,
@@ -8,7 +9,10 @@ import {
   type AttendanceGeoSpatialCategory,
 } from "../geo-policy.js";
 import { classifyAttendanceGeoSpatialCategory } from "../command-repository.js";
-import { normalizeAttendancePolicyConfig } from "../policy-config.js";
+import {
+  normalizeAttendancePolicyConfig,
+  resolveCoordinateRetention,
+} from "../policy-config.js";
 
 const geofence = {
   geofenceId: "11111111-1111-4111-8111-111111111111",
@@ -251,6 +255,12 @@ describe("attendance geo policy evaluator", () => {
     expect(normalized.geofenceGraceMeters).toBe(0);
     expect(normalized.maxLocationAgeMs).toBeNull();
     expect(normalized.maxAccuracyMeters).toBeNull();
+    expect(normalized.coordinateRetentionClasses).toEqual({
+      [AttendanceCoordinateRetentionDefaults.Class]: AttendanceCoordinateRetentionDefaults.Seconds,
+    });
+    expect(normalized.defaultCoordinateRetentionClass).toBe(
+      AttendanceCoordinateRetentionDefaults.Class,
+    );
 
     const decision = evaluateAttendanceGeoPolicy({
       policy: policy(normalized),
@@ -260,6 +270,52 @@ describe("attendance geo policy evaluator", () => {
     expect(decision).toMatchObject({
       allowed: true,
       reasonCode: AttendanceGeoDecisionReasonCodes.GeoNotRequired,
+    });
+  });
+
+  it("normalizes coordinate retention classes and resolves the active default", () => {
+    const normalized = normalizeAttendancePolicyConfig({
+      coordinateRetentionClasses: {
+        standard: 2_592_000,
+        short: 86_400,
+        "ops-review": 604_800,
+        Bad: 86_400,
+        zero: 0,
+        too_short: AttendanceCoordinateRetentionDefaults.MinSeconds - 1,
+        too_long: AttendanceCoordinateRetentionDefaults.MaxSeconds + 1,
+        fractional: 86_400.5,
+        infinite: Number.POSITIVE_INFINITY,
+      },
+      defaultCoordinateRetentionClass: "short",
+    });
+
+    expect(normalized.coordinateRetentionClasses).toEqual({
+      standard: 2_592_000,
+      short: 86_400,
+      "ops-review": 604_800,
+    });
+    expect(normalized.defaultCoordinateRetentionClass).toBe("short");
+    expect(resolveCoordinateRetention(normalized)).toEqual({
+      retentionClass: "short",
+      retentionSeconds: 86_400,
+    });
+  });
+
+  it("falls back to a configured coordinate retention class when the default is invalid", () => {
+    const normalized = normalizeAttendancePolicyConfig({
+      coordinate_retention_classes: {
+        extended: 7_776_000,
+      },
+      default_coordinate_retention_class: "missing",
+    });
+
+    expect(normalized.coordinateRetentionClasses).toEqual({
+      extended: 7_776_000,
+    });
+    expect(normalized.defaultCoordinateRetentionClass).toBe("extended");
+    expect(resolveCoordinateRetention(normalized)).toEqual({
+      retentionClass: "extended",
+      retentionSeconds: 7_776_000,
     });
   });
 
