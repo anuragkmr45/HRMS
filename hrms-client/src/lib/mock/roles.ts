@@ -123,7 +123,7 @@ export const ROLES: RoleDefinition[] = [
     short: "AU",
     description: "Read-only governance and audit reporting.",
     color: "warning",
-    modules: ["/dashboard", "/expenses", "/assets", "/helpdesk", "/reports"],
+    modules: ["/dashboard", "/attendance", "/expenses", "/assets", "/helpdesk", "/reports"],
   },
   {
     key: "project_manager",
@@ -134,6 +134,7 @@ export const ROLES: RoleDefinition[] = [
     modules: [
       "/dashboard",
       "/ems",
+      "/attendance",
       "/projects",
       "/team-utilization",
       "/timesheet",
@@ -148,7 +149,15 @@ export const ROLES: RoleDefinition[] = [
     short: "FM",
     description: "Process expenses, settlements and finance-grade reporting.",
     color: "success",
-    modules: ["/dashboard", "/ems", "/expenses", "/timesheet", "/reports", "/helpdesk"],
+    modules: [
+      "/dashboard",
+      "/ems",
+      "/attendance",
+      "/expenses",
+      "/timesheet",
+      "/reports",
+      "/helpdesk",
+    ],
   },
   {
     key: "asset_admin",
@@ -156,7 +165,7 @@ export const ROLES: RoleDefinition[] = [
     short: "IT",
     description: "Hardware lifecycle, allocations and IT helpdesk.",
     color: "warning",
-    modules: ["/dashboard", "/ems", "/assets", "/helpdesk", "/reports"],
+    modules: ["/dashboard", "/ems", "/attendance", "/assets", "/helpdesk", "/reports"],
   },
   {
     key: "helpdesk_agent",

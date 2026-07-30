@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,8 +21,8 @@ import {
   Clock,
   Building2,
 } from "lucide-react";
-import type { Role } from "@/lib/mock/roles";
 import {
+  attendanceAccessForRole,
   useAttendancePunchMutation,
   useMyAttendanceSummary,
   useTeamAttendanceSummary,
@@ -42,12 +42,15 @@ export const Route = createFileRoute("/_app/attendance/")({
   component: AttendanceOverview,
 });
 
-const ADMIN_ROLES: Role[] = ["hr_admin", "main_admin", "manager"];
-
 function AttendanceOverview() {
   const { activeRole } = useAuth();
-  const isAdmin = activeRole && ADMIN_ROLES.includes(activeRole);
-  return isAdmin ? <AdminView /> : <EmployeeView />;
+  const access = attendanceAccessForRole(activeRole);
+  if (!access.canViewAttendance) return <Navigate to="/dashboard" />;
+  return access.canViewTeamAttendance ? (
+    <AdminView />
+  ) : (
+    <EmployeeView allowPunches={access.canPunch} />
+  );
 }
 
 function records(value: unknown): ApiRecord[] {
@@ -215,7 +218,7 @@ function AdminView() {
   );
 }
 
-function EmployeeView() {
+function EmployeeView({ allowPunches }: { allowPunches: boolean }) {
   const [now, setNow] = useState(new Date());
   const query = useMyAttendanceSummary({ month: currentMonth(), page: 1, page_size: 50 });
   const punchMutation = useAttendancePunchMutation();
@@ -257,7 +260,8 @@ function EmployeeView() {
     }
   };
 
-  const canPunch = (eventType: AttendancePunchEventType) => nextAllowedActions.includes(eventType);
+  const canPunch = (eventType: AttendancePunchEventType) =>
+    allowPunches && nextAllowedActions.includes(eventType);
   const status = text(today.status, query.isLoading ? "loading" : "absent");
   const statusLabel =
     nextAllowedActions.length === 0 &&

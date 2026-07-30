@@ -1,29 +1,32 @@
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Navigate, Outlet } from "@tanstack/react-router";
 import { PageHeader, ModuleTabs } from "@/components/ui-kit";
+import { attendanceAccessForRole } from "@/domains/attendance";
 import { useAuth } from "@/lib/auth";
-import type { Role } from "@/lib/mock/roles";
-import { LayoutDashboard, CalendarDays, AlertTriangle } from "lucide-react";
+import { LayoutDashboard, CalendarDays, ClipboardCheck } from "lucide-react";
 
 export const Route = createFileRoute("/_app/attendance")({
   component: AttendanceLayout,
 });
 
-const ATTENDANCE_ADMIN_ROLES: Role[] = ["hr_admin", "main_admin"];
-const ATTENDANCE_OVERSIGHT_ROLES: Role[] = ["hr_admin", "main_admin", "manager"];
-
 const TABS = [
   { to: "/attendance", label: "Overview", icon: LayoutDashboard, exact: true },
-  { to: "/attendance/calendar", label: "Calendar", icon: CalendarDays, selfOnly: true },
-  { to: "/attendance/exceptions", label: "Exceptions", icon: AlertTriangle, adminOnly: true },
+  { to: "/attendance/calendar", label: "Calendar", icon: CalendarDays, capability: "self" },
+  {
+    to: "/attendance/exceptions",
+    label: "Review queue",
+    icon: ClipboardCheck,
+    capability: "review",
+  },
 ];
 
 function AttendanceLayout() {
   const { activeRole } = useAuth();
-  const isAdminRole = activeRole && ATTENDANCE_ADMIN_ROLES.includes(activeRole);
-  const isOversightRole = activeRole && ATTENDANCE_OVERSIGHT_ROLES.includes(activeRole);
+  const access = attendanceAccessForRole(activeRole);
+  if (!access.canViewAttendance) return <Navigate to="/dashboard" />;
+
   const visible = TABS.filter((tab) => {
-    if (tab.adminOnly) return isAdminRole;
-    if (tab.selfOnly) return !isOversightRole;
+    if (tab.capability === "self") return access.canViewSelfAttendance;
+    if (tab.capability === "review") return access.canViewReviewQueue;
     return true;
   });
 
