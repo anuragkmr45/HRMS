@@ -3,10 +3,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column, StatusBadge, EmptyState, StatCard } from "@/components/ui-kit";
 import { useAuth } from "@/lib/auth";
-import type { Role } from "@/lib/mock/roles";
 import { toast } from "sonner";
 import { AlarmClock, LogOut, ClipboardX, Wrench, Check, X } from "lucide-react";
 import {
+  attendanceAccessForRole,
   useAttendanceExceptions,
   useAttendanceRegularizationDecisionMutation,
 } from "@/domains/attendance";
@@ -22,8 +22,6 @@ import {
 export const Route = createFileRoute("/_app/attendance/exceptions")({
   component: ExceptionsPage,
 });
-
-const ADMIN_ROLES: Role[] = ["hr_admin", "main_admin"];
 
 interface Row {
   id: string;
@@ -70,12 +68,15 @@ function Queue({
   rows,
   kind,
   decision,
+  allowDecisions,
 }: {
   rows: Row[];
   kind: string;
   decision: ReturnType<typeof useAttendanceRegularizationDecisionMutation>;
+  allowDecisions: boolean;
 }) {
   const act = async (row: Row, ok: boolean) => {
+    if (!allowDecisions || !row.canDecide) return;
     if (!row.requestId) {
       toast.error("Only submitted correction requests can be decided from this queue.");
       return;
@@ -109,7 +110,9 @@ function Queue({
       render: (r) => <span className="text-muted-foreground">{r.detail}</span>,
     },
     { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
-    {
+  ];
+  if (allowDecisions) {
+    cols.push({
       key: "actions",
       header: "Actions",
       render: (r) =>
@@ -120,6 +123,7 @@ function Queue({
               className="h-7 rounded-full"
               disabled={decision.isPending}
               onClick={() => act(r, true)}
+              aria-label="Approve correction"
             >
               <Check className="h-3.5 w-3.5" />
             </Button>
@@ -129,6 +133,7 @@ function Queue({
               className="h-7 rounded-full"
               disabled={decision.isPending}
               onClick={() => act(r, false)}
+              aria-label="Reject correction"
             >
               <X className="h-3.5 w-3.5" />
             </Button>
@@ -136,8 +141,8 @@ function Queue({
         ) : (
           <span className="text-xs text-muted-foreground">No action</span>
         ),
-    },
-  ];
+    });
+  }
   if (rows.length === 0)
     return <EmptyState title="All clear" description={`No ${kind.toLowerCase()} pending.`} />;
   return <DataTable rows={rows} columns={cols} searchKeys={["employee", "detail"]} />;
@@ -145,7 +150,8 @@ function Queue({
 
 function ExceptionsPage() {
   const { activeRole } = useAuth();
-  const allowed = Boolean(activeRole && ADMIN_ROLES.includes(activeRole));
+  const access = attendanceAccessForRole(activeRole);
+  const allowed = access.canViewReviewQueue;
   const query = useAttendanceExceptions({ page: 1, page_size: 100 }, allowed);
   const decision = useAttendanceRegularizationDecisionMutation();
   if (!allowed) return <Navigate to="/attendance" />;
@@ -209,16 +215,36 @@ function ExceptionsPage() {
             <TabsTrigger value="correction">Corrections</TabsTrigger>
           </TabsList>
           <TabsContent value="late" className="mt-4">
-            <Queue rows={late} kind="Late" decision={decision} />
+            <Queue
+              rows={late}
+              kind="Late"
+              decision={decision}
+              allowDecisions={access.canDecideRegularizations}
+            />
           </TabsContent>
           <TabsContent value="missing" className="mt-4">
-            <Queue rows={missing} kind="Missing punch-out" decision={decision} />
+            <Queue
+              rows={missing}
+              kind="Missing punch-out"
+              decision={decision}
+              allowDecisions={access.canDecideRegularizations}
+            />
           </TabsContent>
           <TabsContent value="absent" className="mt-4">
-            <Queue rows={absent} kind="Absence" decision={decision} />
+            <Queue
+              rows={absent}
+              kind="Absence"
+              decision={decision}
+              allowDecisions={access.canDecideRegularizations}
+            />
           </TabsContent>
           <TabsContent value="correction" className="mt-4">
-            <Queue rows={corrections} kind="Correction" decision={decision} />
+            <Queue
+              rows={corrections}
+              kind="Correction"
+              decision={decision}
+              allowDecisions={access.canDecideRegularizations}
+            />
           </TabsContent>
         </Tabs>
       )}
