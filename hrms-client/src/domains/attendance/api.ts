@@ -1,5 +1,6 @@
 import { apiRequest } from "@/shared/api";
 import type { ApiRecord, ExpectedVersionBody, PageQuery, PaginatedResponse } from "@/shared/api";
+import type { AttendanceSourceChannel, AttendanceWorkMode } from "./work-context";
 
 export type AttendancePunchEventType = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -16,9 +17,8 @@ export interface AttendanceQuery extends PageQuery {
 
 export interface AttendancePunchBody extends ApiRecord {
   event_type: AttendancePunchEventType;
-  occurred_at?: string;
-  work_mode?: "office" | "remote" | "wfh" | "field";
-  source?: "web" | "mobile" | "kiosk" | "admin";
+  work_mode?: AttendanceWorkMode;
+  source?: AttendanceSourceChannel;
   metadata?: ApiRecord;
 }
 
