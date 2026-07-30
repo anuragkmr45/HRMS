@@ -1,5 +1,11 @@
 import { apiRequest } from "@/shared/api";
-import type { ApiRecord, ExpectedVersionBody, PageQuery, PaginatedResponse } from "@/shared/api";
+import type {
+  ApiRecord,
+  ExpectedVersionBody,
+  IdempotentMutation,
+  PageQuery,
+  PaginatedResponse,
+} from "@/shared/api";
 
 export type AttendancePunchEventType = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -43,10 +49,11 @@ export interface AttendanceExportBody extends ApiRecord {
 }
 
 export const attendanceApi = {
-  punch(input: AttendancePunchBody) {
+  punch({ idempotencyKey, input }: IdempotentMutation<AttendancePunchBody>) {
     return apiRequest<ApiRecord>("/api/v1/attendance/punches", {
       method: "POST",
       body: input,
+      headers: { "Idempotency-Key": idempotencyKey },
     });
   },
   listMyPunches(query: AttendanceQuery = {}) {
