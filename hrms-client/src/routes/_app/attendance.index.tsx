@@ -32,6 +32,7 @@ import { currentLocalMonth, localIsoDate, liveAttendanceToday } from "@/domains/
 import {
   asArray,
   asRecord,
+  createIdempotentMutation,
   numberValue,
   text,
   userFacingErrorMessage,
@@ -244,13 +245,15 @@ function EmployeeView() {
 
   const punch = async (eventType: AttendancePunchEventType, successMessage: string) => {
     try {
-      await punchMutation.mutateAsync({
-        event_type: eventType,
-        occurred_at: new Date().toISOString(),
-        work_mode: "office",
-        source: "web",
-        metadata: {},
-      });
+      await punchMutation.mutateAsync(
+        createIdempotentMutation("attendance.punch", {
+          event_type: eventType,
+          occurred_at: new Date().toISOString(),
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+        }),
+      );
       toast.success(successMessage);
     } catch (error) {
       toast.error(errorMessage(error));

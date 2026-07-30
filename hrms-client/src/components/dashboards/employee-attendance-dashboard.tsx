@@ -15,7 +15,13 @@ import {
   formatAttendanceMinutes,
   liveAttendanceToday,
 } from "@/domains/attendance/live";
-import { asRecord, numberValue, text, userFacingErrorMessage } from "@/shared/api";
+import {
+  asRecord,
+  createIdempotentMutation,
+  numberValue,
+  text,
+  userFacingErrorMessage,
+} from "@/shared/api";
 
 function currentMonth(): string {
   return currentLocalMonth();
@@ -51,13 +57,15 @@ export function EmployeeAttendanceDashboard() {
   const canPunch = (eventType: AttendancePunchEventType) => nextAllowedActions.includes(eventType);
   const punch = async (eventType: AttendancePunchEventType, successMessage: string) => {
     try {
-      await punchMutation.mutateAsync({
-        event_type: eventType,
-        occurred_at: new Date().toISOString(),
-        work_mode: "office",
-        source: "web",
-        metadata: { source_view: "dashboard" },
-      });
+      await punchMutation.mutateAsync(
+        createIdempotentMutation("attendance.punch", {
+          event_type: eventType,
+          occurred_at: new Date().toISOString(),
+          work_mode: "office",
+          source: "web",
+          metadata: { source_view: "dashboard" },
+        }),
+      );
       toast.success(successMessage);
     } catch (error) {
       toast.error(errorMessage(error));

@@ -1,4 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  idempotentMutationRetryDelay,
+  retryIdempotentMutation,
+  type IdempotentMutation,
+} from "@/shared/api";
 import { queryKeys, queryTimings } from "@/shared/query";
 import { attendanceApi } from "./api";
 import type {
@@ -95,7 +100,10 @@ export function useManagerAttendanceRegularizationQueue(
 export function useAttendancePunchMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: AttendancePunchBody) => attendanceApi.punch(input),
+    mutationFn: (mutation: IdempotentMutation<AttendancePunchBody>) =>
+      attendanceApi.punch(mutation),
+    retry: retryIdempotentMutation,
+    retryDelay: idempotentMutationRetryDelay,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.domain("attendance") }),
   });
 }
