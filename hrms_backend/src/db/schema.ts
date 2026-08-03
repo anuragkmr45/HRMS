@@ -14,6 +14,7 @@ import {
   text,
   time,
   timestamp,
+  unique,
   uniqueIndex,
   uuid
 } from "drizzle-orm/pg-core";
@@ -182,6 +183,101 @@ export const userSessions = platform.table(
   (table) => [
     uniqueIndex("platform_sessions_jti_uq").on(table.sessionJti),
     index("platform_sessions_user_active_idx").on(table.userId, table.revokedAt, table.expiresAt)
+  ]
+);
+
+export const companyProfiles = platform.table(
+  "company_profiles",
+  {
+    id: uuidPk.defaultRandom(),
+    companyName: text("company_name").notNull(),
+    companySlug: text("company_slug").notNull(),
+    timezone: text("timezone").notNull().default("Asia/Kolkata"),
+    locale: text("locale").notNull().default("en-IN"),
+    fiscalYearStartMonth: integer("fiscal_year_start_month").notNull().default(4),
+    status: text("status").notNull().default("pending"),
+    bootstrapCompletedAt: timestamp("bootstrap_completed_at", { withTimezone: true }),
+    createdAt,
+    updatedAt,
+    version,
+    website: text("website"),
+    industry: text("industry"),
+    address: text("address"),
+    currency: text("currency").notNull().default("INR"),
+    workingWeek: text("working_week").notNull().default("Mon-Fri"),
+    workHoursPerDay: numeric("work_hours_per_day", { precision: 4, scale: 2 }).notNull().default("8"),
+    logoLabel: text("logo_label"),
+    logoDocumentId: uuid("logo_document_id"),
+    logoUrl: text("logo_url"),
+    logoFileName: text("logo_file_name"),
+    logoMimeType: text("logo_mime_type"),
+    logoSizeBytes: integer("logo_size_bytes")
+  },
+  (table) => [
+    unique("company_profiles_company_slug_key").on(table.companySlug),
+    index("platform_company_profiles_status_idx").on(table.status, table.updatedAt.desc()),
+    index("platform_company_profiles_slug_status_idx").on(table.companySlug, table.status),
+    index("platform_company_profiles_logo_document_idx")
+      .on(table.logoDocumentId)
+      .where(sql`${table.logoDocumentId} IS NOT NULL`),
+    check("company_profiles_fiscal_year_start_month_check", sql`${table.fiscalYearStartMonth} BETWEEN 1 AND 12`)
+  ]
+);
+
+export const userSessionPreferences = platform.table(
+  "user_session_preferences",
+  {
+    id: uuidPk.defaultRandom(),
+    userId: uuid("user_id").notNull(),
+    activeRole: text("active_role").notNull(),
+    companyId: uuid("company_id"),
+    landingPage: text("landing_page").notNull().default("/dashboard"),
+    locale: text("locale").notNull().default("en-IN"),
+    timezone: text("timezone").notNull().default("Asia/Kolkata"),
+    createdAt,
+    updatedAt,
+    version
+  },
+  (table) => [
+    unique("user_session_preferences_user_id_key").on(table.userId),
+    unique("platform_user_session_preferences_user_company_uq").on(table.userId, table.companyId),
+    index("platform_user_session_preferences_role_idx").on(table.userId, table.activeRole)
+  ]
+);
+
+export const registeredDevices = platform.table(
+  "registered_devices",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    installationIdHash: text("installation_id_hash").notNull(),
+    platform: text("platform").notNull(),
+    status: text("status").notNull().default("registered"),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    unique("platform_registered_devices_id_company_uq").on(table.id, table.companyId),
+    foreignKey({
+      name: "platform_registered_devices_company_fk",
+      columns: [table.companyId],
+      foreignColumns: [companyProfiles.id]
+    }).onUpdate("restrict").onDelete("restrict"),
+    foreignKey({
+      name: "platform_registered_devices_user_company_fk",
+      columns: [table.userId, table.companyId],
+      foreignColumns: [userSessionPreferences.userId, userSessionPreferences.companyId]
+    }).onUpdate("restrict").onDelete("restrict"),
+    check("platform_registered_devices_platform_check", sql`${table.platform} IN ('ios', 'android')`),
+    check("platform_registered_devices_status_check", sql`${table.status} IN ('registered', 'suspended', 'revoked')`),
+    check("platform_registered_devices_installation_hash_check", sql`${table.installationIdHash} ~ '^[0-9a-f]{64}$'`),
+    check("platform_registered_devices_status_changed_at_check", sql`${table.statusChangedAt} >= ${table.createdAt}`),
+    check("platform_registered_devices_updated_at_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+    unique("platform_registered_devices_company_installation_uq").on(table.companyId, table.installationIdHash),
+    index("platform_registered_devices_company_user_status_updated_idx")
+      .on(table.companyId, table.userId, table.status, table.updatedAt.desc())
   ]
 );
 
@@ -2258,6 +2354,9 @@ export const schema = {
   rolePermissions,
   userRoles,
   userSessions,
+  companyProfiles,
+  userSessionPreferences,
+  registeredDevices,
   userCredentials,
   idempotencyKeys,
   outboxEvents,

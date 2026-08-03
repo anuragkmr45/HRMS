@@ -212,6 +212,7 @@ const resetTables = [
   "platform.idempotency_keys",
   "platform.user_sessions",
   "platform.auth_tokens",
+  "platform.registered_devices",
   "platform.user_session_preferences",
   "platform.company_profiles",
   "platform.user_credentials",
