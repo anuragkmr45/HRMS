@@ -46,7 +46,7 @@ Top-level request fields:
       "sequence": 42,
       "command_kind": "employee_manual_now",
       "captured_at": "2026-08-03T09:00:00.000+05:30",
-      "source": "mobile",
+      "source": "mobile_offline",
       "event_type": "check_in",
       "work_mode": "office",
       "metadata": {
@@ -102,7 +102,7 @@ Expected future behavior:
 - Same event submitted in another batch: replay, not a new mutation.
 - In-flight event: deferred or processing conflict, not duplicate mutation.
 
-The canonical event hash excludes `batch_id`, batch array position, `server_received_at`, `processed_at`, and response metadata. It includes semantic event content: `client_event_id`, `sequence`, `command_kind`, `captured_at`, `source`, `event_type`, `work_mode`, allowlisted metadata, and location evidence.
+The canonical event hash excludes `batch_id`, batch array position, `server_received_at`, `processed_at`, and response metadata. It includes semantic event content: `client_event_id`, `sequence`, `command_kind`, `captured_at`, `source`, `event_type`, `work_mode`, allowlisted metadata, and location evidence. Version one derives the semantic source channel as `mobile_offline` at the offline contract boundary; other source values are not accepted by this contract.
 
 ## Sequence Semantics
 

@@ -3,6 +3,7 @@ import {
   AttendanceLocationPermissionStates,
   AttendanceLocationProviders,
   AttendancePunchEventTypes,
+  AttendancePublicPunchSourceChannels,
   AssetStatuses,
   DocumentClassifications,
   EmsProfileChangeStatuses,
@@ -350,7 +351,7 @@ export const attendanceLocationEvidenceSchema = z.union([
 
 export type AttendanceLocationEvidenceRequest = z.infer<typeof attendanceLocationEvidenceSchema>;
 
-const attendanceEmployeePunchSourceSchema = z.enum(["web", "web_geo", "mobile", "kiosk"]);
+const attendanceEmployeePunchSourceSchema = z.enum(AttendancePublicPunchSourceChannels);
 const untrustedBrowserGeoMetadataKeys = new Set([
   "geo_policy",
   "geo_decision",

@@ -2,6 +2,7 @@ import type {
   AttendanceDayRecord,
   AttendanceLocationEvidenceInput,
   AttendancePunchEventType,
+  AttendancePunchSourceChannel,
   AuthUser,
   UUID,
 } from "#shared";
@@ -59,7 +60,7 @@ import { canonicalJsonHash } from "./canonical-json.js";
 export interface AttendanceCommandInput {
   event_type: AttendancePunchEventType;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
+  source: AttendancePunchSourceChannel;
   metadata: Record<string, unknown>;
   location?: AttendanceLocationEvidenceInput;
 }
@@ -671,6 +672,7 @@ export class AttendanceCommandService {
               subject_employee_user_id: subjectEmployeeUserId,
               command_origin: commandKind,
               command_type: commandInput.event_type,
+              source_channel: commandInput.source,
               previous_state: state.state,
               open_session_id: open?.id ?? null,
               occurred_at: occurredAt,
@@ -715,6 +717,7 @@ export class AttendanceCommandService {
                 actor_user_id: input.actor.id,
                 subject_employee_user_id: subjectEmployeeUserId,
                 command_origin: commandKind,
+                source_channel: commandInput.source,
                 attendance_event_id: evidence.id,
                 evidence_payload_hash: evidencePayloadHash,
                 location_evidence: locationEvidence,
@@ -767,6 +770,7 @@ export class AttendanceCommandService {
               actor_user_id: input.actor.id,
               subject_employee_user_id: subjectEmployeeUserId,
               command_origin: commandKind,
+              source_channel: commandInput.source,
               attendance_event_id: evidence.id,
               evidence_payload_hash: evidencePayloadHash,
               open_session_id: open?.id ?? null,
@@ -1029,6 +1033,7 @@ export class AttendanceCommandService {
           actor_user_id: principal.actorUserId,
           subject_employee_user_id: principal.subjectEmployeeUserId,
           command_origin: input.commandKind,
+          source_channel: "admin",
           occurred_at: input.command.occurred_at,
           work_date: workDate,
         },
@@ -1049,6 +1054,7 @@ export class AttendanceCommandService {
           actor_user_id: principal.actorUserId,
           subject_employee_user_id: principal.subjectEmployeeUserId,
           command_origin: input.commandKind,
+          source_channel: "admin",
           reason: input.command.reason,
         },
       });
@@ -1524,6 +1530,7 @@ export class AttendanceCommandService {
         evaluationContext: {
           actor_user_id: principal.actorUserId,
           subject_employee_user_id: principal.subjectEmployeeUserId,
+          source_channel: "admin",
           occurred_at: input.command.occurred_at,
           work_date: workDate,
         },
@@ -1543,6 +1550,7 @@ export class AttendanceCommandService {
           audit_decision_id: auditDecision.id,
           actor_user_id: principal.actorUserId,
           subject_employee_user_id: principal.subjectEmployeeUserId,
+          source_channel: "admin",
           reason: input.command.reason,
         },
       });

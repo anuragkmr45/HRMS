@@ -74,7 +74,7 @@ export const attendanceOfflineEventEnvelopeSchema = z.object({
   sequence: attendanceOfflineSequenceSchema,
   command_kind: offlineAttendanceCommandKindSchema,
   captured_at: offsetIsoDateTimeSchema,
-  source: z.literal("mobile").default("mobile"),
+  source: z.literal("mobile_offline").default("mobile_offline"),
   event_type: offlineAttendanceEventTypeSchema,
   work_mode: offlineAttendanceWorkModeSchema.default("office"),
   metadata: offlineAttendanceMetadataSchema.default({}),

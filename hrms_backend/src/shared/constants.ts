@@ -274,6 +274,38 @@ export const AttendancePunchEventTypes = {
 export type AttendancePunchEventType =
   (typeof AttendancePunchEventTypes)[keyof typeof AttendancePunchEventTypes];
 
+export const AttendancePublicPunchSourceChannels = [
+  "web",
+  "web_geo",
+  "mobile",
+  "kiosk"
+] as const;
+
+export type AttendancePublicPunchSourceChannel =
+  (typeof AttendancePublicPunchSourceChannels)[number];
+
+export const AttendancePunchSourceChannels = [
+  "web",
+  "web_geo",
+  "mobile",
+  "mobile_foreground",
+  "mobile_offline",
+  "kiosk",
+  "admin",
+  "auto_geofence"
+] as const;
+
+export type AttendancePunchSourceChannel =
+  (typeof AttendancePunchSourceChannels)[number];
+
+export const AttendanceEvidenceSourceChannels = [
+  ...AttendancePunchSourceChannels,
+  "system"
+] as const;
+
+export type AttendanceEvidenceSourceChannel =
+  (typeof AttendanceEvidenceSourceChannels)[number];
+
 export const AttendanceDayStatuses = {
   Present: "present",
   Late: "late",

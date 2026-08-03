@@ -584,7 +584,7 @@ export const attendancePunchEvents = attendance.table(
     uniqueIndex("attendance_punch_events_id_company_uq").on(table.id, table.companyId),
     index("attendance_punch_company_employee_occurred_idx").on(table.companyId, table.employeeUserId, table.occurredAt),
     index("attendance_punch_event_type_idx").on(table.eventType, table.occurredAt),
-    check("punch_events_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'kiosk', 'admin')`)
+    check("punch_events_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'mobile_foreground', 'mobile_offline', 'kiosk', 'admin', 'auto_geofence')`)
   ]
 );
 
@@ -612,7 +612,7 @@ export const attendanceSessions = attendance.table(
     uniqueIndex("attendance_sessions_single_open_idx").on(table.companyId, table.employeeUserId).where(sql`${table.closedAt} IS NULL AND ${table.deletedAt} IS NULL`),
     index("attendance_sessions_employee_history_idx").on(table.companyId, table.employeeUserId, table.checkedInAt),
     index("attendance_sessions_work_date_idx").on(table.companyId, table.workDate, table.employeeUserId),
-    check("sessions_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'kiosk', 'admin')`)
+    check("sessions_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'mobile_foreground', 'mobile_offline', 'kiosk', 'admin', 'auto_geofence')`)
   ]
 );
 
@@ -718,7 +718,7 @@ export const attendanceEvents = attendance.table(
       .on(table.commandExecutionId, table.createdAt)
       .where(sql`${table.commandExecutionId} IS NOT NULL`),
     index("attendance_events_type_received_idx").on(table.companyId, table.eventType, table.receivedAt.desc()),
-    check("attendance_events_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'kiosk', 'admin', 'system')`),
+    check("attendance_events_source_check", sql`${table.source} IN ('web', 'web_geo', 'mobile', 'mobile_foreground', 'mobile_offline', 'kiosk', 'admin', 'auto_geofence', 'system')`),
     check("attendance_events_schema_version_check", sql`${table.schemaVersion} > 0`),
     check("attendance_events_payload_hash_check", sql`${table.payloadHash} IS NULL OR length(${table.payloadHash}) = 64`)
   ]

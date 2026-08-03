@@ -5,6 +5,7 @@ import type {
   AttendanceLocationEvidenceInput,
   AttendancePunch,
   AttendancePunchEventType,
+  AttendancePublicPunchSourceChannel,
   AttendanceRegularizationRequest,
   AttendanceRegularizationRequestItem,
   AuthUser,
@@ -393,7 +394,7 @@ export interface AttendanceAutoPunchOutRunResult {
   closures: AttendanceAutoPunchOutClosure[];
 }
 
-type EmployeePunchSource = "web" | "web_geo" | "mobile" | "kiosk";
+type EmployeePunchSource = AttendancePublicPunchSourceChannel;
 
 type EmployeePunchPostgresInput = {
   event_type: AttendancePunchEventType;
@@ -436,7 +437,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       occurred_at?: string;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
+      source: AttendancePunch["source"];
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
@@ -549,7 +550,7 @@ export class AttendanceService {
       event_type: AttendancePunchEventType;
       occurred_at?: string;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
+      source: AttendancePunch["source"];
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;
@@ -568,7 +569,7 @@ export class AttendanceService {
     input: {
       event_type: AttendancePunchEventType;
       work_mode: "office" | "remote" | "wfh" | "field";
-      source: "web" | "web_geo" | "mobile" | "kiosk";
+      source: EmployeePunchSource;
       metadata: Record<string, unknown>;
       location?: AttendanceLocationEvidenceInput;
       idempotency_key?: string;

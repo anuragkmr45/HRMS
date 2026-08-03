@@ -1,7 +1,9 @@
 import type { Pool, PoolClient } from "pg";
 import type {
   AttendanceLocationEvidenceInput,
+  AttendanceEvidenceSourceChannel,
   AttendancePunchEventType,
+  AttendancePunchSourceChannel,
   UUID,
 } from "#shared";
 import type { AttendanceOutboxEventContract } from "./events.js";
@@ -261,7 +263,7 @@ export interface AttendanceSessionRecord {
   active_break_started_at: string | null;
   last_transition_at: string;
   work_mode: "office" | "remote" | "wfh" | "field";
-  source: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
+  source: AttendancePunchSourceChannel;
   metadata: Record<string, unknown>;
   version: number;
   created_at: string;
@@ -731,7 +733,7 @@ export class AttendanceCommandTransactionRepository {
     actorUserId: UUID;
     commandExecutionId: UUID;
     eventType: AttendancePunchEventType;
-    source: string;
+    source: AttendanceEvidenceSourceChannel;
     occurredAt: string;
     receivedAt: string;
     payload: Record<string, unknown>;
@@ -1512,7 +1514,7 @@ export class AttendanceCommandTransactionRepository {
     eventType: AttendancePunchEventType;
     occurredAt: string;
     workMode: string;
-    source: string;
+    source: AttendancePunchSourceChannel;
     origin: string;
     regularizationRequestId?: UUID | null;
     metadata: Record<string, unknown>;

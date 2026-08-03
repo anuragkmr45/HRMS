@@ -5,7 +5,12 @@ import {
 } from "../command-service.js";
 import { canonicalJsonHash } from "../canonical-json.js";
 import type { CreateAttendanceDecisionInput } from "../command-repository.js";
-import { attendanceLocationEvidenceSchema, attendancePunchSchema } from "#shared";
+import {
+  AttendancePunchSourceChannels,
+  AttendancePublicPunchSourceChannels,
+  attendanceLocationEvidenceSchema,
+  attendancePunchSchema,
+} from "#shared";
 
 function acceptCommandDecisionReason(
   _reasonCode: CreateAttendanceDecisionInput["reasonCode"],
@@ -245,6 +250,29 @@ describe("attendance web_geo punch request schema", () => {
         metadata: {},
       }).success,
     ).toBe(true);
+  });
+
+  it("keeps internal source channels out of the public punch request schema", () => {
+    expect(AttendancePunchSourceChannels).toContain("mobile_foreground");
+    expect(AttendancePunchSourceChannels).toContain("mobile_offline");
+    expect(AttendancePunchSourceChannels).toContain("auto_geofence");
+    expect(AttendancePublicPunchSourceChannels).toEqual([
+      "web",
+      "web_geo",
+      "mobile",
+      "kiosk",
+    ]);
+
+    for (const source of ["mobile_foreground", "mobile_offline", "admin", "auto_geofence"]) {
+      expect(
+        attendancePunchSchema.safeParse({
+          event_type: "check_in",
+          work_mode: "office",
+          source,
+          metadata: {},
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("rejects browser-submitted geo policy and geofence outcomes", () => {

@@ -26,7 +26,7 @@ function event(
     sequence: 42,
     command_kind: "employee_manual_now",
     captured_at: "2026-08-03T09:00:00.000+05:30",
-    source: "mobile",
+    source: "mobile_offline",
     event_type: "check_in",
     work_mode: "office",
     metadata: {
@@ -82,7 +82,7 @@ describe("offline attendance sync contract", () => {
       contract_version: ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION,
       batch_id: batchId,
       device: { device_id: "mobile-installation-handle" },
-      events: [{ client_event_id: eventId, source: "mobile" }],
+      events: [{ client_event_id: eventId, source: "mobile_offline" }],
     });
   });
 
@@ -144,6 +144,16 @@ describe("offline attendance sync contract", () => {
       sequence: Number.MAX_SAFE_INTEGER + 1,
     }).success).toBe(false);
   });
+
+  it.each(["web", "web_geo", "mobile", "mobile_foreground", "kiosk", "admin", "auto_geofence"])(
+    "rejects non-offline source %s",
+    (source) => {
+      expect(attendanceOfflineEventEnvelopeSchema.safeParse({
+        ...event(),
+        source,
+      }).success).toBe(false);
+    },
+  );
 
   it("uses the same positive safe integer sequence schema for results", () => {
     expect(attendanceOfflineSyncResultSchema.safeParse(result({
@@ -552,7 +562,7 @@ describe("offline attendance sync contract", () => {
       sequence: 42,
       command_kind: "employee_manual_now",
       captured_at: "2026-08-03T09:00:00.000+05:30",
-      source: "mobile",
+      source: "mobile_offline",
       event_type: "check_in",
       work_mode: "office",
       metadata: {
