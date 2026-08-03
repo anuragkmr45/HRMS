@@ -3,16 +3,30 @@ import type { FastifyInstance } from "fastify";
 import { authHeader, loginAs, projectTravelPayload } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
+const originalDatabaseUrl = process.env.DATABASE_URL;
+
+function restoreDatabaseUrl(): void {
+  if (originalDatabaseUrl === undefined) {
+    delete process.env.DATABASE_URL;
+  } else {
+    process.env.DATABASE_URL = originalDatabaseUrl;
+  }
+}
+
 describe("expanded expense reports", () => {
   let app: FastifyInstance;
 
-  beforeEach(async () => {
+  beforeEach(async () => { 
     app = await buildRealApp();
     await app.ready();
   });
 
   afterEach(async () => {
-    await app?.close();
+    try {
+      await app?.close();
+    } finally {
+      restoreDatabaseUrl();
+    }
   });
 
   it("returns compact cards, filters, document gates, totals, and audit metadata across report endpoints", async () => {
@@ -141,7 +155,11 @@ describe("non-expense reports", () => {
   });
 
   afterEach(async () => {
-    await app?.close();
+    try {
+      await app?.close();
+    } finally {
+      restoreDatabaseUrl();
+    }
   });
 
   it("returns non-expense summary reports and document-backed export jobs", async () => {

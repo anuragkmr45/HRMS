@@ -157,6 +157,14 @@ pnpm db:migrate:prod
 
 For local development, keep using the local Docker database unless you are explicitly testing a hosted integration issue.
 
+For GEO-S12-001 and later, the hosted PostgreSQL provider must both support and have installed `postgis` and
+`btree_gist`. Provider support alone is not sufficient. Before promoting a branch or production deploy, run the normal
+migration sequence against that branch database, then run the release verifier and confirm `pg_extension` contains both
+extensions and `SELECT PostGIS_Version();` succeeds. Stop the deploy if `CREATE EXTENSION IF NOT EXISTS postgis;` or
+`CREATE EXTENSION IF NOT EXISTS btree_gist;` fails for the migration role. Rollback does not use `DROP EXTENSION`;
+restore from backup or roll forward after operator review. Apply and verify the migration independently for each branch
+database and production database instead of assuming one hosted environment proves another.
+
 ## Cloudinary
 
 Preferred setup:

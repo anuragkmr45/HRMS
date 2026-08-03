@@ -237,4 +237,45 @@ describe("app persistence flushing", () => {
       await app.close();
     }
   });
+
+  it("skips legacy attendance flushing only for transaction-owned punch requests", async () => {
+    process.env.APP_ENV = "local";
+    const store = createMemoryDataStore();
+    const domains: string[] = [];
+    store.persistence = {
+      async flush() {},
+      async flushDomain(domain) { domains.push(domain); },
+      async reload() {},
+      async close() {},
+    };
+    const app = await buildApp({ dataStore: store, rateLimit: false });
+    await app.ready();
+    try {
+      const employee = await loginAs(app, "E1");
+      const clientEventId = "00000000-0000-4000-8000-000000000001";
+      const punch = await app.inject({
+        method: "POST", url: "/api/v1/attendance/punches", headers: { ...authHeader(employee.token), "idempotency-key": clientEventId },
+        payload: {
+          client_event_id: clientEventId,
+          captured_at: "2026-07-08T04:00:00.000Z",
+          device: null,
+          command: { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
+        },
+      });
+      expect(punch.statusCode).toBe(200);
+      expect(domains).toEqual([]);
+      const regularization = await app.inject({
+        method: "POST", url: "/api/v1/attendance/regularizations", headers: authHeader(employee.token),
+        payload: {
+          work_date: "2026-07-08",
+          reason: "Missed checkout due to network issue",
+          requested_punches: [{ event_type: "check_out", occurred_at: "2026-07-08T12:00:00.000Z" }]
+        },
+      });
+      expect(regularization.statusCode).toBe(200);
+      expect(domains).toEqual(["attendance"]);
+    } finally {
+      await app.close();
+    }
+  });
 });
