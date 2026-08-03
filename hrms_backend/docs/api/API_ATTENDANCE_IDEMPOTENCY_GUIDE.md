@@ -48,3 +48,13 @@ Replay is semantic business-response replay, not byte-for-byte transport replay.
 - The header is omitted on first execution.
 
 Durable `client_event_id` replay protects retries even after the 24-hour `platform.idempotency_keys` window expires.
+
+## Future Offline Synchronization
+
+Sprint 13 GEO-S13-004 defines a proposed offline synchronization contract only. It does not register a new endpoint.
+
+Future offline batches must reuse the same event-level `client_event_id` replay model described above. The durable identity remains `company_id + authenticated actor_user_id + client_event_id`, with company and actor derived from server-side authenticated context. A future `batch_id` is correlation metadata for transport and diagnostics only; it must not replace event-level replay identity or create a second idempotency persistence mechanism.
+
+Offline event hashes must use the same canonical sorted-JSON SHA-256 behavior as current attendance command request and response hashes: object keys are sorted recursively and array order remains significant.
+
+The proposed contract is documented in `docs/api/OFFLINE_ATTENDANCE_SYNC_CONTRACT.md`.

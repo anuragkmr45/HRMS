@@ -3,6 +3,7 @@ import {
   canonicalAttendanceRequestHash,
   canonicalAttendanceResponseHash,
 } from "../command-service.js";
+import { canonicalJsonHash } from "../canonical-json.js";
 import type { CreateAttendanceDecisionInput } from "../command-repository.js";
 import { attendanceLocationEvidenceSchema, attendancePunchSchema } from "#shared";
 
@@ -27,6 +28,15 @@ describe("attendance command request hashing", () => {
         ...command,
         metadata: { location: "office", device: { version: 1, os: "android" } },
       }),
+    );
+  });
+
+  it("uses the shared canonical JSON hash utility without changing online request hashes", () => {
+    expect(canonicalAttendanceRequestHash(command)).toBe(
+      canonicalJsonHash(command),
+    );
+    expect(canonicalAttendanceResponseHash({ ok: true, rows: [1, 2] })).toBe(
+      canonicalJsonHash({ ok: true, rows: [1, 2] }),
     );
   });
 
