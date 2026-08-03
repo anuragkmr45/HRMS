@@ -811,6 +811,44 @@ export const attendanceLocationEvidence = attendance.table(
   ]
 );
 
+export const attendanceAttestationEvidence = attendance.table(
+  "attestation_evidence",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    attendanceEventId: uuid("attendance_event_id").notNull(),
+    registeredDeviceId: uuid("registered_device_id"),
+    provider: text("provider").$type<"google_play_integrity" | "apple_app_attest">().notNull(),
+    verificationStatus: text("verification_status").$type<"verified" | "rejected" | "indeterminate" | "error">().notNull(),
+    adapterVersion: text("adapter_version").notNull(),
+    challengeBindingHash: text("challenge_binding_hash"),
+    artifactHash: text("artifact_hash"),
+    normalizedVerdict: jsonb("normalized_verdict").$type<Readonly<Record<string, unknown>>>().notNull().default({}),
+    providerMetadata: jsonb("provider_metadata").$type<Readonly<Record<string, unknown>>>().notNull().default({}),
+    reasonCodes: jsonb("reason_codes").$type<readonly string[]>().notNull().default([]),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    providerIssuedAt: timestamp("provider_issued_at", { withTimezone: true }),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true }).notNull(),
+    createdAt
+  },
+  (table) => [
+    index("attestation_evidence_event_idx").on(table.companyId, table.attendanceEventId),
+    index("attestation_evidence_registered_device_idx")
+      .on(table.companyId, table.registeredDeviceId)
+      .where(sql`${table.registeredDeviceId} IS NOT NULL`),
+    index("attestation_evidence_provider_status_evaluated_idx")
+      .on(table.companyId, table.provider, table.verificationStatus, table.evaluatedAt.desc()),
+    check("attestation_evidence_provider_check", sql`${table.provider} IN ('google_play_integrity', 'apple_app_attest')`),
+    check("attestation_evidence_verification_status_check", sql`${table.verificationStatus} IN ('verified', 'rejected', 'indeterminate', 'error')`),
+    check("attestation_evidence_adapter_version_check", sql`btrim(${table.adapterVersion}) <> ''`),
+    check("attestation_evidence_challenge_binding_hash_check", sql`${table.challengeBindingHash} IS NULL OR ${table.challengeBindingHash} ~ '^[0-9a-f]{64}$'`),
+    check("attestation_evidence_artifact_hash_check", sql`${table.artifactHash} IS NULL OR ${table.artifactHash} ~ '^[0-9a-f]{64}$'`),
+    check("attestation_evidence_normalized_verdict_object_check", sql`jsonb_typeof(${table.normalizedVerdict}) = 'object'`),
+    check("attestation_evidence_provider_metadata_object_check", sql`jsonb_typeof(${table.providerMetadata}) = 'object'`),
+    check("attestation_evidence_reason_codes_check", sql`attendance.attestation_reason_codes_are_safe(${table.reasonCodes})`)
+  ]
+);
+
 export const attendanceLocationAccessAuditLogs = attendance.table(
   "location_access_audit_logs",
   {
@@ -2375,6 +2413,7 @@ export const schema = {
   attendanceCommandExecutions,
   attendanceEvents,
   attendanceLocationEvidence,
+  attendanceAttestationEvidence,
   attendanceLocationAccessAuditLogs,
   attendanceDecisions,
   attendanceDecisionReasons,

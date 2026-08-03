@@ -158,6 +158,7 @@ const resetTables = [
   "attendance.policies",
   "attendance.break_segments",
   "attendance.employee_command_states",
+  "attendance.attestation_evidence",
   "attendance.command_decisions",
   "attendance.command_executions",
   "attendance.location_access_audit_logs",

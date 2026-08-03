@@ -33,24 +33,44 @@ async function truncateLedgerTables(pool: Pool): Promise<void> {
 }
 
 async function createLedgerFixture(pool: Pool): Promise<LedgerFixture> {
-  const commandExecution = await pool.query<{
+  const commandResult = await pool.query<{
     id: string;
     company_id: string;
     employee_user_id: string;
     actor_user_id: string;
   }>(`
     INSERT INTO attendance.command_executions (
-      company_id, actor_user_id, employee_user_id, idempotency_key, request_hash,
-      command_type, occurred_at, status, request_snapshot, response_snapshot,
+      company_id,
+      actor_user_id,
+      employee_user_id,
+      idempotency_key,
+      request_hash,
+      command_type,
+      occurred_at,
+      status,
+      request_snapshot,
+      response_snapshot,
+      response_hash,
+      response_status,
       completed_at
     ) VALUES (
-      gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
-      'evidence-ledger-command-001', repeat('b', 64), 'check_in', now(),
-      'denied', '{}'::jsonb, '{}'::jsonb, now()
+      gen_random_uuid(),
+      gen_random_uuid(),
+      gen_random_uuid(),
+      'evidence-ledger-command-001',
+      repeat('b', 64),
+      'check_in',
+      now(),
+      'denied',
+      '{}'::jsonb,
+      '{}'::jsonb,
+      repeat('d', 64),
+      409,
+      now()
     )
     RETURNING id, company_id, employee_user_id, actor_user_id
   `);
-  const commandExecutionRow = commandExecution.rows[0];
+  const commandExecutionRow = commandResult.rows[0];
   if (!commandExecutionRow) {
     throw new Error("Command execution fixture was not created.");
   }
