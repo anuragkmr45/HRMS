@@ -130,6 +130,34 @@ const expectedVersionBodySchema = {
 };
 
 const authSecurity = [{ sessionCookie: [] }, { bearerAuth: [] }];
+const attendanceClientEventIdSchema = uuid(
+  "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+  "019fc5b7-0811-7a33-ae47-46a559f9e797"
+);
+const idempotencyKeyHeaderObject = {
+  type: "object",
+  required: ["idempotency-key"],
+  properties: {
+    "idempotency-key": {
+      ...attendanceClientEventIdSchema,
+      description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
+    }
+  }
+};
+const idempotencyReplayResponseHeader = {
+  description: "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay.",
+  schema: { type: "string", enum: ["true"] }
+};
+const replayResponseHeaders = {
+  "Idempotency-Replayed": idempotencyReplayResponseHeader
+};
+const idempotencyKeyParameter = {
+  name: "idempotency-key",
+  in: "header",
+  required: true,
+  schema: attendanceClientEventIdSchema,
+  description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
+};
 
 const errorResponseSchema = {
   type: "object",
@@ -2218,7 +2246,7 @@ const attendancePunchBody = {
   required: ["client_event_id", "captured_at", "device", "command"],
   description: "Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.",
   properties: {
-    client_event_id: uuid("Client-generated logical attendance action UUID; must match Idempotency-Key."),
+    client_event_id: attendanceClientEventIdSchema,
     captured_at: dateTime("Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at."),
     device: { ...attendanceCommandDeviceBody, nullable: true },
     command: attendancePunchCommandBody
@@ -4539,25 +4567,19 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
     "Record employee manual-now punch",
-    "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+    "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the original business result and emit Idempotency-Replayed: true. Offline retries after the 24-hour platform idempotency window use durable client_event_id command replay and do not create another command, attendance event, location evidence, decision, session mutation, punch, or outbox event. Same UUID with a different command payload returns 409 WORKFLOW_CONFLICT and is a terminal synchronization conflict. Clients must retry network interruptions, timeouts, HTTP 408, HTTP 429 respecting Retry-After, and temporary 5xx with the same UUID and canonical payload; successful responses, replayed responses, persisted business denials, validation failures, workflow/idempotency conflicts, and client-event reuse conflicts are terminal. Replayed responses use the current x-request-id, not the original request ID. Examples: first execution sends a new Idempotency-Key matching client_event_id and receives no Idempotency-Replayed header; immediate identical retry sends the same UUID/payload and receives Idempotency-Replayed: true; offline retry after 24 hours sends the same UUID/payload and receives durable command replay with Idempotency-Replayed: true; different payload for the same UUID receives 409 WORKFLOW_CONFLICT; persisted business-denial replay preserves the denial status and reason with current x-request-id plus Idempotency-Replayed: true.",
     {
-      headers: {
-        type: "object",
-        required: ["idempotency-key"],
-        properties: {
-          "idempotency-key": {
-            type: "string",
-            format: "uuid",
-            description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request.",
-            example: "019fc5b7-0811-7a33-ae47-46a559f9e797"
-          }
-        }
-      },
+      headers: idempotencyKeyHeaderObject,
       body: attendancePunchBody,
       response200: attendancePunchCommandResponseSchema,
       response: {
+        200: {
+          ...success(attendancePunchCommandResponseSchema),
+          headers: replayResponseHeaders
+        },
         409: {
           description: "Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable.",
+          headers: replayResponseHeaders,
           content: { "application/json": { schema: errorResponseSchema } }
         }
       }
@@ -4571,7 +4593,12 @@ const routeDocs: Record<string, RouteSchema> = {
       params: attendanceEmployeeParamSchema,
       headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
       body: attendanceAssistedCurrentPunchBody,
-      response200: { type: "object", additionalProperties: true }
+      response: {
+        200: {
+          ...success({ type: "object", additionalProperties: true }),
+          headers: replayResponseHeaders
+        }
+      }
     }
   ),
   "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections": operation(
@@ -4582,7 +4609,12 @@ const routeDocs: Record<string, RouteSchema> = {
       params: attendanceEmployeeParamSchema,
       headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
       body: attendanceHistoricalCorrectionBody,
-      response200: { type: "object", additionalProperties: true }
+      response: {
+        200: {
+          ...success({ type: "object", additionalProperties: true }),
+          headers: replayResponseHeaders
+        }
+      }
     }
   ),
   "GET /api/v1/attendance/punches/my": operation(
@@ -5482,6 +5514,7 @@ export const openApiComponents = {
   schemas: {
     ErrorResponse: errorResponseSchema,
     ConflictResponse: conflictResponseSchema,
+    AttendanceClientEventId: attendanceClientEventIdSchema,
     RateLimitResponse: rateLimitResponseSchema,
     EmsProfile: emsProfileResponseSchema,
     EmsProfileChangeRequest: emsProfileChangeSchema,
@@ -5490,6 +5523,12 @@ export const openApiComponents = {
     EmsPolicy: emsPolicySchema,
     Project: projectSchema,
     HelpdeskTicket: helpdeskTicketSchema
+  },
+  headers: {
+    IdempotencyReplayed: idempotencyReplayResponseHeader
+  },
+  parameters: {
+    IdempotencyKey: idempotencyKeyParameter
   }
 };
 
@@ -5527,7 +5566,15 @@ export const swaggerTransformObject = ((documentObject: SwaggerTransformObjectIn
         ...openApiComponents.schemas,
         ...openapiObject.components?.schemas
       },
-      securitySchemes: openApiComponents.securitySchemes
+      securitySchemes: openApiComponents.securitySchemes,
+      headers: {
+        ...openApiComponents.headers,
+        ...openapiObject.components?.headers
+      },
+      parameters: {
+        ...openApiComponents.parameters,
+        ...openapiObject.components?.parameters
+      }
     }
   } as never;
 }) as NonNullable<FastifyDynamicSwaggerOptions["transformObject"]>;

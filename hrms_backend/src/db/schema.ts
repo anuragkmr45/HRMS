@@ -551,6 +551,53 @@ export const attendanceEmployeeCommandStates = attendance.table(
   (table) => [primaryKey({ columns: [table.companyId, table.employeeUserId] })]
 );
 
+export const attendanceCommandExecutions = attendance.table(
+  "command_executions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    platformIdempotencyKeyId: uuid("platform_idempotency_key_id"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    clientEventId: uuid("client_event_id"),
+    requestHash: text("request_hash").notNull(),
+    commandType: text("command_type").notNull(),
+    commandOrigin: text("command_origin").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull(),
+    sessionId: uuid("session_id"),
+    punchEventId: uuid("punch_event_id"),
+    requestSnapshot: jsonb("request_snapshot").notNull().default({}),
+    responseSnapshot: jsonb("response_snapshot"),
+    responseHash: text("response_hash"),
+    responseStatus: integer("response_status"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_commands_platform_idempotency_key_uq")
+      .on(table.platformIdempotencyKeyId)
+      .where(sql`${table.platformIdempotencyKeyId} IS NOT NULL`),
+    uniqueIndex("attendance_commands_legacy_idempotency_uq")
+      .on(table.companyId, table.actorUserId, table.idempotencyKey)
+      .where(sql`${table.platformIdempotencyKeyId} IS NULL`),
+    uniqueIndex("attendance_commands_client_event_actor_uq")
+      .on(table.companyId, table.actorUserId, table.clientEventId)
+      .where(sql`${table.clientEventId} IS NOT NULL`),
+    index("attendance_commands_employee_created_idx").on(table.companyId, table.employeeUserId, table.createdAt.desc()),
+    index("attendance_commands_status_created_idx").on(table.companyId, table.status, table.createdAt.desc()),
+    check("attendance_commands_idempotency_key_length_check", sql`length(${table.idempotencyKey}) BETWEEN 8 AND 200`),
+    check("attendance_commands_request_hash_length_check", sql`length(${table.requestHash}) = 64`),
+    check("attendance_commands_response_status_valid", sql`${table.responseStatus} IS NULL OR ${table.responseStatus} BETWEEN 100 AND 599`),
+    check("attendance_commands_response_hash_length_check", sql`${table.responseHash} IS NULL OR ${table.responseHash} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "attendance_commands_replay_metadata_complete_check",
+      sql`${table.status} NOT IN ('completed', 'denied') OR (${table.responseSnapshot} IS NOT NULL AND ${table.responseHash} IS NOT NULL AND ${table.responseStatus} IS NOT NULL AND ${table.completedAt} IS NOT NULL)`
+    )
+  ]
+);
+
 export const attendanceEvents = attendance.table(
   "attendance_events",
   {
@@ -2226,6 +2273,7 @@ export const schema = {
   attendanceSessions,
   attendanceBreakSegments,
   attendanceEmployeeCommandStates,
+  attendanceCommandExecutions,
   attendanceEvents,
   attendanceLocationEvidence,
   attendanceLocationAccessAuditLogs,

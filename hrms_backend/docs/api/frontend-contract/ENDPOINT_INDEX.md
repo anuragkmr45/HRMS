@@ -9166,7 +9166,7 @@ Required: yes
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `client_event_id` | string<uuid> | required | Client-generated logical attendance action UUID; must match Idempotency-Key. |
+| `client_event_id` | string<uuid> | required | Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization. |
 | `captured_at` | string<date-time> | required | Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at. |
 | `device` | object | required, nullable | Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
 | `command` | object | required | Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted. |

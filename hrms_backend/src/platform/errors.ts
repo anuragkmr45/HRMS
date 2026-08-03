@@ -6,6 +6,7 @@ export class AppError extends Error {
     message: string,
     public readonly statusCode: number,
     public readonly details?: unknown,
+    public readonly headers?: Record<string, string>,
   ) {
     super(message);
   }
@@ -33,8 +34,11 @@ export const forbidden = (message = "Forbidden", details?: unknown) =>
 export const notFound = (message = "Not found", details?: unknown) =>
   new AppError(ErrorCodes.NotFound, message, 404, details);
 
-export const conflict = (message: string, details?: unknown) =>
-  new AppError(ErrorCodes.WorkflowConflict, message, 409, details);
+export const conflict = (
+  message: string,
+  details?: unknown,
+  headers?: Record<string, string>,
+) => new AppError(ErrorCodes.WorkflowConflict, message, 409, details, headers);
 
 export const tooManyRequests = (retryAfterSeconds: number) =>
   new AppError(

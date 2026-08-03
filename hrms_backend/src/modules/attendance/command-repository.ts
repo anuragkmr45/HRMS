@@ -50,6 +50,7 @@ export interface AttendanceCommandExecutionRecord {
   employee_user_id: UUID;
   platform_idempotency_key_id: UUID | null;
   idempotency_key: string;
+  client_event_id: UUID | null;
   request_hash: string;
   command_type: AttendancePunchEventType;
   command_origin: string;
@@ -59,6 +60,8 @@ export interface AttendanceCommandExecutionRecord {
   punch_event_id: UUID | null;
   request_snapshot: Record<string, unknown>;
   response_snapshot: Record<string, unknown> | null;
+  response_hash: string | null;
+  response_status: number | null;
   completed_at: string | null;
   created_at: string;
 }
@@ -197,6 +200,7 @@ export interface CreateAttendanceCommandInput {
   employeeUserId: UUID;
   platformIdempotencyKeyId: UUID;
   idempotencyKey: string;
+  clientEventId?: UUID | null;
   requestHash: string;
   commandType: AttendancePunchEventType;
   commandOrigin: string;
@@ -239,6 +243,8 @@ export interface CompleteAttendanceCommandInput {
   sessionId?: UUID | null;
   punchEventId?: UUID | null;
   responseSnapshot: Record<string, unknown>;
+  responseHash: string;
+  responseStatus: number;
 }
 
 export type AttendanceSessionStatus = "working" | "on_break" | "closed";
@@ -429,8 +435,9 @@ export class AttendanceCommandTransactionRepository {
   ): Promise<AttendanceCommandExecutionRecord | null> {
     const result = await this.client.query<AttendanceCommandExecutionRecord>(
       `SELECT id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id, idempotency_key,
-          request_hash, command_type, occurred_at, status, session_id,
-          punch_event_id, request_snapshot, response_snapshot, completed_at, created_at
+          client_event_id, request_hash, command_type, command_origin, occurred_at, status, session_id,
+          punch_event_id, request_snapshot, response_snapshot, response_hash,
+          response_status, completed_at, created_at
         FROM attendance.command_executions
         WHERE id = $1
           AND company_id = $2`,
@@ -487,6 +494,44 @@ export class AttendanceCommandTransactionRepository {
     return state;
   }
 
+  async findCommandByClientEventIdForUpdate(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventId: UUID;
+  }): Promise<AttendanceCommandExecutionRecord | null> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `SELECT
+          id,
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          response_hash,
+          response_status,
+          completed_at,
+          created_at
+        FROM attendance.command_executions
+        WHERE company_id = $1
+          AND actor_user_id = $2
+          AND client_event_id = $3
+        FOR UPDATE`,
+      [input.companyId, input.actorUserId, input.clientEventId],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
   async findCommandByIdempotencyKey(input: {
     companyId: UUID;
     actorUserId: UUID;
@@ -500,15 +545,18 @@ export class AttendanceCommandTransactionRepository {
           employee_user_id,
           platform_idempotency_key_id,
           idempotency_key,
+          client_event_id,
           request_hash,
-           command_type,
-           command_origin,
-           occurred_at,
+          command_type,
+          command_origin,
+          occurred_at,
           status,
           session_id,
           punch_event_id,
           request_snapshot,
           response_snapshot,
+          response_hash,
+          response_status,
           completed_at,
           created_at
         FROM attendance.command_executions
@@ -531,10 +579,11 @@ export class AttendanceCommandTransactionRepository {
           employee_user_id,
           platform_idempotency_key_id,
           idempotency_key,
-           request_hash,
-           command_type,
-           command_origin,
-           occurred_at,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
           status,
           session_id,
           punch_event_id,
@@ -550,13 +599,14 @@ export class AttendanceCommandTransactionRepository {
           $4,
           $5,
           $6,
-           $7,
-           $8,
-           $9,
-           'received',
+          $7,
+          $8,
+          $9,
+          $10,
+          'received',
           NULL,
           NULL,
-           $10::jsonb,
+          $11::jsonb,
           NULL,
           NULL,
           now()
@@ -571,15 +621,18 @@ export class AttendanceCommandTransactionRepository {
           employee_user_id,
           platform_idempotency_key_id,
           idempotency_key,
+          client_event_id,
           request_hash,
-           command_type,
-           command_origin,
-           occurred_at,
+          command_type,
+          command_origin,
+          occurred_at,
           status,
           session_id,
           punch_event_id,
           request_snapshot,
           response_snapshot,
+          response_hash,
+          response_status,
           completed_at,
           created_at`,
       [
@@ -588,6 +641,7 @@ export class AttendanceCommandTransactionRepository {
         input.employeeUserId,
         input.platformIdempotencyKeyId,
         input.idempotencyKey,
+        input.clientEventId ?? null,
         input.requestHash,
         input.commandType,
         input.commandOrigin,
@@ -1032,23 +1086,30 @@ export class AttendanceCommandTransactionRepository {
             session_id = $3,
             punch_event_id = $4,
             response_snapshot = $5::jsonb,
+            response_hash = $6,
+            response_status = $7,
             completed_at = now()
         WHERE id = $1
-          AND company_id = $6
+          AND company_id = $8
         RETURNING
           id,
           company_id,
           actor_user_id,
           employee_user_id,
+          platform_idempotency_key_id,
           idempotency_key,
+          client_event_id,
           request_hash,
           command_type,
+          command_origin,
           occurred_at,
           status,
           session_id,
           punch_event_id,
           request_snapshot,
           response_snapshot,
+          response_hash,
+          response_status,
           completed_at,
           created_at`,
       [
@@ -1057,6 +1118,8 @@ export class AttendanceCommandTransactionRepository {
         input.sessionId ?? null,
         input.punchEventId ?? null,
         JSON.stringify(input.responseSnapshot),
+        input.responseHash,
+        input.responseStatus,
         input.companyId,
       ],
     );

@@ -11,6 +11,10 @@ import {
 } from "#shared";
 import { badRequest, unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
+import {
+  ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER,
+  isAttendanceReplayResponse,
+} from "./command-service.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
 const geofencePublishParamSchema = z.object({
@@ -57,7 +61,17 @@ const geofenceVersionPublishSchema = z.object({
 }).strict();
 
 export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/punches", async (request) => {
+  const withReplayHeader = (
+    reply: { header: (name: string, value: string) => unknown },
+    response: Record<string, unknown>,
+  ) => {
+    if (isAttendanceReplayResponse(response)) {
+      reply.header(ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER, "true");
+    }
+    return response;
+  };
+
+  fastify.post("/punches", async (request, reply) => {
     if (!request.actor) {
       throw unauthorized();
     }
@@ -72,7 +86,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
         field: "client_event_id",
       });
     }
-    return fastify.store.kind === "postgres"
+    const response = fastify.store.kind === "postgres"
       ? await service.recordEmployeeManualNowPostgres(
         request.actor,
         input.command,
@@ -84,30 +98,33 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
         },
       )
       : service.recordEmployeeManualNow(request.actor, input.command);
+    return withReplayHeader(reply, response);
   });
 
-  fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request) => {
+  fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request, reply) => {
     if (!request.actor) throw unauthorized();
     const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
     const params = employeeParamSchema.parse(request.params);
     const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
     const service = new AttendanceService(fastify.store);
-    return fastify.store.kind === "postgres"
+    const response = fastify.store.kind === "postgres"
       ? await service.recordManagerAssistedCurrentPunchPostgres(request.actor, params.employeeUserId, input, idempotencyKey)
       : service.recordManagerAssistedCurrentPunch(request.actor, params.employeeUserId, input);
+    return withReplayHeader(reply, response);
   });
 
-  fastify.post("/employees/:employeeUserId/historical-corrections", async (request) => {
+  fastify.post("/employees/:employeeUserId/historical-corrections", async (request, reply) => {
     if (!request.actor) throw unauthorized();
     const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
     const params = employeeParamSchema.parse(request.params);
     const input = attendanceHistoricalCorrectionSchema.parse(request.body);
-    return new AttendanceService(fastify.store).recordHistoricalCorrection(
+    const response = await new AttendanceService(fastify.store).recordHistoricalCorrection(
       request.actor,
       params.employeeUserId,
       input,
       idempotencyKey,
     );
+    return withReplayHeader(reply, response);
   });
 
   fastify.get("/punches/my", async (request) => {

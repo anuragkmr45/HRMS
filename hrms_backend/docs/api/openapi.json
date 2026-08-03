@@ -76,6 +76,12 @@
         },
         "additionalProperties": false
       },
+      "AttendanceClientEventId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+        "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+      },
       "RateLimitResponse": {
         "type": "object",
         "required": [
@@ -737,6 +743,31 @@
           }
         },
         "additionalProperties": true
+      }
+    },
+    "headers": {
+      "IdempotencyReplayed": {
+        "description": "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true"
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "idempotency-key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+          "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+        },
+        "description": "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
       }
     }
   },
@@ -64958,7 +64989,7 @@
         "tags": [
           "Attendance"
         ],
-        "description": "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+        "description": "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the original business result and emit Idempotency-Replayed: true. Offline retries after the 24-hour platform idempotency window use durable client_event_id command replay and do not create another command, attendance event, location evidence, decision, session mutation, punch, or outbox event. Same UUID with a different command payload returns 409 WORKFLOW_CONFLICT and is a terminal synchronization conflict. Clients must retry network interruptions, timeouts, HTTP 408, HTTP 429 respecting Retry-After, and temporary 5xx with the same UUID and canonical payload; successful responses, replayed responses, persisted business denials, validation failures, workflow/idempotency conflicts, and client-event reuse conflicts are terminal. Replayed responses use the current x-request-id, not the original request ID. Examples: first execution sends a new Idempotency-Key matching client_event_id and receives no Idempotency-Replayed header; immediate identical retry sends the same UUID/payload and receives Idempotency-Replayed: true; offline retry after 24 hours sends the same UUID/payload and receives durable command replay with Idempotency-Replayed: true; different payload for the same UUID receives 409 WORKFLOW_CONFLICT; persisted business-denial replay preserves the denial status and reason with current x-request-id plus Idempotency-Replayed: true.",
         "requestBody": {
           "required": true,
           "content": {
@@ -64976,8 +65007,8 @@
                   "client_event_id": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "Client-generated logical attendance action UUID; must match Idempotency-Key.",
-                    "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                    "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+                    "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
                   },
                   "captured_at": {
                     "type": "string",
@@ -65208,7 +65239,7 @@
             "in": "header",
             "name": "idempotency-key",
             "required": true,
-            "description": "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request."
+            "description": "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
           }
         ],
         "security": [
@@ -65222,6 +65253,19 @@
         "responses": {
           "200": {
             "description": "Successful response.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "schema": {
+                    "type": "string",
+                    "enum": [
+                      "true"
+                    ]
+                  }
+                },
+                "description": "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -65649,6 +65693,19 @@
           },
           "409": {
             "description": "Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "schema": {
+                    "type": "string",
+                    "enum": [
+                      "true"
+                    ]
+                  }
+                },
+                "description": "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -65858,6 +65915,19 @@
         "responses": {
           "200": {
             "description": "Successful response.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "schema": {
+                    "type": "string",
+                    "enum": [
+                      "true"
+                    ]
+                  }
+                },
+                "description": "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -66243,6 +66313,19 @@
         "responses": {
           "200": {
             "description": "Successful response.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "schema": {
+                    "type": "string",
+                    "enum": [
+                      "true"
+                    ]
+                  }
+                },
+                "description": "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {

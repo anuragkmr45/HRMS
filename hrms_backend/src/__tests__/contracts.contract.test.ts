@@ -23,6 +23,10 @@ type OpenApiDocument = {
   openapi?: string;
   tags?: Array<{ name?: string }>;
   paths?: Record<string, Record<string, Operation | undefined>>;
+  components?: {
+    schemas?: Record<string, unknown>;
+    parameters?: Record<string, unknown>;
+  };
 };
 
 const protectedExceptions = new Set([
@@ -205,6 +209,7 @@ const expectedOperations = [
   "POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches",
   "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections",
   "POST /api/v1/attendance/exports",
+  "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish",
   "POST /api/v1/attendance/regularizations",
   "POST /api/v1/attendance/regularizations/{id}/decision",
   "POST /api/v1/leave-wfh/exports",
@@ -1193,7 +1198,36 @@ describe("API contracts", () => {
     expect(rows.map((row) => row.key).sort()).toEqual(
       [...expectedOperations].sort(),
     );
-    expect(rows.length).toBe(248);
+    expect(rows.length).toBe(249);
+
+    const attendancePunch =
+      spec.paths?.["/api/v1/attendance/punches"]?.post as
+        | Record<string, any>
+        | undefined;
+    expect(attendancePunch?.description).toContain(
+      "body client_event_id must equal the Idempotency-Key header",
+    );
+    expect(attendancePunch?.description).toContain(
+      "Offline retries after the 24-hour platform idempotency window",
+    );
+    expect(attendancePunch?.description).toContain(
+      "persisted business-denial replay",
+    );
+    expect(
+      attendancePunch?.responses?.["200"]?.headers?.["Idempotency-Replayed"],
+    ).toBeDefined();
+    expect(
+      attendancePunch?.responses?.["409"]?.headers?.["Idempotency-Replayed"],
+    ).toBeDefined();
+    expect(spec.components?.schemas?.AttendanceClientEventId).toMatchObject({
+      type: "string",
+      format: "uuid",
+    });
+    expect(spec.components?.parameters?.IdempotencyKey).toMatchObject({
+      name: "idempotency-key",
+      in: "header",
+      required: true,
+    });
 
     for (const row of rows) {
       if (!operationMetadataExceptions.has(row.key)) {

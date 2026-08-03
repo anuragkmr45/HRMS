@@ -21,6 +21,7 @@ import {
   type AttendanceCommandDecisionReasonCode,
   type PlatformIdempotencyKeyRecord,
   type AttendanceSessionRecord,
+  type AttendanceCommandExecutionRecord,
 } from "./command-repository.js";
 import {
   buildPunchRecordedEvent,
@@ -91,6 +92,7 @@ export interface AttendanceCommandPrincipal {
 interface AttendanceCommandOutcome {
   response: Record<string, unknown>;
   responseStatus: number;
+  replayed?: boolean;
 }
 
 interface LocationEvidenceDecisionContext {
@@ -122,7 +124,27 @@ interface AttendanceAuditDecisionReasonInput {
 export const ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX = "attendance.punch";
 export const ATTENDANCE_COMMAND_RESOURCE_TYPE = "attendance.command_execution";
 export const ATTENDANCE_IDEMPOTENCY_EXPIRATION_INTERVAL = "24 hours";
+export const ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER = "Idempotency-Replayed";
+const attendanceReplayMetadata = Symbol("attendanceReplayMetadata");
 const LOCATION_CAPTURE_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+export function markAttendanceReplayResponse<T extends Record<string, unknown>>(
+  response: T,
+): T {
+  Object.defineProperty(response, attendanceReplayMetadata, {
+    value: true,
+    enumerable: false,
+  });
+  return response;
+}
+
+export function isAttendanceReplayResponse(response: unknown): boolean {
+  return Boolean(
+    response &&
+      typeof response === "object" &&
+      (response as Record<PropertyKey, unknown>)[attendanceReplayMetadata],
+  );
+}
 
 export function canonicalJsonHash(value: Record<string, unknown>): string {
   return createHash("sha256")
@@ -403,6 +425,20 @@ export class AttendanceCommandService {
     try {
       const result = await repository.transaction<AttendanceCommandOutcome>(
         async (tx) => {
+          if (input.clientEnvelope) {
+            const existingClientEventCommand =
+              await tx.findCommandByClientEventIdForUpdate({
+                companyId: input.companyId,
+                actorUserId: input.actor.id,
+                clientEventId: input.clientEnvelope.clientEventId,
+              });
+            if (existingClientEventCommand) {
+              return this.replayCompletedCommandFromCommand(
+                existingClientEventCommand,
+                requestHash,
+              );
+            }
+          }
           const platformKey = await this.acquirePlatformIdempotencyKey(tx, {
             scope,
             actorUserId: input.actor.id,
@@ -437,6 +473,7 @@ export class AttendanceCommandService {
             employeeUserId: subjectEmployeeUserId,
             platformIdempotencyKeyId: platformKey.id,
             idempotencyKey: input.idempotencyKey,
+            clientEventId: input.clientEnvelope?.clientEventId ?? null,
             requestHash,
             commandType: commandInput.event_type,
             commandOrigin: commandKind,
@@ -736,17 +773,20 @@ export class AttendanceCommandService {
               punch_policy: policy,
               geo_policy: geoDecisionSnapshot(geoDecision),
             };
+            const responseHash = canonicalAttendanceResponseHash(response);
             await tx.completeCommand({
               commandExecutionId: command.id,
               companyId: input.companyId,
               status: "denied",
               responseSnapshot: response,
+              responseHash,
+              responseStatus: 409,
             });
             await tx.completePlatformIdempotencyKey({
               id: platformKey.id,
               resourceType: ATTENDANCE_COMMAND_RESOURCE_TYPE,
               resourceId: command.id,
-              responseHash: canonicalAttendanceResponseHash(response),
+              responseHash,
               responseStatus: 409,
             });
             return { response, responseStatus: 409 };
@@ -872,6 +912,7 @@ export class AttendanceCommandService {
             punch_policy: policy,
             geo_policy: geoDecisionSnapshot(geoDecision),
           };
+          const responseHash = canonicalAttendanceResponseHash(response);
           await tx.completeCommand({
             commandExecutionId: command.id,
             companyId: input.companyId,
@@ -879,35 +920,39 @@ export class AttendanceCommandService {
             sessionId: session.id,
             punchEventId: punch.id,
             responseSnapshot: response,
+            responseHash,
+            responseStatus: 200,
           });
           await tx.completePlatformIdempotencyKey({
             id: platformKey.id,
             resourceType: ATTENDANCE_COMMAND_RESOURCE_TYPE,
             resourceId: command.id,
-            responseHash: canonicalAttendanceResponseHash(response),
+            responseHash,
             responseStatus: 200,
           });
           return { response, responseStatus: 200 };
         },
       );
       if (result.responseStatus === 409) {
-        const response = result.response;
-        throw conflict(
-          String(
-            response["reason_detail"] ??
-              "Attendance punch is duplicate or out of sequence.",
-          ),
-          {
-            reason_code: response["reason_code"],
-            next_allowed_actions: response["next_allowed_actions"],
-            punch_policy: response["punch_policy"],
-            geo_policy: response["geo_policy"],
-          },
-        );
+        return this.finalizeSelfServiceOutcome(result);
       }
-      return result.response;
+      return this.finalizeSelfServiceOutcome(result);
     } catch (error) {
       if (isAttendanceIdempotencyUniqueViolation(error)) {
+        if (input.clientEnvelope) {
+          const result = await new PostgresAttendanceCommandRepository(
+            pool,
+          ).transaction((tx) =>
+            this.replayCompletedCommandFromClientEvent(
+              tx,
+              input.companyId,
+              input.actor.id,
+              input.clientEnvelope!.clientEventId,
+              requestHash,
+            ),
+          );
+          return this.finalizeSelfServiceOutcome(result);
+        }
         throw conflict(
           "Attendance command conflicts with an existing command. Retry with a new idempotency key.",
         );
@@ -1111,18 +1156,21 @@ export class AttendanceCommandService {
         },
         day_status: day,
       };
+      const responseHash = canonicalAttendanceResponseHash(response);
       await tx.completeCommand({
         commandExecutionId: command.id,
         companyId: principal.companyId,
         status: "completed",
         punchEventId: punch.id,
         responseSnapshot: response,
+        responseHash,
+        responseStatus: 200,
       });
       await tx.completePlatformIdempotencyKey({
         id: platformKey.id,
         resourceType: ATTENDANCE_COMMAND_RESOURCE_TYPE,
         resourceId: command.id,
-        responseHash: canonicalAttendanceResponseHash(response),
+        responseHash,
         responseStatus: 200,
       });
       return { response, responseStatus: 200 };
@@ -1130,7 +1178,9 @@ export class AttendanceCommandService {
     const result = existingTransaction
       ? await run(existingTransaction)
       : await new PostgresAttendanceCommandRepository(pool!).transaction(run);
-    return result.response;
+    return result.replayed
+      ? markAttendanceReplayResponse(result.response)
+      : result.response;
   }
 
   async decideRegularization(input: {
@@ -1597,23 +1647,28 @@ export class AttendanceCommandService {
         },
         day_status: day,
       };
+      const responseHash = canonicalAttendanceResponseHash(response);
       await tx.completeCommand({
         commandExecutionId: command.id,
         companyId: principal.companyId,
         status: "completed",
         punchEventId: punch.id,
         responseSnapshot: response,
+        responseHash,
+        responseStatus: 200,
       });
       await tx.completePlatformIdempotencyKey({
         id: platformKey.id,
         resourceType: ATTENDANCE_COMMAND_RESOURCE_TYPE,
         resourceId: command.id,
-        responseHash: canonicalAttendanceResponseHash(response),
+        responseHash,
         responseStatus: 200,
       });
       return { response, responseStatus: 200 };
     });
-    return result.response;
+    return result.replayed
+      ? markAttendanceReplayResponse(result.response)
+      : result.response;
   }
 
   private async acquirePlatformIdempotencyKey(
@@ -1720,7 +1775,114 @@ export class AttendanceCommandService {
     return {
       response: command.response_snapshot,
       responseStatus: key.response_status,
+      replayed: true,
     };
+  }
+
+  private async replayCompletedCommandFromClientEvent(
+    tx: AttendanceCommandTransactionRepository,
+    companyId: UUID,
+    actorUserId: UUID,
+    clientEventId: UUID,
+    requestHash: string,
+  ): Promise<AttendanceCommandOutcome> {
+    const command = await tx.findCommandByClientEventIdForUpdate({
+      companyId,
+      actorUserId,
+      clientEventId,
+    });
+    if (!command) {
+      throw conflict(
+        "Attendance command conflicts with an existing command. Retry with a new idempotency key.",
+      );
+    }
+    return this.replayCompletedCommandFromCommand(command, requestHash);
+  }
+
+  private replayCompletedCommandFromCommand(
+    command: AttendanceCommandExecutionRecord,
+    requestHash: string,
+  ): AttendanceCommandOutcome {
+    if (command.request_hash !== requestHash) {
+      throw conflict(
+        "Client event was already used with a different attendance command.",
+        {
+          code: "CLIENT_EVENT_REUSED",
+          client_event_id: command.client_event_id,
+          command_id: command.id,
+        },
+      );
+    }
+    if (
+      !command.completed_at ||
+      (command.status !== "completed" && command.status !== "denied")
+    ) {
+      throw conflict(
+        "Attendance command with this client event is still being processed.",
+        {
+          code: "CLIENT_EVENT_PROCESSING",
+          client_event_id: command.client_event_id,
+          command_id: command.id,
+        },
+      );
+    }
+    if (
+      !command.response_snapshot ||
+      !command.response_hash ||
+      !command.response_status
+    ) {
+      throw new Error(
+        "Durable attendance command replay metadata is incomplete.",
+      );
+    }
+    if (
+      command.response_status < 100 ||
+      command.response_status > 599 ||
+      !/^[0-9a-f]{64}$/u.test(command.response_hash)
+    ) {
+      throw new Error(
+        "Durable attendance command replay metadata is inconsistent.",
+      );
+    }
+    if (
+      canonicalAttendanceResponseHash(command.response_snapshot) !==
+      command.response_hash
+    ) {
+      throw new Error(
+        "Durable attendance command replay response integrity check failed.",
+      );
+    }
+    return {
+      response: command.response_snapshot,
+      responseStatus: command.response_status,
+      replayed: true,
+    };
+  }
+
+  private finalizeSelfServiceOutcome(
+    result: AttendanceCommandOutcome,
+  ): Record<string, unknown> {
+    if (result.responseStatus === 409) {
+      const response = result.response;
+      throw conflict(
+        String(
+          response["reason_detail"] ??
+            "Attendance punch is duplicate or out of sequence.",
+        ),
+        {
+          reason_code: response["reason_code"],
+          next_allowed_actions: response["next_allowed_actions"],
+          punch_policy: response["punch_policy"],
+          geo_policy: response["geo_policy"],
+        },
+        result.replayed
+          ? { [ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER]: "true" }
+          : undefined,
+      );
+    }
+    return result.replayed
+      ? markAttendanceReplayResponse(result.response)
+      : result.response;
   }
 
   private async persistLocationEvidence(
@@ -1878,6 +2040,7 @@ function isAttendanceIdempotencyUniqueViolation(error: unknown): boolean {
     [
       "idempotency_keys_scope_idempotency_key_actor_user_id_key",
       "attendance_commands_platform_idempotency_key_uq",
+      "attendance_commands_client_event_actor_uq",
     ].includes(typeof error.constraint === "string" ? error.constraint : "")
   );
 }

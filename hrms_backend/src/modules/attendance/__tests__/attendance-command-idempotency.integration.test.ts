@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
+import { canonicalAttendanceResponseHash } from "../command-service.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -97,7 +98,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       fullDayPunchWindow: true,
       allowOffDayPunches: true,
     };
-  });
+  }, 30_000);
 
   afterEach(async () => {
     try {
@@ -115,6 +116,190 @@ describe("PostgreSQL attendance command idempotency", () => {
         }
       }
     }
+  });
+
+  it("migrates and constrains durable client event ids safely", async () => {
+    const pool = app.store.pgPool!;
+    const validClientEventId = testClientEventId(11);
+    const malformedClientEventId = "not-a-uuid";
+    const companyA = "11111111-1111-4111-8111-000000000011";
+    const companyB = "11111111-1111-4111-8111-000000000012";
+    const actorA = "11111111-1111-4111-8111-000000000013";
+    const actorB = "11111111-1111-4111-8111-000000000014";
+    const employeeA = "11111111-1111-4111-8111-000000000015";
+    const employeeB = "11111111-1111-4111-8111-000000000016";
+    const hash = "a".repeat(64);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'attendance'
+          AND table_name = 'command_executions'
+          AND column_name IN ('client_event_id', 'response_status', 'response_hash')
+        ORDER BY column_name`,
+    );
+    expect(columns.rows.map((row) => row.column_name)).toEqual([
+      "client_event_id",
+      "response_hash",
+      "response_status",
+    ]);
+
+    await pool.query(
+      `INSERT INTO attendance.command_executions (
+         company_id, actor_user_id, employee_user_id, idempotency_key,
+         request_hash, command_type, command_origin, occurred_at, status,
+         request_snapshot
+       ) VALUES
+       ($1,$2,$3,'backfill-valid',$4,'check_in','employee_manual_now',now(),'received',$5::jsonb),
+       ($1,$2,$3,'backfill-malformed',$4,'check_in','employee_manual_now',now(),'received',$6::jsonb),
+       ($1,$2,$3,'backfill-missing',$4,'check_in','employee_manual_now',now(),'received','{}'::jsonb)`,
+      [
+        companyA,
+        actorA,
+        employeeA,
+        hash,
+        JSON.stringify({ envelope: { client_event_id: validClientEventId } }),
+        JSON.stringify({ envelope: { client_event_id: malformedClientEventId } }),
+      ],
+    );
+    await pool.query(
+      `UPDATE attendance.command_executions
+          SET client_event_id = (request_snapshot #>> '{envelope,client_event_id}')::uuid
+        WHERE client_event_id IS NULL
+          AND request_snapshot #>> '{envelope,client_event_id}' IS NOT NULL
+          AND request_snapshot #>> '{envelope,client_event_id}' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`,
+    );
+    const backfilled = await pool.query<{ idempotency_key: string; client_event_id: string | null }>(
+      `SELECT idempotency_key, client_event_id
+         FROM attendance.command_executions
+        WHERE idempotency_key LIKE 'backfill-%'
+        ORDER BY idempotency_key`,
+    );
+    expect(backfilled.rows).toEqual([
+      { idempotency_key: "backfill-malformed", client_event_id: null },
+      { idempotency_key: "backfill-missing", client_event_id: null },
+      { idempotency_key: "backfill-valid", client_event_id: validClientEventId },
+    ]);
+
+    await pool.query(
+      `ALTER TABLE attendance.command_executions
+         DROP CONSTRAINT IF EXISTS attendance_commands_replay_metadata_complete_check`,
+    );
+    const recoverablePlatformKeyId = testClientEventId(901);
+    const unrecoverablePlatformKeyId = testClientEventId(902);
+    const exactRecoveredHash = "b".repeat(64);
+    await pool.query(
+      `INSERT INTO platform.idempotency_keys (
+         id, scope, idempotency_key, actor_user_id, request_hash,
+         response_hash, status, expires_at, resource_type, resource_id,
+         response_status, completed_at
+       ) VALUES
+       ($1,'attendance.punch:employee_manual_now:test','recoverable',$3,$4,$5,'completed',now() + interval '1 day','attendance.command_execution',$6,409,now()),
+       ($2,'attendance.punch:employee_manual_now:test','unrecoverable',$3,$4,NULL,'completed',now() + interval '1 day','attendance.command_execution',$7,NULL,now())`,
+      [
+        recoverablePlatformKeyId,
+        unrecoverablePlatformKeyId,
+        actorA,
+        hash,
+        exactRecoveredHash,
+        testClientEventId(903),
+        testClientEventId(904),
+      ],
+    );
+    await pool.query(
+      `INSERT INTO attendance.command_executions (
+         id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id,
+         idempotency_key, request_hash, command_type, command_origin, occurred_at,
+         status, request_snapshot, response_snapshot, completed_at
+       ) VALUES
+       ($1,$2,$3,$4,$5,'recoverable',$7,'check_in','employee_manual_now',now(),'denied','{}'::jsonb,$8::jsonb,now()),
+       ($6,$2,$3,$4,$9,'unrecoverable',$7,'check_in','employee_manual_now',now(),'completed','{}'::jsonb,$8::jsonb,now())`,
+      [
+        testClientEventId(903),
+        companyA,
+        actorA,
+        employeeA,
+        recoverablePlatformKeyId,
+        testClientEventId(904),
+        hash,
+        JSON.stringify({ allowed: false, reason_detail: "historical" }),
+        unrecoverablePlatformKeyId,
+      ],
+    );
+    await pool.query(
+      `UPDATE attendance.command_executions AS command
+       SET
+         response_status = key.response_status,
+         response_hash = key.response_hash
+       FROM platform.idempotency_keys AS key
+       WHERE command.platform_idempotency_key_id = key.id
+         AND command.response_status IS NULL
+         AND command.response_hash IS NULL
+         AND command.response_snapshot IS NOT NULL
+         AND command.completed_at IS NOT NULL
+         AND command.status IN ('completed', 'denied')
+         AND key.status = 'completed'
+         AND key.resource_type = 'attendance.command_execution'
+         AND key.resource_id = command.id
+         AND key.response_status BETWEEN 100 AND 599
+         AND key.response_hash ~ '^[0-9a-f]{64}$'`,
+    );
+    const metadataBackfill = await pool.query<{
+      idempotency_key: string;
+      response_status: number | null;
+      response_hash: string | null;
+    }>(
+      `SELECT idempotency_key, response_status, response_hash
+         FROM attendance.command_executions
+        WHERE idempotency_key IN ('recoverable', 'unrecoverable')
+        ORDER BY idempotency_key`,
+    );
+    expect(metadataBackfill.rows).toEqual([
+      {
+        idempotency_key: "recoverable",
+        response_status: 409,
+        response_hash: exactRecoveredHash,
+      },
+      {
+        idempotency_key: "unrecoverable",
+        response_status: null,
+        response_hash: null,
+      },
+    ]);
+
+    const uniqueClientEventId = testClientEventId(12);
+    await pool.query(
+      `INSERT INTO attendance.command_executions (
+         company_id, actor_user_id, employee_user_id, idempotency_key,
+         client_event_id, request_hash, command_type, command_origin,
+         occurred_at, status, request_snapshot
+       ) VALUES ($1,$2,$3,'unique-base',$4,$5,'check_in','employee_manual_now',now(),'received','{}'::jsonb)`,
+      [companyA, actorA, employeeA, uniqueClientEventId, hash],
+    );
+    await expect(pool.query(
+      `INSERT INTO attendance.command_executions (
+         company_id, actor_user_id, employee_user_id, idempotency_key,
+         client_event_id, request_hash, command_type, command_origin,
+         occurred_at, status, request_snapshot
+       ) VALUES ($1,$2,$3,'unique-same-actor-other-employee',$4,$5,'check_out','manager_assisted_now',now(),'received','{}'::jsonb)`,
+      [companyA, actorA, employeeB, uniqueClientEventId, hash],
+    )).rejects.toMatchObject({ code: "23505", constraint: "attendance_commands_client_event_actor_uq" });
+    await expect(pool.query(
+      `INSERT INTO attendance.command_executions (
+         company_id, actor_user_id, employee_user_id, idempotency_key,
+         client_event_id, request_hash, command_type, command_origin,
+         occurred_at, status, request_snapshot
+       ) VALUES ($1,$2,$3,'unique-other-actor',$4,$5,'check_in','employee_manual_now',now(),'received','{}'::jsonb)`,
+      [companyA, actorB, employeeB, uniqueClientEventId, hash],
+    )).resolves.toBeDefined();
+    await expect(pool.query(
+      `INSERT INTO attendance.command_executions (
+         company_id, actor_user_id, employee_user_id, idempotency_key,
+         client_event_id, request_hash, command_type, command_origin,
+         occurred_at, status, request_snapshot
+       ) VALUES ($1,$2,$3,'unique-other-company',$4,$5,'check_in','employee_manual_now',now(),'received','{}'::jsonb)`,
+      [companyB, actorA, employeeA, uniqueClientEventId, hash],
+    )).resolves.toBeDefined();
   });
 
   it("replays one completed command and rejects a changed request", async () => {
@@ -158,6 +343,7 @@ describe("PostgreSQL attendance command idempotency", () => {
     const requestCompletedAt = Date.now();
 
     expect(first.statusCode).toBe(200);
+    expect(first.headers["idempotency-replayed"]).toBeUndefined();
     expect(first.json().day_status).toMatchObject({
       day_classification: expect.any(String),
       presence_state: "incomplete",
@@ -176,6 +362,7 @@ describe("PostgreSQL attendance command idempotency", () => {
     });
 
     expect(replay.statusCode).toBe(200);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
     expect(replay.json()).toMatchObject({
       command_id: first.json().command_id,
       decision_id: first.json().decision_id,
@@ -197,6 +384,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       punches: string;
       daily_records: string;
       outbox_events: string;
+      client_event_commands: string;
     }>(
       `SELECT
       (SELECT count(*)
@@ -245,7 +433,13 @@ describe("PostgreSQL attendance command idempotency", () => {
       (SELECT count(*)
        FROM platform.outbox_events
        WHERE aggregate_id = $4
-         AND event_type = 'attendance.punch.recorded') AS outbox_events`,
+         AND event_type = 'attendance.punch.recorded') AS outbox_events,
+
+      (SELECT count(*)
+       FROM attendance.command_executions
+       WHERE company_id = $5
+         AND actor_user_id = $6
+         AND client_event_id = $1::uuid) AS client_event_commands`,
       [
         idempotencyKey,
         first.json().command_id,
@@ -268,6 +462,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       punches: "1",
       daily_records: "1",
       outbox_events: "1",
+      client_event_commands: "1",
     });
 
     const snapshot = await app.store.pgPool!.query<{
@@ -281,8 +476,11 @@ describe("PostgreSQL attendance command idempotency", () => {
           command?: Record<string, unknown>;
         };
       };
+      response_snapshot: Record<string, unknown>;
+      response_hash: string;
+      response_status: number;
     }>(
-      `SELECT occurred_at, request_snapshot
+      `SELECT occurred_at, request_snapshot, response_snapshot, response_hash, response_status
          FROM attendance.command_executions
         WHERE id = $1`,
       [first.json().command_id],
@@ -300,6 +498,10 @@ describe("PostgreSQL attendance command idempotency", () => {
       },
     });
     expect(envelope?.captured_at).not.toBe(snapshot.rows[0]?.occurred_at.toISOString());
+    expect(snapshot.rows[0]?.response_status).toBe(200);
+    expect(snapshot.rows[0]?.response_hash).toBe(
+      canonicalAttendanceResponseHash(snapshot.rows[0]!.response_snapshot),
+    );
     const originalReceivedAt = envelope?.received_at;
 
     const expectedPolicyVersion = String(
@@ -533,8 +735,8 @@ describe("PostgreSQL attendance command idempotency", () => {
     });
 
     expect(changed.statusCode).toBe(409);
-    expect(changed.json().message).toBe(
-      "Idempotency key was already used with a different attendance command.",
+    expect(changed.json().message).toContain(
+      "already used with a different attendance command",
     );
 
     const changedLegacyCoordinates = await app.inject({
@@ -710,8 +912,8 @@ describe("PostgreSQL attendance command idempotency", () => {
       },
     });
     expect(changedDevice.statusCode).toBe(409);
-    expect(changedDevice.json().message).toBe(
-      "Idempotency key was already used with a different attendance command.",
+    expect(changedDevice.json().message).toContain(
+      "already used with a different attendance command",
     );
   });
 
@@ -1012,8 +1214,8 @@ describe("PostgreSQL attendance command idempotency", () => {
     });
 
     expect(changedCoordinates.statusCode).toBe(409);
-    expect(changedCoordinates.json().message).toBe(
-      "Idempotency key was already used with a different attendance command.",
+    expect(changedCoordinates.json().message).toContain(
+      "already used with a different attendance command",
     );
   });
 
@@ -1231,10 +1433,35 @@ describe("PostgreSQL attendance command idempotency", () => {
 
     expect(first.statusCode).toBe(409);
     expect(replay.statusCode).toBe(409);
+    expect(first.headers["idempotency-replayed"]).toBeUndefined();
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
     expect(replay.json()).toMatchObject({
       message: first.json().message,
       details: first.json().details,
     });
+    expect(replay.json().request_id).toBeDefined();
+    expect(first.json().request_id).toBeDefined();
+    expect(replay.json().request_id).not.toBe(first.json().request_id);
+    await app.store.pgPool!.query(
+      `UPDATE platform.idempotency_keys
+          SET expires_at = now() - interval '1 second'
+        WHERE idempotency_key = $1`,
+      [headers["idempotency-key"]],
+    );
+    const durableReplay = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers,
+      payload: punchEnvelope({ clientEventId: headers["idempotency-key"], command: payload }),
+    });
+    expect(durableReplay.statusCode).toBe(409);
+    expect(durableReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(durableReplay.json()).toMatchObject({
+      message: first.json().message,
+      details: first.json().details,
+    });
+    expect(durableReplay.json().request_id).toBeDefined();
+    expect(durableReplay.json().request_id).not.toBe(first.json().request_id);
 
     const counts = await app.store.pgPool!.query<{
       commands: string;
@@ -1279,6 +1506,20 @@ describe("PostgreSQL attendance command idempotency", () => {
       punch_events: "0",
       outbox_events: "0",
     });
+    const commandMetadata = await app.store.pgPool!.query<{
+      response_snapshot: Record<string, unknown>;
+      response_hash: string;
+      response_status: number;
+    }>(
+      `SELECT response_snapshot, response_hash, response_status
+         FROM attendance.command_executions
+        WHERE idempotency_key = $1`,
+      [headers["idempotency-key"]],
+    );
+    expect(commandMetadata.rows[0]?.response_status).toBe(409);
+    expect(commandMetadata.rows[0]?.response_hash).toBe(
+      canonicalAttendanceResponseHash(commandMetadata.rows[0]!.response_snapshot),
+    );
   });
 
   it("rolls back the punch and outbox event when transactional outbox insertion fails", async () => {
@@ -1394,9 +1635,118 @@ describe("PostgreSQL attendance command idempotency", () => {
     expect(first.json().command_id).not.toBe(second.json().command_id);
   });
 
-  it("reuses an expired key with a new platform reservation", async () => {
+  it("replays an expired platform key through durable client_event_id", async () => {
     const employee = await loginAs(app, "E1");
     const key = testClientEventId(1001);
+    const payload = {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web",
+      metadata: {},
+    };
+    const checkIn = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": key },
+      payload: punchEnvelope({ clientEventId: key, command: payload }),
+    });
+    expect(checkIn.statusCode).toBe(200);
+    expect(checkIn.headers["idempotency-replayed"]).toBeUndefined();
+    await app.store.pgPool!.query(
+      `UPDATE platform.idempotency_keys
+        SET expires_at = now() - interval '1 second'
+        WHERE idempotency_key = $1`,
+      [key],
+    );
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": key },
+      payload: punchEnvelope({ clientEventId: key, command: payload }),
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(replay.json()).toEqual(checkIn.json());
+
+    const counts = await app.store.pgPool!.query<{
+      platform_keys: string;
+      commands: string;
+      evidence: string;
+      decisions: string;
+      sessions: string;
+      punches: string;
+      outbox_events: string;
+    }>(
+      `SELECT
+        (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1) AS platform_keys,
+        (SELECT count(*) FROM attendance.command_executions WHERE idempotency_key = $1) AS commands,
+        (SELECT count(*) FROM attendance.attendance_events WHERE command_execution_id = $2) AS evidence,
+        (SELECT count(*) FROM attendance.command_decisions WHERE command_execution_id = $2) AS decisions,
+        (SELECT count(*) FROM attendance.sessions WHERE id = $3) AS sessions,
+        (SELECT count(*) FROM attendance.punch_events WHERE command_execution_id = $2) AS punches,
+        (SELECT count(*) FROM platform.outbox_events WHERE aggregate_id = $4 AND event_type = 'attendance.punch.recorded') AS outbox_events`,
+      [key, checkIn.json().command_id, checkIn.json().session_id, checkIn.json().punch_id],
+    );
+    expect(counts.rows[0]).toEqual({
+      platform_keys: "1",
+      commands: "1",
+      evidence: "1",
+      decisions: "1",
+      sessions: "1",
+      punches: "1",
+      outbox_events: "1",
+    });
+  });
+
+  it("rejects corrupt durable replay metadata after platform expiry", async () => {
+    const employee = await loginAs(app, "E1");
+    const key = testClientEventId(1003);
+    const payload = {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web",
+      metadata: {},
+    };
+    const checkIn = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": key },
+      payload: punchEnvelope({ clientEventId: key, command: payload }),
+    });
+    expect(checkIn.statusCode).toBe(200);
+    await app.store.pgPool!.query(
+      `UPDATE platform.idempotency_keys
+          SET expires_at = now() - interval '1 second'
+        WHERE idempotency_key = $1`,
+      [key],
+    );
+    await app.store.pgPool!.query(
+      `UPDATE attendance.command_executions
+          SET response_hash = $2
+        WHERE idempotency_key = $1`,
+      [key, "c".repeat(64)],
+    );
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": key },
+      payload: punchEnvelope({ clientEventId: key, command: payload }),
+    });
+
+    expect(replay.statusCode).toBe(500);
+    expect(replay.headers["idempotency-replayed"]).toBeUndefined();
+    const count = await app.store.pgPool!.query<{ commands: string }>(
+      `SELECT count(*) AS commands FROM attendance.command_executions WHERE idempotency_key = $1`,
+      [key],
+    );
+    expect(count.rows[0]?.commands).toBe("1");
+  });
+
+  it("rejects same client_event_id after expiry when the request hash changes", async () => {
+    const employee = await loginAs(app, "E1");
+    const key = testClientEventId(1002);
     const checkIn = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
@@ -1416,7 +1766,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       [key],
     );
 
-    const checkOut = await app.inject({
+    const changed = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers: { ...authHeader(employee.token), "idempotency-key": key },
@@ -1427,19 +1777,19 @@ describe("PostgreSQL attendance command idempotency", () => {
         metadata: {},
       } }),
     });
-    expect(checkOut.statusCode).toBe(200);
-    expect(checkOut.json().command_id).not.toBe(checkIn.json().command_id);
+    expect(changed.statusCode).toBe(409);
+    expect(changed.headers["idempotency-replayed"]).toBeUndefined();
+    expect(changed.json()).toMatchObject({
+      code: "WORKFLOW_CONFLICT",
+      message: "Client event was already used with a different attendance command.",
+      details: { code: "CLIENT_EVENT_REUSED", client_event_id: key },
+    });
 
-    const counts = await app.store.pgPool!.query<{
-      platform_keys: string;
-      commands: string;
-    }>(
-      `SELECT
-        (SELECT count(*) FROM platform.idempotency_keys WHERE idempotency_key = $1) AS platform_keys,
-        (SELECT count(*) FROM attendance.command_executions WHERE idempotency_key = $1) AS commands`,
+    const count = await app.store.pgPool!.query<{ commands: string }>(
+      `SELECT count(*) AS commands FROM attendance.command_executions WHERE idempotency_key = $1`,
       [key],
     );
-    expect(counts.rows[0]).toEqual({ platform_keys: "1", commands: "2" });
+    expect(count.rows[0]?.commands).toBe("1");
   });
 
   it("serializes concurrent same-key requests and rejects concurrent changed bodies", async () => {
@@ -1594,8 +1944,8 @@ describe("PostgreSQL attendance command idempotency", () => {
       (result) => result.statusCode === 409,
     );
 
-    expect(conflictResponse?.json().message).toBe(
-      "Idempotency key was already used with a different attendance command.",
+    expect(conflictResponse?.json().message).toContain(
+      "already used with a different attendance command",
     );
     const count = await app.store.pgPool!.query<{ commands: string }>(
       `SELECT count(*) AS commands FROM attendance.command_executions WHERE idempotency_key = $1`,
