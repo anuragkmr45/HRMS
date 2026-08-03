@@ -9,11 +9,21 @@ const indiaLocationQuerySchema = z.object({
 });
 
 export const locationRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/india", async (request) => {
-    if (!request.actor) {
-      throw unauthorized();
-    }
-    const query = indiaLocationQuerySchema.parse(request.query);
-    return searchIndiaLocations(query.search ?? "", query.limit);
-  });
+  fastify.get(
+    "/india",
+    {
+      schema: {
+        tags: ["Core / Employees & Hierarchy"],
+        summary: "Search India location reference data",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request) => {
+      if (!request.actor) {
+        throw unauthorized();
+      }
+      const query = indiaLocationQuerySchema.parse(request.query);
+      return searchIndiaLocations(query.search ?? "", query.limit);
+    },
+  );
 };
