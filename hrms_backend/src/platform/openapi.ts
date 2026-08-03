@@ -2183,10 +2183,10 @@ const attendanceGeoPolicySnapshotSchema = {
   additionalProperties: true
 };
 
-const attendancePunchBody = {
+const attendancePunchCommandBody = {
   type: "object",
   required: ["event_type"],
-  description: "Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
+  description: "Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
   properties: {
     event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
@@ -2197,6 +2197,31 @@ const attendancePunchBody = {
       description: "Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here."
     },
     location: attendanceLocationEvidenceSchema
+  },
+  additionalProperties: false
+};
+
+const attendanceCommandDeviceBody = {
+  type: "object",
+  properties: {
+    device_id: { type: "string", minLength: 1, maxLength: 128, example: "browser-session-device" },
+    platform: { type: "string", enum: ["web", "ios", "android"], example: "web" },
+    app_version: { type: "string", minLength: 1, maxLength: 64, example: "2026.08.03" },
+    os_version: { type: "string", minLength: 1, maxLength: 64, example: "Windows 11" }
+  },
+  additionalProperties: false,
+  description: "Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
+};
+
+const attendancePunchBody = {
+  type: "object",
+  required: ["client_event_id", "captured_at", "device", "command"],
+  description: "Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.",
+  properties: {
+    client_event_id: uuid("Client-generated logical attendance action UUID; must match Idempotency-Key."),
+    captured_at: dateTime("Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at."),
+    device: { ...attendanceCommandDeviceBody, nullable: true },
+    command: attendancePunchCommandBody
   },
   additionalProperties: false
 };
@@ -4514,7 +4539,7 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
     "Record employee manual-now punch",
-    "Records a current punch for the authenticated employee only. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. This mutation requires an Idempotency-Key: same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+    "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
     {
       headers: {
         type: "object",
@@ -4522,10 +4547,9 @@ const routeDocs: Record<string, RouteSchema> = {
         properties: {
           "idempotency-key": {
             type: "string",
-            minLength: 8,
-            maxLength: 200,
-            description: "Required client-generated key. Reuse only to retry the same validated attendance punch request.",
-            example: "attendance-punch-20260714-0001"
+            format: "uuid",
+            description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request.",
+            example: "019fc5b7-0811-7a33-ae47-46a559f9e797"
           }
         }
       },

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
-  attendancePunchSchema,
+  attendancePunchCommandEnvelopeSchema,
   attendanceAssistedCurrentPunchSchema,
   attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
@@ -9,7 +9,7 @@ import {
   isoDateTimeSchema,
   paginationQuerySchema,
 } from "#shared";
-import { unauthorized } from "../../platform/errors.js";
+import { badRequest, unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
@@ -21,6 +21,7 @@ const employeeParamSchema = z.object({ employeeUserId: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
+const clientEventIdHeaderSchema = z.uuid();
 
 const attendanceQuerySchema = paginationQuerySchema.extend({
   company_id: z.uuid().optional(),
@@ -60,14 +61,29 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    const idempotencyKey = idempotencyKeySchema.parse(
+    const idempotencyKey = clientEventIdHeaderSchema.parse(
       request.headers["idempotency-key"],
     );
     const service = new AttendanceService(fastify.store);
-    const input = attendancePunchSchema.parse(request.body);
+    const input = attendancePunchCommandEnvelopeSchema.parse(request.body);
+    if (input.client_event_id !== idempotencyKey) {
+      throw badRequest("Idempotency-Key header must match body client_event_id.", {
+        header: "Idempotency-Key",
+        field: "client_event_id",
+      });
+    }
     return fastify.store.kind === "postgres"
-      ? await service.recordEmployeeManualNowPostgres(request.actor, input, idempotencyKey)
-      : service.recordEmployeeManualNow(request.actor, input);
+      ? await service.recordEmployeeManualNowPostgres(
+        request.actor,
+        input.command,
+        idempotencyKey,
+        {
+          clientEventId: input.client_event_id,
+          capturedAt: input.captured_at,
+          device: input.device,
+        },
+      )
+      : service.recordEmployeeManualNow(request.actor, input.command);
   });
 
   fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request) => {

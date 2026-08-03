@@ -57,6 +57,24 @@ function assertNoExactCoordinateLeak(value: unknown): void {
   expect(serialized).not.toContain("geometry");
 }
 
+function punchEnvelope(input: {
+  clientEventId: string;
+  capturedAt?: string;
+  device?: Record<string, unknown> | null;
+  command: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    client_event_id: input.clientEventId,
+    captured_at: input.capturedAt ?? "2026-07-08T04:00:00.000Z",
+    device: input.device ?? null,
+    command: input.command,
+  };
+}
+
+function testClientEventId(ordinal: number): string {
+  return `00000000-0000-4000-8000-${ordinal.toString().padStart(12, "0")}`;
+}
+
 describe("PostgreSQL attendance command idempotency", () => {
   let app: TestApp;
 
@@ -101,13 +119,13 @@ describe("PostgreSQL attendance command idempotency", () => {
 
   it("replays one completed command and rejects a changed request", async () => {
     const employee = await loginAs(app, "E1");
-    const idempotencyKey = "attendance-idempotency-replay-001";
+    const idempotencyKey = "00000000-0000-4000-8000-000000000101";
     const headers = {
       ...authHeader(employee.token),
       "idempotency-key": idempotencyKey,
     };
 
-    const payload = {
+    const command = {
       event_type: "check_in",
       work_mode: "office",
       source: "web",
@@ -121,6 +139,12 @@ describe("PostgreSQL attendance command idempotency", () => {
         coordinates: [77.594566, 12.971599],
       },
     };
+    const payload = punchEnvelope({
+      clientEventId: idempotencyKey,
+      capturedAt: "2026-07-08T04:00:00.000Z",
+      device: null,
+      command,
+    });
 
     const requestStartedAt = Date.now();
 
@@ -245,6 +269,38 @@ describe("PostgreSQL attendance command idempotency", () => {
       daily_records: "1",
       outbox_events: "1",
     });
+
+    const snapshot = await app.store.pgPool!.query<{
+      occurred_at: Date;
+      request_snapshot: {
+        envelope?: {
+          client_event_id?: string;
+          captured_at?: string;
+          received_at?: string;
+          device?: unknown;
+          command?: Record<string, unknown>;
+        };
+      };
+    }>(
+      `SELECT occurred_at, request_snapshot
+         FROM attendance.command_executions
+        WHERE id = $1`,
+      [first.json().command_id],
+    );
+    const envelope = snapshot.rows[0]?.request_snapshot.envelope;
+    expect(envelope).toMatchObject({
+      client_event_id: idempotencyKey,
+      captured_at: "2026-07-08T04:00:00.000Z",
+      received_at: expect.any(String),
+      device: null,
+      command: {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+      },
+    });
+    expect(envelope?.captured_at).not.toBe(snapshot.rows[0]?.occurred_at.toISOString());
+    const originalReceivedAt = envelope?.received_at;
 
     const expectedPolicyVersion = String(
       app.store.adminPolicies.find(
@@ -469,7 +525,10 @@ describe("PostgreSQL attendance command idempotency", () => {
       headers,
       payload: {
         ...payload,
-        work_mode: "remote",
+        command: {
+          ...(payload.command as Record<string, unknown>),
+          work_mode: "remote",
+        },
       },
     });
 
@@ -484,15 +543,174 @@ describe("PostgreSQL attendance command idempotency", () => {
       headers,
       payload: {
         ...payload,
-        metadata: {
-          ...payload.metadata,
-          latitude: 12.9716,
+        command: {
+          ...(payload.command as Record<string, unknown>),
+          metadata: {
+            ...((payload.command as { metadata: Record<string, unknown> }).metadata),
+            latitude: 12.9716,
+          },
         },
       },
     });
 
-    expect(changedLegacyCoordinates.statusCode).toBe(409);
-    expect(changedLegacyCoordinates.json().message).toBe(
+    expect(changedLegacyCoordinates.statusCode).toBe(200);
+    expect(changedLegacyCoordinates.json()).toEqual(first.json());
+
+    const legacyReplayCounts = await app.store.pgPool!.query<{
+      commands: string;
+      sessions: string;
+      punches: string;
+      outbox_events: string;
+    }>(
+      `SELECT
+        (SELECT count(*)
+         FROM attendance.command_executions
+         WHERE id = $1
+           AND idempotency_key = $2) AS commands,
+        (SELECT count(*)
+         FROM attendance.sessions
+         WHERE id = $3) AS sessions,
+        (SELECT count(*)
+         FROM attendance.punch_events
+         WHERE id = $4
+           AND command_execution_id = $1) AS punches,
+        (SELECT count(*)
+         FROM platform.outbox_events
+         WHERE aggregate_id = $4
+           AND event_type = 'attendance.punch.recorded') AS outbox_events`,
+      [
+        first.json().command_id,
+        idempotencyKey,
+        first.json().session_id,
+        first.json().punch_id,
+      ],
+    );
+    expect(legacyReplayCounts.rows[0]).toEqual({
+      commands: "1",
+      sessions: "1",
+      punches: "1",
+      outbox_events: "1",
+    });
+
+    const replayedSnapshot = await app.store.pgPool!.query<{
+      request_snapshot: { envelope?: { received_at?: string } };
+    }>(
+      `SELECT request_snapshot
+         FROM attendance.command_executions
+        WHERE id = $1`,
+      [first.json().command_id],
+    );
+    expect(replayedSnapshot.rows[0]?.request_snapshot.envelope?.received_at).toBe(originalReceivedAt);
+  });
+
+  it("validates the attendance command envelope and fingerprints device metadata", async () => {
+    const employee = await loginAs(app, "E1");
+    const baseCommand = {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web",
+      metadata: {},
+    };
+    const validId = "00000000-0000-4000-8000-000000000201";
+
+    const missingHeader = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: authHeader(employee.token),
+      payload: punchEnvelope({ clientEventId: validId, command: baseCommand }),
+    });
+    expect(missingHeader.statusCode).toBe(400);
+
+    const invalidClientId = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": validId },
+      payload: {
+        ...punchEnvelope({ clientEventId: validId, command: baseCommand }),
+        client_event_id: "not-a-uuid",
+      },
+    });
+    expect(invalidClientId.statusCode).toBe(400);
+
+    const invalidCapturedAt = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": validId },
+      payload: {
+        ...punchEnvelope({ clientEventId: validId, command: baseCommand }),
+        captured_at: "not-a-timestamp",
+      },
+    });
+    expect(invalidCapturedAt.statusCode).toBe(400);
+
+    const suppliedReceivedAt = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": validId },
+      payload: {
+        ...punchEnvelope({ clientEventId: validId, command: baseCommand }),
+        received_at: "2026-07-08T04:00:00.000Z",
+      },
+    });
+    expect(suppliedReceivedAt.statusCode).toBe(400);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: {
+        ...authHeader(employee.token),
+        "idempotency-key": "00000000-0000-4000-8000-000000000202",
+      },
+      payload: punchEnvelope({ clientEventId: validId, command: baseCommand }),
+    });
+    expect(mismatch.statusCode).toBe(400);
+
+    const malformedDevice = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": validId },
+      payload: punchEnvelope({
+        clientEventId: validId,
+        device: { platform: "windows", unbounded: "not accepted" },
+        command: baseCommand,
+      }),
+    });
+    expect(malformedDevice.statusCode).toBe(400);
+
+    const deviceId = "00000000-0000-4000-8000-000000000203";
+    const withDevice = punchEnvelope({
+      clientEventId: deviceId,
+      capturedAt: "2026-07-08T04:01:00.000Z",
+      device: {
+        device_id: "web-device-1",
+        platform: "web",
+        app_version: "2026.08.03",
+        os_version: "Windows 11",
+      },
+      command: baseCommand,
+    });
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": deviceId },
+      payload: withDevice,
+    });
+    expect(accepted.statusCode).toBe(200);
+
+    const changedDevice = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/punches",
+      headers: { ...authHeader(employee.token), "idempotency-key": deviceId },
+      payload: {
+        ...withDevice,
+        device: {
+          device_id: "web-device-2",
+          platform: "web",
+        },
+      },
+    });
+    expect(changedDevice.statusCode).toBe(409);
+    expect(changedDevice.json().message).toBe(
       "Idempotency key was already used with a different attendance command.",
     );
   });
@@ -518,7 +736,7 @@ describe("PostgreSQL attendance command idempotency", () => {
           AND scope_id IS NULL`,
       [companyId],
     );
-    const idempotencyKey = "attendance-idempotency-built-in-policy-001";
+    const idempotencyKey = testClientEventId(301);
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
@@ -526,12 +744,12 @@ describe("PostgreSQL attendance command idempotency", () => {
         ...authHeader(employee.token),
         "idempotency-key": idempotencyKey,
       },
-      payload: {
+      payload: punchEnvelope({ clientEventId: idempotencyKey, command: {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
-      },
+      } }),
     });
     expect(response.statusCode).toBeLessThan(500);
 
@@ -549,7 +767,7 @@ describe("PostgreSQL attendance command idempotency", () => {
 
   it("persists canonical location evidence without leaking coordinates into generic artifacts", async () => {
     const employee = await loginAs(app, "E1");
-    const idempotencyKey = "attendance-idempotency-location-evidence-001";
+    const idempotencyKey = testClientEventId(401);
     const capturedAt = new Date(Date.now() - 60_000).toISOString();
     const payload = {
       event_type: "check_in",
@@ -583,7 +801,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload,
+      payload: punchEnvelope({ clientEventId: idempotencyKey, command: payload }),
     });
 
     expect(first.statusCode).toBe(200);
@@ -594,7 +812,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload,
+      payload: punchEnvelope({ clientEventId: idempotencyKey, command: payload }),
     });
     expect(replay.statusCode).toBe(200);
     expect(replay.json().command_id).toBe(first.json().command_id);
@@ -704,6 +922,30 @@ describe("PostgreSQL attendance command idempotency", () => {
       client_age_ms: 60_000,
       evaluated_age_ms: row.age_ms,
     });
+    expect(row.request_snapshot).toMatchObject({
+      envelope: {
+        client_event_id: idempotencyKey,
+        captured_at: "2026-07-08T04:00:00.000Z",
+        received_at: expect.any(String),
+        device: null,
+        command: {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {
+            note: "front door",
+          },
+          location: {
+            latitude: 12.971599,
+            longitude: 77.594566,
+            accuracy_meters: 8.5,
+            captured_at: capturedAt,
+          },
+        },
+      },
+      metadata: { note: "front door" },
+      location_evidence_supplied: true,
+    });
     expect(row.evaluation_context).toMatchObject({
       location_evidence: {
         present: true,
@@ -716,7 +958,6 @@ describe("PostgreSQL attendance command idempotency", () => {
     });
 
     for (const artifact of [
-      row.request_snapshot,
       row.response_snapshot,
       row.punch_metadata,
       row.evaluation_context,
@@ -759,10 +1000,13 @@ describe("PostgreSQL attendance command idempotency", () => {
       url: "/api/v1/attendance/punches",
       headers,
       payload: {
-        ...payload,
-        location: {
-          ...payload.location,
-          latitude: 12.9716,
+        ...punchEnvelope({ clientEventId: idempotencyKey, command: payload }),
+        command: {
+          ...payload,
+          location: {
+            ...payload.location,
+            latitude: 12.9716,
+          },
         },
       },
     });
@@ -777,13 +1021,13 @@ describe("PostgreSQL attendance command idempotency", () => {
     const employee = await loginAs(app, "E1");
     const headers = {
       ...authHeader(employee.token),
-      "idempotency-key": "attendance-idempotency-location-future-skew-001",
+      "idempotency-key": testClientEventId(501),
     };
     const withinSkew = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload: {
+      payload: punchEnvelope({ clientEventId: testClientEventId(501), command: {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
@@ -796,7 +1040,7 @@ describe("PostgreSQL attendance command idempotency", () => {
           provider: "browser",
           permission_state: "unknown",
         },
-      },
+      } }),
     });
 
     expect(withinSkew.statusCode).toBe(200);
@@ -816,9 +1060,9 @@ describe("PostgreSQL attendance command idempotency", () => {
       url: "/api/v1/attendance/punches",
       headers: {
         ...authHeader(employee.token),
-        "idempotency-key": "attendance-idempotency-location-future-skew-002",
+        "idempotency-key": testClientEventId(502),
       },
-      payload: {
+      payload: punchEnvelope({ clientEventId: testClientEventId(502), command: {
         event_type: "break_start",
         work_mode: "office",
         source: "web",
@@ -831,7 +1075,7 @@ describe("PostgreSQL attendance command idempotency", () => {
           provider: "browser",
           permission_state: "granted",
         },
-      },
+      } }),
     });
 
     expect(beyondSkew.statusCode).toBe(400);
@@ -915,14 +1159,14 @@ describe("PostgreSQL attendance command idempotency", () => {
       url: "/api/v1/attendance/punches",
       headers: {
         ...authHeader(employee.token),
-        "idempotency-key": "attendance-idempotency-projection-sessions-001",
+        "idempotency-key": testClientEventId(601),
       },
-      payload: {
+      payload: punchEnvelope({ clientEventId: testClientEventId(601), command: {
         event_type: "check_out",
         work_mode: "office",
         source: "web",
         metadata: {},
-      },
+      } }),
     });
     expect(checkOut.statusCode).toBe(200);
 
@@ -963,7 +1207,7 @@ describe("PostgreSQL attendance command idempotency", () => {
     const employee = await loginAs(app, "E1");
     const headers = {
       ...authHeader(employee.token),
-      "idempotency-key": "attendance-idempotency-denied-001",
+      "idempotency-key": testClientEventId(701),
     };
     const payload = {
       event_type: "check_out",
@@ -976,13 +1220,13 @@ describe("PostgreSQL attendance command idempotency", () => {
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload,
+      payload: punchEnvelope({ clientEventId: headers["idempotency-key"], command: payload }),
     });
     const replay = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers,
-      payload,
+      payload: punchEnvelope({ clientEventId: headers["idempotency-key"], command: payload }),
     });
 
     expect(first.statusCode).toBe(409);
@@ -1061,9 +1305,9 @@ describe("PostgreSQL attendance command idempotency", () => {
         url: "/api/v1/attendance/punches",
         headers: {
           ...authHeader(employee.token),
-          "idempotency-key": "attendance-idempotency-rollback-001",
+          "idempotency-key": testClientEventId(801),
         },
-        payload: {
+        payload: punchEnvelope({ clientEventId: testClientEventId(801), command: {
           event_type: "check_in",
           work_mode: "office",
           source: "web",
@@ -1076,7 +1320,7 @@ describe("PostgreSQL attendance command idempotency", () => {
             provider: "browser",
             permission_state: "granted",
           },
-        },
+        } }),
       });
       expect(response.statusCode).toBe(500);
       const counts = await pool.query<{
@@ -1123,7 +1367,7 @@ describe("PostgreSQL attendance command idempotency", () => {
   it("isolates the same textual key by actor", async () => {
     const employeeOne = await loginAs(app, "E1");
     const employeeTwo = await loginAs(app, "E2");
-    const key = "attendance-idempotency-actor-001";
+    const key = testClientEventId(901);
     const payload = {
       event_type: "check_in",
       work_mode: "office",
@@ -1136,13 +1380,13 @@ describe("PostgreSQL attendance command idempotency", () => {
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers: { ...authHeader(employeeOne.token), "idempotency-key": key },
-        payload,
+        payload: punchEnvelope({ clientEventId: key, command: payload }),
       }),
       app.inject({
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers: { ...authHeader(employeeTwo.token), "idempotency-key": key },
-        payload,
+        payload: punchEnvelope({ clientEventId: key, command: payload }),
       }),
     ]);
     expect(first.statusCode).toBe(200);
@@ -1152,17 +1396,17 @@ describe("PostgreSQL attendance command idempotency", () => {
 
   it("reuses an expired key with a new platform reservation", async () => {
     const employee = await loginAs(app, "E1");
-    const key = "attendance-idempotency-expired-001";
+    const key = testClientEventId(1001);
     const checkIn = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers: { ...authHeader(employee.token), "idempotency-key": key },
-      payload: {
+      payload: punchEnvelope({ clientEventId: key, command: {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
-      },
+      } }),
     });
     expect(checkIn.statusCode).toBe(200);
     await app.store.pgPool!.query(
@@ -1176,12 +1420,12 @@ describe("PostgreSQL attendance command idempotency", () => {
       method: "POST",
       url: "/api/v1/attendance/punches",
       headers: { ...authHeader(employee.token), "idempotency-key": key },
-      payload: {
+      payload: punchEnvelope({ clientEventId: key, command: {
         event_type: "check_out",
         work_mode: "office",
         source: "web",
         metadata: {},
-      },
+      } }),
     });
     expect(checkOut.statusCode).toBe(200);
     expect(checkOut.json().command_id).not.toBe(checkIn.json().command_id);
@@ -1200,7 +1444,7 @@ describe("PostgreSQL attendance command idempotency", () => {
 
   it("serializes concurrent same-key requests and rejects concurrent changed bodies", async () => {
     const employee = await loginAs(app, "E1");
-    const sameKey = "attendance-idempotency-concurrent-same-001";
+    const sameKey = testClientEventId(1101);
     const headers = {
       ...authHeader(employee.token),
       "idempotency-key": sameKey,
@@ -1216,13 +1460,13 @@ describe("PostgreSQL attendance command idempotency", () => {
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers,
-        payload: checkIn,
+        payload: punchEnvelope({ clientEventId: sameKey, command: checkIn }),
       }),
       app.inject({
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers,
-        payload: checkIn,
+        payload: punchEnvelope({ clientEventId: sameKey, command: checkIn }),
       }),
     ]);
     expect(sameResults.map((result) => result.statusCode)).toEqual([200, 200]);
@@ -1313,7 +1557,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       outbox_events: "1",
     });
 
-    const changedKey = "attendance-idempotency-concurrent-changed-001";
+    const changedKey = testClientEventId(1102);
     const changedHeaders = {
       ...authHeader(employee.token),
       "idempotency-key": changedKey,
@@ -1323,23 +1567,23 @@ describe("PostgreSQL attendance command idempotency", () => {
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers: changedHeaders,
-        payload: {
+        payload: punchEnvelope({ clientEventId: changedKey, command: {
           event_type: "break_start",
           work_mode: "office",
           source: "web",
           metadata: {},
-        },
+        } }),
       }),
       app.inject({
         method: "POST",
         url: "/api/v1/attendance/punches",
         headers: changedHeaders,
-        payload: {
+        payload: punchEnvelope({ clientEventId: changedKey, command: {
           event_type: "check_out",
           work_mode: "office",
           source: "web",
           metadata: {},
-        },
+        } }),
       }),
     ]);
     expect(changedResults.map((result) => result.statusCode).sort()).toEqual([

@@ -9154,11 +9154,11 @@ Backend-owned API group.
 **Path/query parameters**
 | Name | In | Required | Type | Notes |
 |---|---|---:|---|---|
-| `idempotency-key` | header | yes | string | minLength 8 |
+| `idempotency-key` | header | yes | string<uuid> | - |
 
 **Request body**
 
-Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.
+Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.
 
 Content type: `application/json`
 
@@ -9166,11 +9166,10 @@ Required: yes
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
-| `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
-| `source` | string enum("web", "web_geo", "mobile", "kiosk") | optional | default "web" |
-| `metadata` | object | optional | Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here. |
-| `location` | unknown | optional | One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates. |
+| `client_event_id` | string<uuid> | required | Client-generated logical attendance action UUID; must match Idempotency-Key. |
+| `captured_at` | string<date-time> | required | Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at. |
+| `device` | object | required, nullable | Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
+| `command` | object | required | Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted. |
 
 **Responses**
 | Status | Meaning |

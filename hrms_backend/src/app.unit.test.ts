@@ -252,9 +252,15 @@ describe("app persistence flushing", () => {
     await app.ready();
     try {
       const employee = await loginAs(app, "E1");
+      const clientEventId = "00000000-0000-4000-8000-000000000001";
       const punch = await app.inject({
-        method: "POST", url: "/api/v1/attendance/punches", headers: { ...authHeader(employee.token), "idempotency-key": "attendance-test-key" },
-        payload: { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
+        method: "POST", url: "/api/v1/attendance/punches", headers: { ...authHeader(employee.token), "idempotency-key": clientEventId },
+        payload: {
+          client_event_id: clientEventId,
+          captured_at: "2026-07-08T04:00:00.000Z",
+          device: null,
+          command: { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
+        },
       });
       expect(punch.statusCode).toBe(200);
       expect(domains).toEqual([]);

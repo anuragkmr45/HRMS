@@ -64958,7 +64958,7 @@
         "tags": [
           "Attendance"
         ],
-        "description": "Records a current punch for the authenticated employee only. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. This mutation requires an Idempotency-Key: same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
+        "description": "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the result and a same-key/different-body retry returns 409.",
         "requestBody": {
           "required": true,
           "content": {
@@ -64966,190 +64966,249 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "event_type"
+                  "client_event_id",
+                  "captured_at",
+                  "device",
+                  "command"
                 ],
-                "description": "Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
+                "description": "Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.",
                 "properties": {
-                  "event_type": {
+                  "client_event_id": {
                     "type": "string",
-                    "enum": [
-                      "check_in",
-                      "break_start",
-                      "break_end",
-                      "check_out"
-                    ],
-                    "example": "check_in"
+                    "format": "uuid",
+                    "description": "Client-generated logical attendance action UUID; must match Idempotency-Key.",
+                    "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
                   },
-                  "work_mode": {
+                  "captured_at": {
                     "type": "string",
-                    "enum": [
-                      "office",
-                      "remote",
-                      "wfh",
-                      "field"
-                    ],
-                    "default": "office",
-                    "example": "office"
+                    "format": "date-time",
+                    "description": "Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at.",
+                    "example": "2026-05-04T10:00:00.000Z"
                   },
-                  "source": {
-                    "type": "string",
-                    "enum": [
-                      "web",
-                      "web_geo",
-                      "mobile",
-                      "kiosk"
-                    ],
-                    "default": "web",
-                    "example": "web_geo"
-                  },
-                  "metadata": {
+                  "device": {
                     "type": "object",
-                    "additionalProperties": true,
-                    "description": "Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here."
-                  },
-                  "location": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "required": [
-                          "latitude",
-                          "longitude",
-                          "accuracy_meters",
-                          "captured_at"
-                        ],
-                        "properties": {
-                          "latitude": {
-                            "type": "number",
-                            "minimum": -90,
-                            "maximum": 90,
-                            "example": 12.971599
-                          },
-                          "longitude": {
-                            "type": "number",
-                            "minimum": -180,
-                            "maximum": 180,
-                            "example": 77.594566
-                          },
-                          "accuracy_meters": {
-                            "type": "number",
-                            "minimum": 0,
-                            "example": 12.5
-                          },
-                          "captured_at": {
-                            "type": "string",
-                            "format": "date-time",
-                            "description": "One-shot browser capture timestamp from the employee action.",
-                            "example": "2026-05-04T10:00:00.000Z"
-                          },
-                          "age_ms": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "example": 30000
-                          },
-                          "provider": {
-                            "type": "string",
-                            "enum": [
-                              "browser",
-                              "gps",
-                              "network",
-                              "manual",
-                              "unknown"
-                            ],
-                            "example": "browser"
-                          },
-                          "permission_state": {
-                            "type": "string",
-                            "enum": [
-                              "granted",
-                              "unknown"
-                            ],
-                            "default": "unknown",
-                            "example": "granted"
-                          },
-                          "altitude_meters": {
-                            "type": "number",
-                            "example": 920.4
-                          },
-                          "is_mocked": {
-                            "type": "boolean",
-                            "example": false
-                          },
-                          "integrity_status": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 80,
-                            "example": "browser_reported"
-                          }
-                        },
-                        "additionalProperties": false
+                    "properties": {
+                      "device_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "example": "browser-session-device"
                       },
-                      {
-                        "type": "object",
-                        "required": [
-                          "permission_state"
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "web",
+                          "ios",
+                          "android"
                         ],
-                        "properties": {
-                          "captured_at": {
-                            "type": "string",
-                            "format": "date-time",
-                            "description": "Optional one-shot browser failure timestamp.",
-                            "example": "2026-05-04T10:00:00.000Z"
-                          },
-                          "age_ms": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "example": 30000
-                          },
-                          "provider": {
-                            "type": "string",
-                            "enum": [
-                              "browser",
-                              "gps",
-                              "network",
-                              "manual",
-                              "unknown"
-                            ],
-                            "example": "browser"
-                          },
-                          "permission_state": {
-                            "type": "string",
-                            "enum": [
-                              "denied",
-                              "unavailable"
-                            ],
-                            "example": "denied"
-                          },
-                          "integrity_status": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 80,
-                            "example": "permission_denied"
-                          }
-                        },
-                        "additionalProperties": false
+                        "example": "web"
+                      },
+                      "app_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "example": "2026.08.03"
+                      },
+                      "os_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "example": "Windows 11"
                       }
+                    },
+                    "additionalProperties": false,
+                    "description": "Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions.",
+                    "nullable": true
+                  },
+                  "command": {
+                    "type": "object",
+                    "required": [
+                      "event_type"
                     ],
-                    "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates."
+                    "description": "Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
+                    "properties": {
+                      "event_type": {
+                        "type": "string",
+                        "enum": [
+                          "check_in",
+                          "break_start",
+                          "break_end",
+                          "check_out"
+                        ],
+                        "example": "check_in"
+                      },
+                      "work_mode": {
+                        "type": "string",
+                        "enum": [
+                          "office",
+                          "remote",
+                          "wfh",
+                          "field"
+                        ],
+                        "default": "office",
+                        "example": "office"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "web",
+                          "web_geo",
+                          "mobile",
+                          "kiosk"
+                        ],
+                        "default": "web",
+                        "example": "web_geo"
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here."
+                      },
+                      "location": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "latitude",
+                              "longitude",
+                              "accuracy_meters",
+                              "captured_at"
+                            ],
+                            "properties": {
+                              "latitude": {
+                                "type": "number",
+                                "minimum": -90,
+                                "maximum": 90,
+                                "example": 12.971599
+                              },
+                              "longitude": {
+                                "type": "number",
+                                "minimum": -180,
+                                "maximum": 180,
+                                "example": 77.594566
+                              },
+                              "accuracy_meters": {
+                                "type": "number",
+                                "minimum": 0,
+                                "example": 12.5
+                              },
+                              "captured_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "One-shot browser capture timestamp from the employee action.",
+                                "example": "2026-05-04T10:00:00.000Z"
+                              },
+                              "age_ms": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "example": 30000
+                              },
+                              "provider": {
+                                "type": "string",
+                                "enum": [
+                                  "browser",
+                                  "gps",
+                                  "network",
+                                  "manual",
+                                  "unknown"
+                                ],
+                                "example": "browser"
+                              },
+                              "permission_state": {
+                                "type": "string",
+                                "enum": [
+                                  "granted",
+                                  "unknown"
+                                ],
+                                "default": "unknown",
+                                "example": "granted"
+                              },
+                              "altitude_meters": {
+                                "type": "number",
+                                "example": 920.4
+                              },
+                              "is_mocked": {
+                                "type": "boolean",
+                                "example": false
+                              },
+                              "integrity_status": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                                "example": "browser_reported"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission_state"
+                            ],
+                            "properties": {
+                              "captured_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Optional one-shot browser failure timestamp.",
+                                "example": "2026-05-04T10:00:00.000Z"
+                              },
+                              "age_ms": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "example": 30000
+                              },
+                              "provider": {
+                                "type": "string",
+                                "enum": [
+                                  "browser",
+                                  "gps",
+                                  "network",
+                                  "manual",
+                                  "unknown"
+                                ],
+                                "example": "browser"
+                              },
+                              "permission_state": {
+                                "type": "string",
+                                "enum": [
+                                  "denied",
+                                  "unavailable"
+                                ],
+                                "example": "denied"
+                              },
+                              "integrity_status": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                                "example": "permission_denied"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ],
+                        "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates."
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
               }
             }
           },
-          "description": "Employee manual-now punch request. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted."
+          "description": "Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative."
         },
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "minLength": 8,
-              "maxLength": 200,
-              "example": "attendance-punch-20260714-0001"
+              "format": "uuid",
+              "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
             },
             "in": "header",
             "name": "idempotency-key",
             "required": true,
-            "description": "Required client-generated key. Reuse only to retry the same validated attendance punch request."
+            "description": "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request."
           }
         ],
         "security": [

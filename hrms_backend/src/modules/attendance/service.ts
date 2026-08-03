@@ -68,6 +68,7 @@ import { PostgresGeofenceRepository } from "./geofence-repository.js";
 import {
   AttendanceCommandService,
   canonicalAttendanceRequestHash,
+  type AttendanceCommandEnvelopeInput,
 } from "./command-service.js";
 import {
   normalizeAttendancePolicyConfig,
@@ -2423,6 +2424,7 @@ export class AttendanceService {
   async punchPostgres(
     actor: AuthUser,
     input: EmployeePunchPostgresInput,
+    clientEnvelope?: AttendanceCommandEnvelopeInput,
   ): Promise<Record<string, unknown>> {
     const context = this.resolveAttendanceCompanyContext(
       actor,
@@ -2439,6 +2441,7 @@ export class AttendanceService {
       timeZone,
       idempotencyKey: input.idempotency_key,
       command: input,
+      clientEnvelope,
       isWorkingDayFor: (workDate) => this.isWorkingDay(companyId, workDate),
     });
   }
@@ -2447,12 +2450,13 @@ export class AttendanceService {
     actor: AuthUser,
     input: Omit<EmployeePunchPostgresInput, "idempotency_key" | "occurred_at">,
     idempotencyKey: string,
+    clientEnvelope?: AttendanceCommandEnvelopeInput,
   ): Promise<Record<string, unknown>> {
     return this.punchPostgres(actor, {
       ...input,
       source: employeePunchSource(input.source),
       idempotency_key: idempotencyKey,
-    });
+    }, clientEnvelope);
   }
 
   async publishGeofenceVersion(

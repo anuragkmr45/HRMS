@@ -10,9 +10,22 @@ const originalAllowMemoryStore = process.env.HRMS_ALLOW_MEMORY_STORE;
 
 function headers(token: string) {
   ordinal += 1;
+  const suffix = ordinal.toString(16).padStart(12, "0");
   return {
     ...authHeader(token),
-    "idempotency-key": `attendance-boundary-${ordinal.toString().padStart(4, "0")}`,
+    "idempotency-key": `00000000-0000-4000-8000-${suffix}`,
+  };
+}
+
+function punchEnvelope(
+  id: string,
+  command: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    client_event_id: id,
+    captured_at: "2026-07-08T04:00:00.000Z",
+    device: null,
+    command,
   };
 }
 
@@ -53,27 +66,39 @@ describe("attendance command boundaries", () => {
       "employee_user_id",
       "company_id",
     ]) {
+      const requestHeaders = headers(employee.token);
       const rejected = await app.inject({
         method: "POST",
         url: "/api/v1/attendance/punches",
-        headers: headers(employee.token),
-        payload: { event_type: "check_in", [forbiddenField]: employee.user.id },
+        headers: requestHeaders,
+        payload: punchEnvelope(String(requestHeaders["idempotency-key"]), {
+          event_type: "check_in",
+          [forbiddenField]: employee.user.id,
+        }),
       });
       expect(rejected.statusCode).toBe(400);
     }
+    const adminHeaders = headers(employee.token);
     const rejectedAdminSource = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: { event_type: "check_in", source: "admin" },
+      headers: adminHeaders,
+      payload: punchEnvelope(String(adminHeaders["idempotency-key"]), {
+        event_type: "check_in",
+        source: "admin",
+      }),
     });
     expect(rejectedAdminSource.statusCode).toBe(400);
 
+    const punchHeaders = headers(employee.token);
     const recorded = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: { event_type: "check_in", work_mode: "office" },
+      headers: punchHeaders,
+      payload: punchEnvelope(String(punchHeaders["idempotency-key"]), {
+        event_type: "check_in",
+        work_mode: "office",
+      }),
     });
     expect(recorded.statusCode).toBe(200);
     expect(recorded.json().punch).toMatchObject({

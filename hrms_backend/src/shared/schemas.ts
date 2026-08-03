@@ -31,6 +31,9 @@ import {
 export const uuidSchema = z.uuid();
 export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 export const isoDateTimeSchema = z.iso.datetime();
+export const offsetIsoDateTimeSchema = z.iso.datetime({
+  offset: true,
+});
 export const moneySchema = z
   .string()
   .regex(/^-?\d{1,12}(\.\d{1,2})?$/u, "Use a fixed precision decimal string");
@@ -391,6 +394,22 @@ export const attendancePunchSchema = z.object({
     }
   }
 });
+
+export const attendanceCommandDeviceSchema = z.object({
+  device_id: z.string().trim().min(1).max(128).optional(),
+  platform: z.enum(["web", "ios", "android"]).optional(),
+  app_version: z.string().trim().min(1).max(64).optional(),
+  os_version: z.string().trim().min(1).max(64).optional()
+}).strict();
+
+export const attendancePunchCommandEnvelopeSchema = z
+  .object({
+    client_event_id: uuidSchema,
+    captured_at: offsetIsoDateTimeSchema,
+    device: attendanceCommandDeviceSchema.nullable(),
+    command: attendancePunchSchema,
+  })
+  .strict();
 
 export const attendanceAssistedCurrentPunchSchema = z.object({
   event_type: z.enum([

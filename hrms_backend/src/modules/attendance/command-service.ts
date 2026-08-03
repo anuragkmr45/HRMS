@@ -63,6 +63,19 @@ export interface AttendanceCommandInput {
   location?: AttendanceLocationEvidenceInput;
 }
 
+export interface AttendanceCommandDeviceMetadata {
+  device_id?: string;
+  platform?: "web" | "ios" | "android";
+  app_version?: string;
+  os_version?: string;
+}
+
+export interface AttendanceCommandEnvelopeInput {
+  clientEventId: UUID;
+  capturedAt: string;
+  device: AttendanceCommandDeviceMetadata | null;
+}
+
 export type AttendanceCommandKind =
   | "employee_manual_now"
   | "manager_assisted_now"
@@ -346,6 +359,7 @@ export class AttendanceCommandService {
     timeZone: string;
     idempotencyKey: string;
     command: AttendanceCommandInput;
+    clientEnvelope?: AttendanceCommandEnvelopeInput;
     isWorkingDayFor: (workDate: string) => boolean;
   }): Promise<Record<string, unknown>> {
     const pool = this.store.pgPool;
@@ -359,17 +373,31 @@ export class AttendanceCommandService {
       ...input.command,
       metadata: sanitizeAttendanceMetadata(input.command.metadata),
     };
-    const requestHash = canonicalAttendanceRequestHash({
-      company_id: input.companyId,
-      actor_user_id: input.actor.id,
-      subject_employee_user_id: subjectEmployeeUserId,
-      command_kind: commandKind,
+    const normalizedClientCommand = {
       event_type: commandInput.event_type,
       work_mode: commandInput.work_mode,
       source: commandInput.source,
-      metadata: input.command.metadata,
+      metadata: commandInput.metadata,
       location: commandInput.location ?? null,
-    });
+    };
+    const requestHash = canonicalAttendanceRequestHash(input.clientEnvelope
+      ? {
+          client_event_id: input.clientEnvelope.clientEventId,
+          captured_at: input.clientEnvelope.capturedAt,
+          device: input.clientEnvelope.device,
+          command: normalizedClientCommand,
+        }
+      : {
+          company_id: input.companyId,
+          actor_user_id: input.actor.id,
+          subject_employee_user_id: subjectEmployeeUserId,
+          command_kind: commandKind,
+          event_type: commandInput.event_type,
+          work_mode: commandInput.work_mode,
+          source: commandInput.source,
+          metadata: commandInput.metadata,
+          location: commandInput.location ?? null,
+        });
     const scope = `${ATTENDANCE_IDEMPOTENCY_SCOPE_PREFIX}:${commandKind}:${input.companyId}`;
     const repository = new PostgresAttendanceCommandRepository(pool);
     try {
@@ -389,7 +417,8 @@ export class AttendanceCommandService {
               input.companyId,
             );
           }
-          const occurredAt = await tx.getTransactionTimestamp();
+          const receivedAt = await tx.getTransactionTimestamp();
+          const occurredAt = receivedAt;
           const policy = await resolveEffectiveAttendancePolicy(tx, {
             companyId: input.companyId,
             subjectEmployeeUserId,
@@ -413,6 +442,15 @@ export class AttendanceCommandService {
             commandOrigin: commandKind,
             occurredAt,
             requestSnapshot: {
+              envelope: input.clientEnvelope
+                ? {
+                    client_event_id: input.clientEnvelope.clientEventId,
+                    captured_at: input.clientEnvelope.capturedAt,
+                    received_at: receivedAt,
+                    device: input.clientEnvelope.device,
+                    command: normalizedClientCommand,
+                  }
+                : null,
               work_date: workDate,
               work_mode: commandInput.work_mode,
               source: commandInput.source,
@@ -435,7 +473,7 @@ export class AttendanceCommandService {
             eventType: commandInput.event_type,
             source: commandInput.source,
             occurredAt,
-            receivedAt: occurredAt,
+            receivedAt,
             payload: evidencePayload,
             payloadHash: evidencePayloadHash,
           });
@@ -444,7 +482,7 @@ export class AttendanceCommandService {
                 companyId: input.companyId,
                 employeeUserId: subjectEmployeeUserId,
                 attendanceEventId: evidence.id,
-                receivedAt: occurredAt,
+                receivedAt,
                 sourceChannel: commandInput.source,
                 location: commandInput.location,
                 policy,
