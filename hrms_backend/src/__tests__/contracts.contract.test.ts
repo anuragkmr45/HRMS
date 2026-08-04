@@ -3,6 +3,15 @@ import type { FastifyInstance } from "fastify";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getLocalDemoPassword } from "#auth";
+import {
+  AttendanceCommandReasonCodeValues,
+  AttendanceGeoDecisionReasonCodeValues,
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+} from "#shared";
 import { buildApp } from "../app.js";
 import { createMemoryDataStore } from "../platform/data-store.js";
 import { buildRealApp } from "./real-infra.js";
@@ -1228,6 +1237,80 @@ describe("API contracts", () => {
       in: "header",
       required: true,
     });
+    const attendancePunchRequest = attendancePunch?.requestBody?.content?.[
+      "application/json"
+    ]?.schema as Record<string, any> | undefined;
+    const locationEvidence =
+      attendancePunchRequest?.properties?.command?.properties?.location;
+    expect(locationEvidence?.oneOf?.[0]?.properties?.provider?.enum).toEqual(
+      [...AttendanceLocationProviderValues],
+    );
+    expect(locationEvidence?.oneOf?.[1]?.properties?.provider?.enum).toEqual(
+      [...AttendanceLocationProviderValues],
+    );
+    expect(
+      locationEvidence?.oneOf?.[0]?.properties?.provider?.enum,
+    ).not.toContain("gps");
+    expect(
+      locationEvidence?.oneOf?.[0]?.properties?.provider?.enum,
+    ).not.toContain("manual");
+
+    const attendancePunchSuccess =
+      attendancePunch?.responses?.["200"]?.content?.["application/json"]
+        ?.schema as Record<string, any> | undefined;
+    expect(
+      attendancePunchSuccess?.properties?.punch?.required,
+    ).not.toContain("work_date");
+    expect(attendancePunchSuccess?.properties?.punch?.required).not.toContain(
+      "time",
+    );
+    expect(
+      attendancePunch?.responses?.["409"]?.content?.["application/json"]
+        ?.schema?.properties?.details?.properties?.reason_code?.enum,
+    ).toEqual([...AttendanceCommandReasonCodeValues]);
+
+    const assistedPunch =
+      spec.paths?.[
+        "/api/v1/attendance/employees/{employeeUserId}/assisted-current-punches"
+      ]?.post as Record<string, any> | undefined;
+    expect(
+      assistedPunch?.requestBody?.content?.["application/json"]?.schema
+        ?.properties?.location,
+    ).toBeDefined();
+
+    const historicalCorrection =
+      spec.paths?.[
+        "/api/v1/attendance/employees/{employeeUserId}/historical-corrections"
+      ]?.post as Record<string, any> | undefined;
+    expect(
+      historicalCorrection?.requestBody?.content?.["application/json"]?.schema
+        ?.properties?.event_type?.enum,
+    ).toEqual([...AttendanceHistoricalCorrectionEventTypeValues]);
+
+    expect(spec.paths?.["/api/v1/attendance/offline-sync"]).toBeUndefined();
+    expect(spec.components?.schemas?.AttendanceCommandReasonCode).toMatchObject({
+      type: "string",
+      enum: [...AttendanceCommandReasonCodeValues],
+    });
+    expect(spec.components?.schemas?.AttendanceGeoReasonCode).toMatchObject({
+      type: "string",
+      enum: [...AttendanceGeoDecisionReasonCodeValues],
+    });
+    expect(spec.components?.schemas?.AttendanceOfflineSyncReasonCode).toMatchObject({
+      type: "string",
+      enum: [...AttendanceOfflineSyncReasonCodeValues],
+    });
+    expect(spec.components?.schemas?.AttendanceOfflineSyncResult).toMatchObject({
+      properties: {
+        sync_status: { enum: [...AttendanceOfflineSyncStatusValues] },
+        verification_status: {
+          enum: [...AttendanceOfflineVerificationStatusValues],
+        },
+        reason_code: { enum: [...AttendanceOfflineSyncReasonCodeValues] },
+      },
+    });
+    expect(spec.components?.schemas?.AttendanceGeofenceCircleShape).toBeDefined();
+    expect(spec.components?.schemas?.AttendanceGeofencePolygonShape).toBeDefined();
 
     for (const row of rows) {
       if (!operationMetadataExceptions.has(row.key)) {

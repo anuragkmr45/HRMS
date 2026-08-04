@@ -2,39 +2,29 @@ import { z } from "zod";
 import {
   attendanceCommandDeviceSchema,
   attendanceLocationEvidenceSchema,
+  AttendanceOfflineSyncContractVersion,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
   offsetIsoDateTimeSchema,
   isoDateTimeSchema,
   uuidSchema,
 } from "#shared";
 import { canonicalJsonHash } from "./canonical-json.js";
 
-export const ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION = "attendance.offline_sync.v1";
+export const ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION = AttendanceOfflineSyncContractVersion;
 export const ATTENDANCE_OFFLINE_SYNC_MAX_BATCH_EVENTS = 50;
 
 export const attendanceOfflineSyncStatusValues = [
-  "accepted",
-  "replayed",
-  "conflict",
-  "rejected",
-  "deferred",
+  ...AttendanceOfflineSyncStatusValues,
 ] as const;
 
 export const attendanceOfflineVerificationStatusValues = [
-  "unverified",
-  "review_required",
-  "rejected",
+  ...AttendanceOfflineVerificationStatusValues,
 ] as const;
 
 export const attendanceOfflineSyncReasonCodeValues = [
-  "offline_sync.accepted_unverified",
-  "offline_sync.replayed",
-  "offline_sync.changed_body_conflict",
-  "offline_sync.validation_failed",
-  "offline_sync.processing_deferred",
-  "offline_sync.sequence_gap",
-  "offline_sync.sequence_out_of_order",
-  "offline_sync.duplicate_sequence",
-  "offline_sync.review_required",
+  ...AttendanceOfflineSyncReasonCodeValues,
 ] as const;
 
 const offlineAttendanceCommandKindSchema = z.literal("employee_manual_now");

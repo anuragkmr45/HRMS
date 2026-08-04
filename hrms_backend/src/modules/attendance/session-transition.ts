@@ -1,5 +1,11 @@
-import type { AttendancePunchEventType } from "#shared";
-import { AttendancePunchEventTypes } from "#shared";
+import type {
+  AttendancePunchEventType,
+  AttendanceSessionTransitionReasonCode,
+} from "#shared";
+import {
+  AttendancePunchEventTypes,
+  AttendanceSessionTransitionReasonCodes,
+} from "#shared";
 
 export const AttendanceCommandStates = {
   NotCheckedIn: "not_checked_in",
@@ -22,18 +28,9 @@ export const AttendanceTransitionActions = {
 export type AttendanceTransitionAction =
   (typeof AttendanceTransitionActions)[keyof typeof AttendanceTransitionActions];
 
-export const AttendanceDecisionReasonCodes = {
-  AlreadyCheckedIn: "already_checked_in",
-  NoOpenSession: "no_open_session",
-  BreakAlreadyStarted: "break_already_started",
-  NoOpenBreak: "no_open_break",
-  OpenBreakMustEnd: "open_break_must_end",
-  AttendanceCycleCompleted: "attendance_cycle_completed",
-  SessionOwnershipInvalid: "session_ownership_invalid",
-} as const;
+export const AttendanceDecisionReasonCodes = AttendanceSessionTransitionReasonCodes;
 
-export type AttendanceDecisionReasonCode =
-  (typeof AttendanceDecisionReasonCodes)[keyof typeof AttendanceDecisionReasonCodes];
+export type AttendanceDecisionReasonCode = AttendanceSessionTransitionReasonCode;
 
 export interface AllowedAttendanceTransition {
   allowed: true;

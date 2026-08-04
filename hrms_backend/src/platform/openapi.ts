@@ -1,8 +1,26 @@
 import type { FastifyDynamicSwaggerOptions } from "@fastify/swagger";
+import {
+  AttendanceCommandReasonCodeValues,
+  AttendanceGeoDecisionReasonCodeValues,
+  AttendanceGeoFactualOutcomeValues,
+  AttendanceGeoPolicyActionValues,
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+  AttendanceOfflineSyncContractVersion,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+  AttendancePunchEventTypes,
+  AttendancePublicPunchSourceChannels,
+  AttendanceRegularizationOperations,
+  AttendanceRegularizationStatuses,
+} from "#shared";
 
 type JsonSchema = Record<string, unknown>;
 type RouteSchema = Record<string, unknown>;
 type SwaggerTransformObjectInput = Parameters<NonNullable<FastifyDynamicSwaggerOptions["transformObject"]>>[0];
+const enumValues = (values: readonly string[]): string[] => [...values];
+const lowerHex64Example = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const uuid = (description: string, example = "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"): JsonSchema => ({
   type: "string",
@@ -2139,7 +2157,7 @@ const attendanceLocationCoordinateEvidenceSchema = {
     accuracy_meters: { type: "number", minimum: 0, example: 12.5 },
     captured_at: dateTime("One-shot browser capture timestamp from the employee action."),
     age_ms: { type: "integer", minimum: 0, example: 30000 },
-    provider: { type: "string", enum: ["browser", "gps", "network", "manual", "unknown"], example: "browser" },
+    provider: { type: "string", enum: enumValues(AttendanceLocationProviderValues), example: "browser" },
     permission_state: { type: "string", enum: ["granted", "unknown"], default: "unknown", example: "granted" },
     altitude_meters: { type: "number", example: 920.4 },
     is_mocked: { type: "boolean", example: false },
@@ -2154,7 +2172,7 @@ const attendanceLocationFailureEvidenceSchema = {
   properties: {
     captured_at: dateTime("Optional one-shot browser failure timestamp."),
     age_ms: { type: "integer", minimum: 0, example: 30000 },
-    provider: { type: "string", enum: ["browser", "gps", "network", "manual", "unknown"], example: "browser" },
+    provider: { type: "string", enum: enumValues(AttendanceLocationProviderValues), example: "browser" },
     permission_state: { type: "string", enum: ["denied", "unavailable"], example: "denied" },
     integrity_status: { type: "string", minLength: 1, maxLength: 80, example: "permission_denied" }
   },
@@ -2166,7 +2184,23 @@ const attendanceLocationEvidenceSchema = {
     attendanceLocationCoordinateEvidenceSchema,
     attendanceLocationFailureEvidenceSchema
   ],
-  description: "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates."
+  description: "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+  examples: [
+    {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "granted"
+    },
+    {
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "denied",
+      integrity_status: "permission_denied"
+    }
+  ]
 };
 
 const attendanceGeoPolicySnapshotSchema = {
@@ -2175,32 +2209,21 @@ const attendanceGeoPolicySnapshotSchema = {
   properties: {
     factual_outcome: {
       type: "string",
-      enum: [
-        "not_required",
-        "missing",
-        "permission_denied",
-        "location_unavailable",
-        "stale_evidence",
-        "accuracy_exceeded",
-        "fence_not_configured",
-        "inside_confident",
-        "outside_confident",
-        "boundary_uncertain"
-      ],
+      enum: enumValues(AttendanceGeoFactualOutcomeValues),
       example: "inside_confident"
     },
     category: { type: "string", example: "inside_confident" },
-    selected_action: { type: "string", enum: ["allow", "deny", "manual_fallback"], example: "allow" },
+    selected_action: { type: "string", enum: enumValues(AttendanceGeoPolicyActionValues), example: "allow" },
     fallback_used: { type: "boolean", example: false },
     allowed: { type: "boolean", example: true },
-    reason_code: { type: "string", nullable: true, example: null },
-    evaluator_version: { type: "string", example: "attendance_geo_policy_v1" },
+    reason_code: { type: "string", enum: enumValues(AttendanceGeoDecisionReasonCodeValues), nullable: true, example: "geo_inside_fence" },
+    evaluator_version: { type: "string", example: "attendance-geo-v2" },
     geofence_id: { ...uuid("Effective geofence UUID"), nullable: true },
     geofence_version_id: { ...uuid("Effective geofence version UUID"), nullable: true },
     work_site_id: { ...uuid("Selected work site UUID"), nullable: true },
     geofence_version_number: { type: "integer", nullable: true, example: 1 },
     geofence_shape_type: { type: "string", enum: ["circle", "polygon"], nullable: true, example: "polygon" },
-    geofence_canonical_hash: { type: "string", nullable: true, example: "3f786850e387550fdab836ed7e6dc881de23001b" },
+    geofence_canonical_hash: { type: "string", pattern: "^[0-9a-f]{64}$", nullable: true, example: lowerHex64Example },
     evaluation: {
       type: "object",
       nullable: true,
@@ -2208,7 +2231,87 @@ const attendanceGeoPolicySnapshotSchema = {
       description: "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
     }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    factual_outcome: "inside_confident",
+    category: "inside_confident",
+    selected_action: "allow",
+    fallback_used: false,
+    allowed: true,
+    reason_code: "geo_inside_fence",
+    evaluator_version: "attendance-geo-v2",
+    geofence_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+    geofence_version_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+    work_site_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+    geofence_version_number: 2,
+    geofence_shape_type: "polygon",
+    geofence_canonical_hash: lowerHex64Example,
+    evaluation: {
+      category: "inside_confident",
+      evaluator_version: "attendance-geo-v2",
+      candidate_count: 1,
+      valid_candidate_count: 1,
+      inside_match_count: 1,
+      multiple_inside_matches: false,
+      selected_candidate_ordinal: 1,
+      selection_reason: "nearest_effective_geofence",
+      reported_accuracy_meters: 12.5,
+      grace_meters: 25
+    }
+  }
+};
+
+const attendanceBusinessErrorDetailsSchema = {
+  type: "object",
+  properties: {
+    reason_code: {
+      type: "string",
+      enum: enumValues(AttendanceCommandReasonCodeValues),
+      nullable: true,
+      description: "Stable attendance command or geo-policy reason code when the failure is a persisted business denial."
+    },
+    reason_detail: { type: "string", nullable: true },
+    next_allowed_actions: {
+      type: "array",
+      items: { type: "string", enum: Object.values(AttendancePunchEventTypes) }
+    },
+    geo_policy: attendanceGeoPolicySnapshotSchema
+  },
+  additionalProperties: true,
+  example: {
+    reason_code: "geo_outside_fence",
+    reason_detail: "The submitted location is outside the effective geofence.",
+    next_allowed_actions: ["check_in"],
+    geo_policy: {
+      factual_outcome: "outside_confident",
+      category: "outside_confident",
+      selected_action: "deny",
+      fallback_used: false,
+      allowed: false,
+      reason_code: "geo_outside_fence",
+      evaluator_version: "attendance-geo-v2",
+      evaluation: {
+        category: "outside_confident",
+        evaluator_version: "attendance-geo-v2",
+        candidate_count: 1,
+        valid_candidate_count: 1,
+        inside_match_count: 0,
+        multiple_inside_matches: false,
+        selected_candidate_ordinal: 1,
+        selection_reason: "nearest_effective_geofence",
+        reported_accuracy_meters: 18,
+        grace_meters: 25
+      }
+    }
+  }
+};
+
+const attendanceBusinessErrorResponseSchema = {
+  ...errorResponseSchema,
+  properties: {
+    ...errorResponseSchema.properties,
+    details: attendanceBusinessErrorDetailsSchema
+  }
 };
 
 const attendancePunchCommandBody = {
@@ -2216,9 +2319,9 @@ const attendancePunchCommandBody = {
   required: ["event_type"],
   description: "Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
   properties: {
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
-    source: { type: "string", enum: ["web", "web_geo", "mobile", "kiosk"], default: "web", example: "web_geo" },
+    source: { type: "string", enum: enumValues(AttendancePublicPunchSourceChannels), default: "web", example: "web_geo" },
     metadata: {
       type: "object",
       additionalProperties: true,
@@ -2226,7 +2329,23 @@ const attendancePunchCommandBody = {
     },
     location: attendanceLocationEvidenceSchema
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    work_mode: "office",
+    source: "web_geo",
+    metadata: {
+      client_timezone: "Asia/Kolkata"
+    },
+    location: {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "granted"
+    }
+  }
 };
 
 const attendanceCommandDeviceBody = {
@@ -2251,26 +2370,67 @@ const attendancePunchBody = {
     device: { ...attendanceCommandDeviceBody, nullable: true },
     command: attendancePunchCommandBody
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+    captured_at: "2026-05-04T09:10:00.000+05:30",
+    device: {
+      device_id: "browser-session-device",
+      platform: "web",
+      app_version: "2026.08.03",
+      os_version: "Windows 11"
+    },
+    command: {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web_geo",
+      metadata: {
+        client_timezone: "Asia/Kolkata"
+      },
+      location: {
+        latitude: 12.971599,
+        longitude: 77.594566,
+        accuracy_meters: 12.5,
+        captured_at: "2026-05-04T03:40:00.000Z",
+        provider: "browser",
+        permission_state: "granted"
+      }
+    }
+  }
 };
 
 const attendanceAssistedCurrentPunchBody = {
   type: "object",
   required: ["event_type"],
   properties: {
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
     metadata: { type: "object", additionalProperties: true },
+    location: attendanceLocationEvidenceSchema,
     reason: { type: "string", minLength: 3, maxLength: 1000 }
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    work_mode: "office",
+    metadata: {
+      manager_note: "Front desk assisted punch"
+    },
+    location: {
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "unavailable",
+      integrity_status: "location_unavailable"
+    },
+    reason: "Employee device unavailable at shift start."
+  }
 };
 
 const attendanceHistoricalCorrectionBody = {
   type: "object",
   required: ["event_type", "occurred_at", "reason"],
   properties: {
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), example: "check_in" },
     occurred_at: dateTime("Past effective occurrence time"),
     reason: { type: "string", minLength: 3, maxLength: 1000 },
     work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
@@ -2284,7 +2444,17 @@ const attendanceEmployeeParamSchema = {
   type: "object",
   required: ["employeeUserId"],
   properties: { employeeUserId: uuid("Employee user UUID") },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    occurred_at: "2026-05-04T09:10:00.000+05:30",
+    reason: "Manager verified missed punch from access log.",
+    work_mode: "office",
+    metadata: {
+      correction_source: "manager_review"
+    },
+    linked_regularization_request_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9401"
+  }
 };
 
 const attendanceGeofencePublishParamSchema = {
@@ -2334,31 +2504,59 @@ const attendanceGeofencePublishedVersionSchema = {
     canonical_hash: {
       type: "string",
       pattern: "^[0-9a-f]{64}$",
-      example: "3f786850e387550fdab836ed7e6dc881de23001b"
+      example: lowerHex64Example
     },
     published_at: dateTime("Publication timestamp"),
     published_by_user_id: uuid("Publishing actor UUID"),
     geometry_diagnostics: { type: "object", additionalProperties: true }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9302",
+    company_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9001",
+    geofence_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9301",
+    version_number: 2,
+    version_status: "published",
+    shape_type: "polygon",
+    circle_radius_meters: null,
+    effective_from: "2026-05-04T00:00:00.000Z",
+    effective_until: null,
+    canonical_hash: lowerHex64Example,
+    published_at: "2026-05-04T03:35:00.000Z",
+    published_by_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9002",
+    geometry_diagnostics: {
+      vertex_count: 5,
+      self_intersections: 0
+    }
+  }
 };
 
 const attendancePunchSchema = {
   type: "object",
-  required: ["id", "employee_user_id", "event_type", "occurred_at", "work_date", "time"],
+  required: ["id", "employee_user_id", "event_type", "occurred_at"],
   properties: {
     id: uuid("Attendance punch UUID"),
     employee_user_id: uuid("Employee user UUID"),
     actor_user_id: uuid("Authenticated actor UUID"),
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
     occurred_at: dateTime("Punch timestamp"),
     work_date: date("Work date"),
     time: { type: "string", nullable: true, example: "09:10" },
     work_mode: { type: "string", example: "office" },
-    source: { type: "string", enum: ["web", "web_geo", "mobile", "kiosk", "admin"], example: "web_geo" },
+    source: { type: "string", enum: ["web", "web_geo", "mobile", "mobile_foreground", "mobile_offline", "kiosk", "admin", "auto_geofence"], example: "web_geo" },
     origin: { type: "string", enum: ["employee_manual_now", "manager_assisted_now", "historical_correction", "approved_regularization", "system"] }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+    employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    actor_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    event_type: "check_in",
+    occurred_at: "2026-05-04T03:40:12.123Z",
+    work_mode: "office",
+    source: "web_geo",
+    origin: "employee_manual_now"
+  }
 };
 
 const attendancePunchCommandResponseSchema = {
@@ -2381,7 +2579,31 @@ const attendancePunchCommandResponseSchema = {
     punch_policy: { type: "object", additionalProperties: true },
     geo_policy: attendanceGeoPolicySnapshotSchema
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    allowed: true,
+    command_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9200",
+    decision_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9202",
+    session_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9203",
+    punch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+    punch: {
+      id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+      employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+      actor_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+      event_type: "check_in",
+      occurred_at: "2026-05-04T03:40:12.123Z",
+      work_mode: "office",
+      source: "web_geo",
+      origin: "employee_manual_now"
+    },
+    day_status: {
+      work_date: "2026-05-04",
+      presence_state: "present"
+    },
+    next_allowed_actions: ["break_start", "check_out"],
+    next_allowed_action: "break_start",
+    geo_policy: attendanceGeoPolicySnapshotSchema.example
+  }
 };
 
 const attendanceDaySchema = {
@@ -2502,7 +2724,7 @@ const attendanceRegularizationCreateBody = {
         type: "object",
         required: ["event_type", "occurred_at"],
         properties: {
-          event_type: { type: "string", enum: ["check_in", "check_out"], example: "check_out" },
+          event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), example: "check_out" },
           occurred_at: dateTime("Requested punch timestamp")
         },
         additionalProperties: false
@@ -2518,8 +2740,8 @@ const attendanceRegularizationCreateBody = {
             type: "object",
             required: ["operation", "event_type", "occurred_at"],
             properties: {
-              operation: { type: "string", enum: ["add"] },
-              event_type: { type: "string", enum: ["check_in", "check_out"] },
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Add] },
+              event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues) },
               occurred_at: dateTime("Requested punch timestamp")
             },
             additionalProperties: false
@@ -2528,9 +2750,9 @@ const attendanceRegularizationCreateBody = {
             type: "object",
             required: ["operation", "target_punch_event_id", "event_type", "occurred_at"],
             properties: {
-              operation: { type: "string", enum: ["replace"] },
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Replace] },
               target_punch_event_id: uuid("Target punch event UUID"),
-              event_type: { type: "string", enum: ["check_in", "check_out"] },
+              event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues) },
               occurred_at: dateTime("Replacement punch timestamp")
             },
             additionalProperties: false
@@ -2539,7 +2761,7 @@ const attendanceRegularizationCreateBody = {
             type: "object",
             required: ["operation", "target_punch_event_id"],
             properties: {
-              operation: { type: "string", enum: ["void"] },
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Void] },
               target_punch_event_id: uuid("Target punch event UUID")
             },
             additionalProperties: false
@@ -2548,7 +2770,18 @@ const attendanceRegularizationCreateBody = {
       }
     }
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    work_date: "2026-05-04",
+    reason: "Forgot to punch out after shift handoff.",
+    items: [
+      {
+        operation: "add",
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ]
+  }
 };
 
 const attendanceRegularizationDecisionBody = {
@@ -2559,7 +2792,12 @@ const attendanceRegularizationDecisionBody = {
     remarks: { type: "string", description: "Required for reject/return decisions.", example: "Approved." },
     expected_version: { type: "integer", minimum: 1, example: 1 }
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    decision: "approve",
+    remarks: "Access log confirms the requested punch.",
+    expected_version: 1
+  }
 };
 
 const attendanceRegularizationSchema = {
@@ -2585,20 +2823,287 @@ const attendanceRegularizationSchema = {
         properties: {
           id: uuid("Regularization request item UUID"),
           ordinal: { type: "integer", minimum: 0 },
-          operation: { type: "string", enum: ["add", "replace", "void"] },
+          operation: { type: "string", enum: Object.values(AttendanceRegularizationOperations) },
           target_punch_event_id: { ...uuid("Target punch event UUID"), nullable: true },
-          event_type: { type: "string", enum: ["check_in", "check_out"], nullable: true },
+          event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), nullable: true },
           occurred_at: { ...dateTime("Requested punch timestamp"), nullable: true }
         },
         additionalProperties: true
       }
     },
-    status: { type: "string", enum: ["pending", "approved", "returned", "rejected"], example: "pending" },
+    status: { type: "string", enum: Object.values(AttendanceRegularizationStatuses), example: "pending" },
     current_approver_user_id: { ...uuid("Current approver user UUID"), nullable: true },
     decision_remarks: { type: "string", nullable: true },
     version: { type: "integer", minimum: 1, example: 1 }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9401",
+    employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    submitted_by_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    work_date: "2026-05-04",
+    reason: "Forgot to punch out after shift handoff.",
+    requested_punches: [
+      {
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ],
+    items: [
+      {
+        id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9402",
+        ordinal: 0,
+        operation: "add",
+        target_punch_event_id: null,
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ],
+    status: "pending",
+    current_approver_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9004",
+    decision_remarks: null,
+    version: 1
+  }
+};
+
+const attendanceGeofenceCircleShapeSchema = {
+  type: "object",
+  required: ["shape_type", "center", "radius_meters"],
+  properties: {
+    shape_type: { type: "string", enum: ["circle"], example: "circle" },
+    center: {
+      type: "object",
+      required: ["latitude", "longitude"],
+      properties: {
+        latitude: { type: "number", minimum: -90, maximum: 90, example: 12.971599 },
+        longitude: { type: "number", minimum: -180, maximum: 180, example: 77.594566 }
+      },
+      additionalProperties: false
+    },
+    radius_meters: { type: "number", minimum: 0, exclusiveMinimum: true, example: 100 }
+  },
+  additionalProperties: false,
+  example: {
+    shape_type: "circle",
+    center: {
+      latitude: 12.971599,
+      longitude: 77.594566
+    },
+    radius_meters: 100
+  }
+};
+
+const attendanceGeofencePolygonShapeSchema = {
+  type: "object",
+  required: ["shape_type", "rings"],
+  properties: {
+    shape_type: { type: "string", enum: ["polygon"], example: "polygon" },
+    rings: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "array",
+        minItems: 4,
+        items: {
+          type: "object",
+          required: ["latitude", "longitude"],
+          properties: {
+            latitude: { type: "number", minimum: -90, maximum: 90 },
+            longitude: { type: "number", minimum: -180, maximum: 180 }
+          },
+          additionalProperties: false
+        }
+      }
+    }
+  },
+  additionalProperties: false,
+  example: {
+    shape_type: "polygon",
+    rings: [
+      [
+        { latitude: 12.9711, longitude: 77.5939 },
+        { latitude: 12.9721, longitude: 77.5939 },
+        { latitude: 12.9721, longitude: 77.5952 },
+        { latitude: 12.9711, longitude: 77.5952 },
+        { latitude: 12.9711, longitude: 77.5939 }
+      ]
+    ]
+  }
+};
+
+const attendanceOfflineEventEnvelopeSchema = {
+  type: "object",
+  required: ["client_event_id", "sequence", "command_kind", "captured_at", "source", "event_type"],
+  properties: {
+    client_event_id: attendanceClientEventIdSchema,
+    sequence: { type: "integer", minimum: 1, example: 7 },
+    command_kind: { type: "string", enum: ["employee_manual_now"], example: "employee_manual_now" },
+    captured_at: dateTime("Client capture timestamp with offset. Server time remains authoritative for command execution."),
+    source: { type: "string", enum: ["mobile_offline"], default: "mobile_offline", example: "mobile_offline" },
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
+    metadata: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        app_session_id: { type: "string", minLength: 1, maxLength: 128 },
+        app_state: { type: "string", enum: ["foreground", "background", "terminated", "unknown"] },
+        capture_method: { type: "string", enum: ["user_action", "system_retry"] },
+        client_timezone: { type: "string", minLength: 1, maxLength: 80, example: "Asia/Kolkata" },
+        network_state: { type: "string", enum: ["offline", "online", "unknown"] },
+        offline_reason: { type: "string", enum: ["network_unavailable", "app_backgrounded", "manual_retry", "unknown"] },
+        note: { type: "string", maxLength: 280 }
+      }
+    },
+    location: attendanceLocationEvidenceSchema
+  },
+  additionalProperties: false,
+  example: {
+    client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+    sequence: 7,
+    command_kind: "employee_manual_now",
+    captured_at: "2026-05-04T09:10:00.000+05:30",
+    source: "mobile_offline",
+    event_type: "check_in",
+    work_mode: "office",
+    metadata: {
+      app_state: "foreground",
+      capture_method: "user_action",
+      client_timezone: "Asia/Kolkata",
+      network_state: "offline",
+      offline_reason: "network_unavailable"
+    },
+    location: {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "device",
+      permission_state: "granted"
+    }
+  }
+};
+
+const attendanceOfflineBatchEnvelopeSchema = {
+  type: "object",
+  required: ["contract_version", "batch_id", "device", "events"],
+  properties: {
+    contract_version: { type: "string", enum: [AttendanceOfflineSyncContractVersion], example: AttendanceOfflineSyncContractVersion },
+    batch_id: uuid("Offline sync batch UUID"),
+    device: attendanceCommandDeviceBody,
+    events: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: attendanceOfflineEventEnvelopeSchema
+    }
+  },
+  additionalProperties: false,
+  example: {
+    contract_version: AttendanceOfflineSyncContractVersion,
+    batch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+    device: {
+      device_id: "ios-device-001",
+      platform: "ios",
+      app_version: "2026.08.03",
+      os_version: "iOS 18.5"
+    },
+    events: [attendanceOfflineEventEnvelopeSchema.example]
+  }
+};
+
+const attendanceOfflineSyncResultSchema = {
+  type: "object",
+  required: [
+    "client_event_id",
+    "sequence",
+    "sync_status",
+    "verification_status",
+    "replayed",
+    "server_received_at",
+    "payroll_eligible"
+  ],
+  properties: {
+    client_event_id: attendanceClientEventIdSchema,
+    sequence: { type: "integer", minimum: 1, example: 7 },
+    sync_status: { type: "string", enum: enumValues(AttendanceOfflineSyncStatusValues), example: "accepted" },
+    verification_status: { type: "string", enum: enumValues(AttendanceOfflineVerificationStatusValues), example: "unverified" },
+    replayed: { type: "boolean", example: false },
+    reason_code: { type: "string", enum: enumValues(AttendanceOfflineSyncReasonCodeValues), nullable: true },
+    server_received_at: dateTime("Server receipt timestamp"),
+    processed_at: { ...dateTime("Server processing timestamp"), nullable: true },
+    payroll_eligible: { type: "boolean", enum: [false], description: "Offline results do not imply payroll eligibility.", example: false }
+  },
+  additionalProperties: false,
+  examples: [
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+      sequence: 7,
+      sync_status: "accepted",
+      verification_status: "unverified",
+      replayed: false,
+      reason_code: "offline_sync.accepted_unverified",
+      server_received_at: "2026-05-04T03:45:00.000Z",
+      processed_at: "2026-05-04T03:45:01.000Z",
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+      sequence: 7,
+      sync_status: "replayed",
+      verification_status: "unverified",
+      replayed: true,
+      reason_code: "offline_sync.replayed",
+      server_received_at: "2026-05-04T03:46:00.000Z",
+      processed_at: "2026-05-04T03:46:00.000Z",
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e798",
+      sequence: 8,
+      sync_status: "deferred",
+      verification_status: "review_required",
+      replayed: false,
+      reason_code: "offline_sync.processing_deferred",
+      server_received_at: "2026-05-04T03:47:00.000Z",
+      processed_at: null,
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e799",
+      sequence: 9,
+      sync_status: "rejected",
+      verification_status: "rejected",
+      replayed: false,
+      reason_code: "offline_sync.validation_failed",
+      server_received_at: "2026-05-04T03:48:00.000Z",
+      processed_at: "2026-05-04T03:48:00.000Z",
+      payroll_eligible: false
+    }
+  ]
+};
+
+const attendanceOfflineSyncResponseSchema = {
+  type: "object",
+  required: ["contract_version", "batch_id", "server_received_at", "results"],
+  properties: {
+    contract_version: { type: "string", enum: [AttendanceOfflineSyncContractVersion], example: AttendanceOfflineSyncContractVersion },
+    batch_id: uuid("Offline sync batch UUID"),
+    server_received_at: dateTime("Server receipt timestamp"),
+    results: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: attendanceOfflineSyncResultSchema
+    }
+  },
+  additionalProperties: false,
+  example: {
+    contract_version: AttendanceOfflineSyncContractVersion,
+    batch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+    server_received_at: "2026-05-04T03:45:00.000Z",
+    results: attendanceOfflineSyncResultSchema.examples
+  }
 };
 const attendanceExportBody = {
   type: "object",
@@ -4580,7 +5085,7 @@ const routeDocs: Record<string, RouteSchema> = {
         409: {
           description: "Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable.",
           headers: replayResponseHeaders,
-          content: { "application/json": { schema: errorResponseSchema } }
+          content: { "application/json": { schema: attendanceBusinessErrorResponseSchema } }
         }
       }
     }
@@ -5515,6 +6020,34 @@ export const openApiComponents = {
     ErrorResponse: errorResponseSchema,
     ConflictResponse: conflictResponseSchema,
     AttendanceClientEventId: attendanceClientEventIdSchema,
+    AttendanceCommandReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceCommandReasonCodeValues),
+      example: "geo_outside_fence"
+    },
+    AttendanceGeoReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceGeoDecisionReasonCodeValues),
+      example: "geo_inside_fence"
+    },
+    AttendanceOfflineSyncReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceOfflineSyncReasonCodeValues),
+      example: "offline_sync.accepted_unverified"
+    },
+    AttendanceLocationEvidenceInput: attendanceLocationEvidenceSchema,
+    AttendanceGeoEvaluation: attendanceGeoPolicySnapshotSchema.properties.evaluation,
+    AttendanceDecision: attendancePunchCommandResponseSchema,
+    AttendanceBusinessErrorDetails: attendanceBusinessErrorDetailsSchema,
+    AttendancePunchCommandResponse: attendancePunchCommandResponseSchema,
+    AttendanceRegularizationItem: (attendanceRegularizationCreateBody.properties.items as RouteSchema).items,
+    AttendanceGeofenceCircleShape: attendanceGeofenceCircleShapeSchema,
+    AttendanceGeofencePolygonShape: attendanceGeofencePolygonShapeSchema,
+    AttendanceGeofencePublishedVersion: attendanceGeofencePublishedVersionSchema,
+    AttendanceOfflineEventEnvelope: attendanceOfflineEventEnvelopeSchema,
+    AttendanceOfflineBatchEnvelope: attendanceOfflineBatchEnvelopeSchema,
+    AttendanceOfflineSyncResult: attendanceOfflineSyncResultSchema,
+    AttendanceOfflineSyncResponse: attendanceOfflineSyncResponseSchema,
     RateLimitResponse: rateLimitResponseSchema,
     EmsProfile: emsProfileResponseSchema,
     EmsProfileChangeRequest: emsProfileChangeSchema,

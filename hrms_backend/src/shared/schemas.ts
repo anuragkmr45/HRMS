@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   AttendanceLocationPermissionStates,
-  AttendanceLocationProviders,
   AttendancePunchEventTypes,
   AttendancePublicPunchSourceChannels,
   AssetStatuses,
@@ -28,6 +27,10 @@ import {
   ProjectTypes,
   TimesheetStatuses
 } from "./constants.js";
+import {
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+} from "./attendance-contract.js";
 
 export const uuidSchema = z.uuid();
 export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
@@ -311,20 +314,13 @@ const attendanceLocationFailureStateValues = [
   AttendanceLocationPermissionStates.Unavailable
 ] as const;
 
-const attendanceLocationProviderValues = [
-  AttendanceLocationProviders.Browser,
-  AttendanceLocationProviders.Device,
-  AttendanceLocationProviders.Network,
-  AttendanceLocationProviders.Unknown
-] as const;
-
 const attendanceCoordinateEvidenceSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   accuracy_meters: z.number().min(0),
   captured_at: isoDateTimeSchema,
   age_ms: z.number().int().min(0).optional(),
-  provider: z.enum(attendanceLocationProviderValues).optional(),
+  provider: z.enum(AttendanceLocationProviderValues).optional(),
   permission_state: z.enum([
     AttendanceLocationPermissionStates.Granted,
     AttendanceLocationPermissionStates.Unknown
@@ -339,7 +335,7 @@ const attendanceCoordinateEvidenceSchema = z.object({
 const attendanceLocationFailureEvidenceSchema = z.object({
   captured_at: isoDateTimeSchema.optional(),
   age_ms: z.number().int().min(0).optional(),
-  provider: z.enum(attendanceLocationProviderValues).optional(),
+  provider: z.enum(AttendanceLocationProviderValues).optional(),
   permission_state: z.enum(attendanceLocationFailureStateValues),
   integrity_status: z.string().trim().min(1).max(80).optional()
 }).strict();
@@ -426,10 +422,7 @@ export const attendanceAssistedCurrentPunchSchema = z.object({
 }).strict();
 
 export const attendanceHistoricalCorrectionSchema = z.object({
-  event_type: z.enum([
-    AttendancePunchEventTypes.CheckIn,
-    AttendancePunchEventTypes.CheckOut
-  ]),
+  event_type: z.enum(AttendanceHistoricalCorrectionEventTypeValues),
   occurred_at: isoDateTimeSchema,
   reason: z.string().trim().min(3).max(1000),
   work_mode: z.enum(["office", "remote", "wfh", "field"]).default("office"),
@@ -437,10 +430,7 @@ export const attendanceHistoricalCorrectionSchema = z.object({
   linked_regularization_request_id: z.uuid().optional()
 }).strict();
 
-const regularizationEventTypeSchema = z.enum([
-  AttendancePunchEventTypes.CheckIn,
-  AttendancePunchEventTypes.CheckOut
-]);
+const regularizationEventTypeSchema = z.enum(AttendanceHistoricalCorrectionEventTypeValues);
 
 const regularizationLegacyPunchSchema = z.object({
   event_type: regularizationEventTypeSchema,

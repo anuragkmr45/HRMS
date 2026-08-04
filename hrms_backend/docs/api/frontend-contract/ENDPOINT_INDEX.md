@@ -9171,6 +9171,39 @@ Required: yes
 | `device` | object | required, nullable | Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
 | `command` | object | required | Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted. |
 
+
+
+Example:
+
+```json
+{
+  "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+  "captured_at": "2026-05-04T09:10:00.000+05:30",
+  "device": {
+    "device_id": "browser-session-device",
+    "platform": "web",
+    "app_version": "2026.08.03",
+    "os_version": "Windows 11"
+  },
+  "command": {
+    "event_type": "check_in",
+    "work_mode": "office",
+    "source": "web_geo",
+    "metadata": {
+      "client_timezone": "Asia/Kolkata"
+    },
+    "location": {
+      "latitude": 12.971599,
+      "longitude": 77.594566,
+      "accuracy_meters": 12.5,
+      "captured_at": "2026-05-04T03:40:00.000Z",
+      "provider": "browser",
+      "permission_state": "granted"
+    }
+  }
+}
+```
+
 **Responses**
 | Status | Meaning |
 |---|---|
@@ -9231,7 +9264,29 @@ Required: yes
 | `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
 | `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
 | `metadata` | object | optional | - |
+| `location` | unknown | optional | One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates. |
 | `reason` | string | optional | minLength 3 |
+
+
+
+Example:
+
+```json
+{
+  "event_type": "check_in",
+  "work_mode": "office",
+  "metadata": {
+    "manager_note": "Front desk assisted punch"
+  },
+  "location": {
+    "captured_at": "2026-05-04T03:40:00.000Z",
+    "provider": "browser",
+    "permission_state": "unavailable",
+    "integrity_status": "location_unavailable"
+  },
+  "reason": "Employee device unavailable at shift start."
+}
+```
 
 **Responses**
 | Status | Meaning |
@@ -9278,7 +9333,7 @@ Required: yes
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
+| `event_type` | string enum("check_in", "check_out") | required | - |
 | `occurred_at` | string<date-time> | required | Past effective occurrence time |
 | `reason` | string | required | minLength 3 |
 | `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
@@ -9622,6 +9677,24 @@ Required: yes
 | `requested_punches` | array of object | optional | Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.; minItems 1 |
 | `items` | array of unknown | optional | minItems 1 |
 
+
+
+Example:
+
+```json
+{
+  "work_date": "2026-05-04",
+  "reason": "Forgot to punch out after shift handoff.",
+  "items": [
+    {
+      "operation": "add",
+      "event_type": "check_out",
+      "occurred_at": "2026-05-04T18:20:00.000+05:30"
+    }
+  ]
+}
+```
+
 **Responses**
 | Status | Meaning |
 |---|---|
@@ -9793,6 +9866,18 @@ Required: yes
 | `decision` | string enum("approve", "reject", "return") | required | - |
 | `remarks` | string | optional | Required for reject/return decisions. |
 | `expected_version` | integer | required | minimum 1 |
+
+
+
+Example:
+
+```json
+{
+  "decision": "approve",
+  "remarks": "Access log confirms the requested punch.",
+  "expected_version": 1
+}
+```
 
 **Responses**
 | Status | Meaning |

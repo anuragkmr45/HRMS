@@ -1,11 +1,18 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  AttendanceOfflineSyncContractVersion,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+} from "#shared";
+import {
   ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION,
   ATTENDANCE_OFFLINE_SYNC_MAX_BATCH_EVENTS,
   attendanceOfflineBatchRequestSchema,
   attendanceOfflineEventEnvelopeSchema,
   attendanceOfflineSyncResponseSchema,
   attendanceOfflineSyncResultSchema,
+  attendanceOfflineSyncReasonCodeValues,
   attendanceOfflineSyncStatusValues,
   attendanceOfflineVerificationStatusValues,
   canonicalOfflineAttendanceEventHash,
@@ -78,6 +85,9 @@ function result(overrides: Record<string, unknown> = {}) {
 
 describe("offline attendance sync contract", () => {
   it("parses a valid batch request", () => {
+    expect(ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION).toBe(
+      AttendanceOfflineSyncContractVersion,
+    );
     expect(attendanceOfflineBatchRequestSchema.parse(batch())).toMatchObject({
       contract_version: ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION,
       batch_id: batchId,
@@ -321,16 +331,13 @@ describe("offline attendance sync contract", () => {
 
   it("keeps synchronization and verification statuses separate", () => {
     expect(attendanceOfflineSyncStatusValues).toEqual([
-      "accepted",
-      "replayed",
-      "conflict",
-      "rejected",
-      "deferred",
+      ...AttendanceOfflineSyncStatusValues,
     ]);
     expect(attendanceOfflineVerificationStatusValues).toEqual([
-      "unverified",
-      "review_required",
-      "rejected",
+      ...AttendanceOfflineVerificationStatusValues,
+    ]);
+    expect(attendanceOfflineSyncReasonCodeValues).toEqual([
+      ...AttendanceOfflineSyncReasonCodeValues,
     ]);
     expect(attendanceOfflineVerificationStatusValues).not.toContain("accepted");
   });

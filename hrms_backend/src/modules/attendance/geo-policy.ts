@@ -1,4 +1,5 @@
-import type { UUID } from "#shared";
+import type { AttendanceGeoDecisionReasonCode, UUID } from "#shared";
+import { AttendanceGeoDecisionReasonCodes as SharedAttendanceGeoDecisionReasonCodes } from "#shared";
 import type {
   AttendanceApprovalMode,
   AttendanceGeoPolicyAction,
@@ -6,25 +7,8 @@ import type {
   EffectiveAttendancePolicy,
 } from "./policy-config.js";
 
-export const AttendanceGeoDecisionReasonCodes = {
-  GeoNotRequired: "geo_not_required",
-  GeoEvidenceMissing: "geo_evidence_missing",
-  GeoPermissionDenied: "geo_permission_denied",
-  GeoLocationUnavailable: "geo_location_unavailable",
-  GeoFenceNotConfigured: "geo_fence_not_configured",
-  GeoInsideFence: "geo_inside_fence",
-  GeoOutsideFence: "geo_outside_fence",
-  GeoBoundaryUncertain: "geo_boundary_uncertain",
-  GeoStaleEvidence: "geo_stale_evidence",
-  GeoAccuracyExceeded: "geo_accuracy_exceeded",
-  GeoPolicyModeUnknown: "geo_policy_mode_unknown",
-  GeoActionUnknown: "geo_action_unknown",
-  GeoManualFallbackAllowed: "geo_manual_fallback_allowed",
-  GeoManualFallbackDisallowed: "geo_manual_fallback_disallowed",
-} as const;
-
-export type AttendanceGeoDecisionReasonCode =
-  (typeof AttendanceGeoDecisionReasonCodes)[keyof typeof AttendanceGeoDecisionReasonCodes];
+export const AttendanceGeoDecisionReasonCodes = SharedAttendanceGeoDecisionReasonCodes;
+export type { AttendanceGeoDecisionReasonCode };
 
 export type AttendanceGeoFactualOutcome =
   | "not_required"

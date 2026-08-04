@@ -82,6 +82,2454 @@
         "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
         "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
       },
+      "AttendanceCommandReasonCode": {
+        "type": "string",
+        "enum": [
+          "already_checked_in",
+          "no_open_session",
+          "break_already_started",
+          "no_open_break",
+          "open_break_must_end",
+          "attendance_cycle_completed",
+          "session_ownership_invalid",
+          "policy_window_rejected",
+          "invalid_chronology",
+          "invalid_state_transition",
+          "geo_not_required",
+          "geo_evidence_missing",
+          "geo_permission_denied",
+          "geo_location_unavailable",
+          "geo_fence_not_configured",
+          "geo_inside_fence",
+          "geo_outside_fence",
+          "geo_boundary_uncertain",
+          "geo_stale_evidence",
+          "geo_accuracy_exceeded",
+          "geo_policy_mode_unknown",
+          "geo_action_unknown",
+          "geo_manual_fallback_allowed",
+          "geo_manual_fallback_disallowed"
+        ],
+        "example": "geo_outside_fence"
+      },
+      "AttendanceGeoReasonCode": {
+        "type": "string",
+        "enum": [
+          "geo_not_required",
+          "geo_evidence_missing",
+          "geo_permission_denied",
+          "geo_location_unavailable",
+          "geo_fence_not_configured",
+          "geo_inside_fence",
+          "geo_outside_fence",
+          "geo_boundary_uncertain",
+          "geo_stale_evidence",
+          "geo_accuracy_exceeded",
+          "geo_policy_mode_unknown",
+          "geo_action_unknown",
+          "geo_manual_fallback_allowed",
+          "geo_manual_fallback_disallowed"
+        ],
+        "example": "geo_inside_fence"
+      },
+      "AttendanceOfflineSyncReasonCode": {
+        "type": "string",
+        "enum": [
+          "offline_sync.accepted_unverified",
+          "offline_sync.replayed",
+          "offline_sync.changed_body_conflict",
+          "offline_sync.validation_failed",
+          "offline_sync.processing_deferred",
+          "offline_sync.sequence_gap",
+          "offline_sync.sequence_out_of_order",
+          "offline_sync.duplicate_sequence",
+          "offline_sync.review_required"
+        ],
+        "example": "offline_sync.accepted_unverified"
+      },
+      "AttendanceLocationEvidenceInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "latitude",
+              "longitude",
+              "accuracy_meters",
+              "captured_at"
+            ],
+            "properties": {
+              "latitude": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90,
+                "example": 12.971599
+              },
+              "longitude": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180,
+                "example": 77.594566
+              },
+              "accuracy_meters": {
+                "type": "number",
+                "minimum": 0,
+                "example": 12.5
+              },
+              "captured_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "One-shot browser capture timestamp from the employee action.",
+                "example": "2026-05-04T10:00:00.000Z"
+              },
+              "age_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "example": 30000
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "browser",
+                  "device",
+                  "network",
+                  "unknown"
+                ],
+                "example": "browser"
+              },
+              "permission_state": {
+                "type": "string",
+                "enum": [
+                  "granted",
+                  "unknown"
+                ],
+                "default": "unknown",
+                "example": "granted"
+              },
+              "altitude_meters": {
+                "type": "number",
+                "example": 920.4
+              },
+              "is_mocked": {
+                "type": "boolean",
+                "example": false
+              },
+              "integrity_status": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "example": "browser_reported"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "permission_state"
+            ],
+            "properties": {
+              "captured_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Optional one-shot browser failure timestamp.",
+                "example": "2026-05-04T10:00:00.000Z"
+              },
+              "age_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "example": 30000
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "browser",
+                  "device",
+                  "network",
+                  "unknown"
+                ],
+                "example": "browser"
+              },
+              "permission_state": {
+                "type": "string",
+                "enum": [
+                  "denied",
+                  "unavailable"
+                ],
+                "example": "denied"
+              },
+              "integrity_status": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "example": "permission_denied"
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+        "example": {
+          "latitude": 12.971599,
+          "longitude": 77.594566,
+          "accuracy_meters": 12.5,
+          "captured_at": "2026-05-04T03:40:00.000Z",
+          "provider": "browser",
+          "permission_state": "granted"
+        }
+      },
+      "AttendanceGeoEvaluation": {
+        "type": "object",
+        "nullable": true,
+        "additionalProperties": true,
+        "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+      },
+      "AttendanceDecision": {
+        "type": "object",
+        "required": [
+          "allowed",
+          "command_id",
+          "decision_id",
+          "punch_id",
+          "punch",
+          "day_status",
+          "next_allowed_actions",
+          "geo_policy"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "example": true
+          },
+          "command_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance command execution UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance command decision UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance session UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+            "nullable": true
+          },
+          "punch_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance punch UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "punch": {
+            "type": "object",
+            "required": [
+              "id",
+              "employee_user_id",
+              "event_type",
+              "occurred_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Attendance punch UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "employee_user_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Employee user UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "actor_user_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Authenticated actor UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "check_in",
+                  "break_start",
+                  "break_end",
+                  "check_out"
+                ],
+                "example": "check_in"
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Punch timestamp",
+                "example": "2026-05-04T10:00:00.000Z"
+              },
+              "work_date": {
+                "type": "string",
+                "format": "date",
+                "description": "Work date",
+                "example": "2026-05-04"
+              },
+              "time": {
+                "type": "string",
+                "nullable": true,
+                "example": "09:10"
+              },
+              "work_mode": {
+                "type": "string",
+                "example": "office"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "web_geo",
+                  "mobile",
+                  "mobile_foreground",
+                  "mobile_offline",
+                  "kiosk",
+                  "admin",
+                  "auto_geofence"
+                ],
+                "example": "web_geo"
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "employee_manual_now",
+                  "manager_assisted_now",
+                  "historical_correction",
+                  "approved_regularization",
+                  "system"
+                ]
+              }
+            },
+            "additionalProperties": true,
+            "example": {
+              "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+              "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+              "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+              "event_type": "check_in",
+              "occurred_at": "2026-05-04T03:40:12.123Z",
+              "work_mode": "office",
+              "source": "web_geo",
+              "origin": "employee_manual_now"
+            }
+          },
+          "day_status": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "next_allowed_actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "check_in",
+                "break_start",
+                "break_end",
+                "check_out"
+              ]
+            },
+            "example": [
+              "break_start",
+              "check_out"
+            ]
+          },
+          "next_allowed_action": {
+            "type": "string",
+            "enum": [
+              "check_in",
+              "break_start",
+              "break_end",
+              "check_out"
+            ],
+            "nullable": true,
+            "example": "break_start"
+          },
+          "punch_policy": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "geo_policy": {
+            "type": "object",
+            "required": [
+              "factual_outcome",
+              "selected_action",
+              "fallback_used",
+              "allowed",
+              "reason_code"
+            ],
+            "properties": {
+              "factual_outcome": {
+                "type": "string",
+                "enum": [
+                  "not_required",
+                  "inside_confident",
+                  "outside_confident",
+                  "boundary_uncertain",
+                  "stale_evidence",
+                  "accuracy_exceeded",
+                  "missing",
+                  "permission_denied",
+                  "location_unavailable",
+                  "fence_not_configured"
+                ],
+                "example": "inside_confident"
+              },
+              "category": {
+                "type": "string",
+                "example": "inside_confident"
+              },
+              "selected_action": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny",
+                  "manual_fallback"
+                ],
+                "example": "allow"
+              },
+              "fallback_used": {
+                "type": "boolean",
+                "example": false
+              },
+              "allowed": {
+                "type": "boolean",
+                "example": true
+              },
+              "reason_code": {
+                "type": "string",
+                "enum": [
+                  "geo_not_required",
+                  "geo_evidence_missing",
+                  "geo_permission_denied",
+                  "geo_location_unavailable",
+                  "geo_fence_not_configured",
+                  "geo_inside_fence",
+                  "geo_outside_fence",
+                  "geo_boundary_uncertain",
+                  "geo_stale_evidence",
+                  "geo_accuracy_exceeded",
+                  "geo_policy_mode_unknown",
+                  "geo_action_unknown",
+                  "geo_manual_fallback_allowed",
+                  "geo_manual_fallback_disallowed"
+                ],
+                "nullable": true,
+                "example": "geo_inside_fence"
+              },
+              "evaluator_version": {
+                "type": "string",
+                "example": "attendance-geo-v2"
+              },
+              "geofence_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence version UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "work_site_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Selected work site UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_number": {
+                "type": "integer",
+                "nullable": true,
+                "example": 1
+              },
+              "geofence_shape_type": {
+                "type": "string",
+                "enum": [
+                  "circle",
+                  "polygon"
+                ],
+                "nullable": true,
+                "example": "polygon"
+              },
+              "geofence_canonical_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "nullable": true,
+                "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "evaluation": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true,
+                "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+              }
+            },
+            "additionalProperties": true,
+            "example": {
+              "factual_outcome": "inside_confident",
+              "category": "inside_confident",
+              "selected_action": "allow",
+              "fallback_used": false,
+              "allowed": true,
+              "reason_code": "geo_inside_fence",
+              "evaluator_version": "attendance-geo-v2",
+              "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+              "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+              "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+              "geofence_version_number": 2,
+              "geofence_shape_type": "polygon",
+              "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "evaluation": {
+                "category": "inside_confident",
+                "evaluator_version": "attendance-geo-v2",
+                "candidate_count": 1,
+                "valid_candidate_count": 1,
+                "inside_match_count": 1,
+                "multiple_inside_matches": false,
+                "selected_candidate_ordinal": 1,
+                "selection_reason": "nearest_effective_geofence",
+                "reported_accuracy_meters": 12.5,
+                "grace_meters": 25
+              }
+            }
+          }
+        },
+        "additionalProperties": true,
+        "example": {
+          "allowed": true,
+          "command_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9200",
+          "decision_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9202",
+          "session_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9203",
+          "punch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+          "punch": {
+            "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+            "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+            "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+            "event_type": "check_in",
+            "occurred_at": "2026-05-04T03:40:12.123Z",
+            "work_mode": "office",
+            "source": "web_geo",
+            "origin": "employee_manual_now"
+          },
+          "day_status": {
+            "work_date": "2026-05-04",
+            "presence_state": "present"
+          },
+          "next_allowed_actions": [
+            "break_start",
+            "check_out"
+          ],
+          "next_allowed_action": "break_start",
+          "geo_policy": {
+            "factual_outcome": "inside_confident",
+            "category": "inside_confident",
+            "selected_action": "allow",
+            "fallback_used": false,
+            "allowed": true,
+            "reason_code": "geo_inside_fence",
+            "evaluator_version": "attendance-geo-v2",
+            "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+            "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+            "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+            "geofence_version_number": 2,
+            "geofence_shape_type": "polygon",
+            "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "evaluation": {
+              "category": "inside_confident",
+              "evaluator_version": "attendance-geo-v2",
+              "candidate_count": 1,
+              "valid_candidate_count": 1,
+              "inside_match_count": 1,
+              "multiple_inside_matches": false,
+              "selected_candidate_ordinal": 1,
+              "selection_reason": "nearest_effective_geofence",
+              "reported_accuracy_meters": 12.5,
+              "grace_meters": 25
+            }
+          }
+        }
+      },
+      "AttendanceBusinessErrorDetails": {
+        "type": "object",
+        "properties": {
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "already_checked_in",
+              "no_open_session",
+              "break_already_started",
+              "no_open_break",
+              "open_break_must_end",
+              "attendance_cycle_completed",
+              "session_ownership_invalid",
+              "policy_window_rejected",
+              "invalid_chronology",
+              "invalid_state_transition",
+              "geo_not_required",
+              "geo_evidence_missing",
+              "geo_permission_denied",
+              "geo_location_unavailable",
+              "geo_fence_not_configured",
+              "geo_inside_fence",
+              "geo_outside_fence",
+              "geo_boundary_uncertain",
+              "geo_stale_evidence",
+              "geo_accuracy_exceeded",
+              "geo_policy_mode_unknown",
+              "geo_action_unknown",
+              "geo_manual_fallback_allowed",
+              "geo_manual_fallback_disallowed"
+            ],
+            "nullable": true,
+            "description": "Stable attendance command or geo-policy reason code when the failure is a persisted business denial."
+          },
+          "reason_detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "next_allowed_actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "check_in",
+                "break_start",
+                "break_end",
+                "check_out"
+              ]
+            }
+          },
+          "geo_policy": {
+            "type": "object",
+            "required": [
+              "factual_outcome",
+              "selected_action",
+              "fallback_used",
+              "allowed",
+              "reason_code"
+            ],
+            "properties": {
+              "factual_outcome": {
+                "type": "string",
+                "enum": [
+                  "not_required",
+                  "inside_confident",
+                  "outside_confident",
+                  "boundary_uncertain",
+                  "stale_evidence",
+                  "accuracy_exceeded",
+                  "missing",
+                  "permission_denied",
+                  "location_unavailable",
+                  "fence_not_configured"
+                ],
+                "example": "inside_confident"
+              },
+              "category": {
+                "type": "string",
+                "example": "inside_confident"
+              },
+              "selected_action": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny",
+                  "manual_fallback"
+                ],
+                "example": "allow"
+              },
+              "fallback_used": {
+                "type": "boolean",
+                "example": false
+              },
+              "allowed": {
+                "type": "boolean",
+                "example": true
+              },
+              "reason_code": {
+                "type": "string",
+                "enum": [
+                  "geo_not_required",
+                  "geo_evidence_missing",
+                  "geo_permission_denied",
+                  "geo_location_unavailable",
+                  "geo_fence_not_configured",
+                  "geo_inside_fence",
+                  "geo_outside_fence",
+                  "geo_boundary_uncertain",
+                  "geo_stale_evidence",
+                  "geo_accuracy_exceeded",
+                  "geo_policy_mode_unknown",
+                  "geo_action_unknown",
+                  "geo_manual_fallback_allowed",
+                  "geo_manual_fallback_disallowed"
+                ],
+                "nullable": true,
+                "example": "geo_inside_fence"
+              },
+              "evaluator_version": {
+                "type": "string",
+                "example": "attendance-geo-v2"
+              },
+              "geofence_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence version UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "work_site_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Selected work site UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_number": {
+                "type": "integer",
+                "nullable": true,
+                "example": 1
+              },
+              "geofence_shape_type": {
+                "type": "string",
+                "enum": [
+                  "circle",
+                  "polygon"
+                ],
+                "nullable": true,
+                "example": "polygon"
+              },
+              "geofence_canonical_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "nullable": true,
+                "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "evaluation": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true,
+                "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+              }
+            },
+            "additionalProperties": true,
+            "example": {
+              "factual_outcome": "inside_confident",
+              "category": "inside_confident",
+              "selected_action": "allow",
+              "fallback_used": false,
+              "allowed": true,
+              "reason_code": "geo_inside_fence",
+              "evaluator_version": "attendance-geo-v2",
+              "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+              "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+              "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+              "geofence_version_number": 2,
+              "geofence_shape_type": "polygon",
+              "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "evaluation": {
+                "category": "inside_confident",
+                "evaluator_version": "attendance-geo-v2",
+                "candidate_count": 1,
+                "valid_candidate_count": 1,
+                "inside_match_count": 1,
+                "multiple_inside_matches": false,
+                "selected_candidate_ordinal": 1,
+                "selection_reason": "nearest_effective_geofence",
+                "reported_accuracy_meters": 12.5,
+                "grace_meters": 25
+              }
+            }
+          }
+        },
+        "additionalProperties": true,
+        "example": {
+          "reason_code": "geo_outside_fence",
+          "reason_detail": "The submitted location is outside the effective geofence.",
+          "next_allowed_actions": [
+            "check_in"
+          ],
+          "geo_policy": {
+            "factual_outcome": "outside_confident",
+            "category": "outside_confident",
+            "selected_action": "deny",
+            "fallback_used": false,
+            "allowed": false,
+            "reason_code": "geo_outside_fence",
+            "evaluator_version": "attendance-geo-v2",
+            "evaluation": {
+              "category": "outside_confident",
+              "evaluator_version": "attendance-geo-v2",
+              "candidate_count": 1,
+              "valid_candidate_count": 1,
+              "inside_match_count": 0,
+              "multiple_inside_matches": false,
+              "selected_candidate_ordinal": 1,
+              "selection_reason": "nearest_effective_geofence",
+              "reported_accuracy_meters": 18,
+              "grace_meters": 25
+            }
+          }
+        }
+      },
+      "AttendancePunchCommandResponse": {
+        "type": "object",
+        "required": [
+          "allowed",
+          "command_id",
+          "decision_id",
+          "punch_id",
+          "punch",
+          "day_status",
+          "next_allowed_actions",
+          "geo_policy"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "example": true
+          },
+          "command_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance command execution UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance command decision UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance session UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+            "nullable": true
+          },
+          "punch_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attendance punch UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "punch": {
+            "type": "object",
+            "required": [
+              "id",
+              "employee_user_id",
+              "event_type",
+              "occurred_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Attendance punch UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "employee_user_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Employee user UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "actor_user_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Authenticated actor UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "check_in",
+                  "break_start",
+                  "break_end",
+                  "check_out"
+                ],
+                "example": "check_in"
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Punch timestamp",
+                "example": "2026-05-04T10:00:00.000Z"
+              },
+              "work_date": {
+                "type": "string",
+                "format": "date",
+                "description": "Work date",
+                "example": "2026-05-04"
+              },
+              "time": {
+                "type": "string",
+                "nullable": true,
+                "example": "09:10"
+              },
+              "work_mode": {
+                "type": "string",
+                "example": "office"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "web_geo",
+                  "mobile",
+                  "mobile_foreground",
+                  "mobile_offline",
+                  "kiosk",
+                  "admin",
+                  "auto_geofence"
+                ],
+                "example": "web_geo"
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "employee_manual_now",
+                  "manager_assisted_now",
+                  "historical_correction",
+                  "approved_regularization",
+                  "system"
+                ]
+              }
+            },
+            "additionalProperties": true,
+            "example": {
+              "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+              "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+              "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+              "event_type": "check_in",
+              "occurred_at": "2026-05-04T03:40:12.123Z",
+              "work_mode": "office",
+              "source": "web_geo",
+              "origin": "employee_manual_now"
+            }
+          },
+          "day_status": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "next_allowed_actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "check_in",
+                "break_start",
+                "break_end",
+                "check_out"
+              ]
+            },
+            "example": [
+              "break_start",
+              "check_out"
+            ]
+          },
+          "next_allowed_action": {
+            "type": "string",
+            "enum": [
+              "check_in",
+              "break_start",
+              "break_end",
+              "check_out"
+            ],
+            "nullable": true,
+            "example": "break_start"
+          },
+          "punch_policy": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "geo_policy": {
+            "type": "object",
+            "required": [
+              "factual_outcome",
+              "selected_action",
+              "fallback_used",
+              "allowed",
+              "reason_code"
+            ],
+            "properties": {
+              "factual_outcome": {
+                "type": "string",
+                "enum": [
+                  "not_required",
+                  "inside_confident",
+                  "outside_confident",
+                  "boundary_uncertain",
+                  "stale_evidence",
+                  "accuracy_exceeded",
+                  "missing",
+                  "permission_denied",
+                  "location_unavailable",
+                  "fence_not_configured"
+                ],
+                "example": "inside_confident"
+              },
+              "category": {
+                "type": "string",
+                "example": "inside_confident"
+              },
+              "selected_action": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny",
+                  "manual_fallback"
+                ],
+                "example": "allow"
+              },
+              "fallback_used": {
+                "type": "boolean",
+                "example": false
+              },
+              "allowed": {
+                "type": "boolean",
+                "example": true
+              },
+              "reason_code": {
+                "type": "string",
+                "enum": [
+                  "geo_not_required",
+                  "geo_evidence_missing",
+                  "geo_permission_denied",
+                  "geo_location_unavailable",
+                  "geo_fence_not_configured",
+                  "geo_inside_fence",
+                  "geo_outside_fence",
+                  "geo_boundary_uncertain",
+                  "geo_stale_evidence",
+                  "geo_accuracy_exceeded",
+                  "geo_policy_mode_unknown",
+                  "geo_action_unknown",
+                  "geo_manual_fallback_allowed",
+                  "geo_manual_fallback_disallowed"
+                ],
+                "nullable": true,
+                "example": "geo_inside_fence"
+              },
+              "evaluator_version": {
+                "type": "string",
+                "example": "attendance-geo-v2"
+              },
+              "geofence_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Effective geofence version UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "work_site_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Selected work site UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                "nullable": true
+              },
+              "geofence_version_number": {
+                "type": "integer",
+                "nullable": true,
+                "example": 1
+              },
+              "geofence_shape_type": {
+                "type": "string",
+                "enum": [
+                  "circle",
+                  "polygon"
+                ],
+                "nullable": true,
+                "example": "polygon"
+              },
+              "geofence_canonical_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "nullable": true,
+                "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "evaluation": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true,
+                "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+              }
+            },
+            "additionalProperties": true,
+            "example": {
+              "factual_outcome": "inside_confident",
+              "category": "inside_confident",
+              "selected_action": "allow",
+              "fallback_used": false,
+              "allowed": true,
+              "reason_code": "geo_inside_fence",
+              "evaluator_version": "attendance-geo-v2",
+              "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+              "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+              "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+              "geofence_version_number": 2,
+              "geofence_shape_type": "polygon",
+              "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "evaluation": {
+                "category": "inside_confident",
+                "evaluator_version": "attendance-geo-v2",
+                "candidate_count": 1,
+                "valid_candidate_count": 1,
+                "inside_match_count": 1,
+                "multiple_inside_matches": false,
+                "selected_candidate_ordinal": 1,
+                "selection_reason": "nearest_effective_geofence",
+                "reported_accuracy_meters": 12.5,
+                "grace_meters": 25
+              }
+            }
+          }
+        },
+        "additionalProperties": true,
+        "example": {
+          "allowed": true,
+          "command_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9200",
+          "decision_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9202",
+          "session_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9203",
+          "punch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+          "punch": {
+            "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+            "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+            "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+            "event_type": "check_in",
+            "occurred_at": "2026-05-04T03:40:12.123Z",
+            "work_mode": "office",
+            "source": "web_geo",
+            "origin": "employee_manual_now"
+          },
+          "day_status": {
+            "work_date": "2026-05-04",
+            "presence_state": "present"
+          },
+          "next_allowed_actions": [
+            "break_start",
+            "check_out"
+          ],
+          "next_allowed_action": "break_start",
+          "geo_policy": {
+            "factual_outcome": "inside_confident",
+            "category": "inside_confident",
+            "selected_action": "allow",
+            "fallback_used": false,
+            "allowed": true,
+            "reason_code": "geo_inside_fence",
+            "evaluator_version": "attendance-geo-v2",
+            "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+            "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+            "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+            "geofence_version_number": 2,
+            "geofence_shape_type": "polygon",
+            "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "evaluation": {
+              "category": "inside_confident",
+              "evaluator_version": "attendance-geo-v2",
+              "candidate_count": 1,
+              "valid_candidate_count": 1,
+              "inside_match_count": 1,
+              "multiple_inside_matches": false,
+              "selected_candidate_ordinal": 1,
+              "selection_reason": "nearest_effective_geofence",
+              "reported_accuracy_meters": 12.5,
+              "grace_meters": 25
+            }
+          }
+        }
+      },
+      "AttendanceRegularizationItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "operation",
+              "event_type",
+              "occurred_at"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "add"
+                ]
+              },
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "check_in",
+                  "check_out"
+                ]
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Requested punch timestamp",
+                "example": "2026-05-04T10:00:00.000Z"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "operation",
+              "target_punch_event_id",
+              "event_type",
+              "occurred_at"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "replace"
+                ]
+              },
+              "target_punch_event_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Target punch event UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              },
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "check_in",
+                  "check_out"
+                ]
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Replacement punch timestamp",
+                "example": "2026-05-04T10:00:00.000Z"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "operation",
+              "target_punch_event_id"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "void"
+                ]
+              },
+              "target_punch_event_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Target punch event UUID",
+                "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AttendanceGeofenceCircleShape": {
+        "type": "object",
+        "required": [
+          "shape_type",
+          "center",
+          "radius_meters"
+        ],
+        "properties": {
+          "shape_type": {
+            "type": "string",
+            "enum": [
+              "circle"
+            ],
+            "example": "circle"
+          },
+          "center": {
+            "type": "object",
+            "required": [
+              "latitude",
+              "longitude"
+            ],
+            "properties": {
+              "latitude": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90,
+                "example": 12.971599
+              },
+              "longitude": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180,
+                "example": 77.594566
+              }
+            },
+            "additionalProperties": false
+          },
+          "radius_meters": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "example": 100
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "shape_type": "circle",
+          "center": {
+            "latitude": 12.971599,
+            "longitude": 77.594566
+          },
+          "radius_meters": 100
+        }
+      },
+      "AttendanceGeofencePolygonShape": {
+        "type": "object",
+        "required": [
+          "shape_type",
+          "rings"
+        ],
+        "properties": {
+          "shape_type": {
+            "type": "string",
+            "enum": [
+              "polygon"
+            ],
+            "example": "polygon"
+          },
+          "rings": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "array",
+              "minItems": 4,
+              "items": {
+                "type": "object",
+                "required": [
+                  "latitude",
+                  "longitude"
+                ],
+                "properties": {
+                  "latitude": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "shape_type": "polygon",
+          "rings": [
+            [
+              {
+                "latitude": 12.9711,
+                "longitude": 77.5939
+              },
+              {
+                "latitude": 12.9721,
+                "longitude": 77.5939
+              },
+              {
+                "latitude": 12.9721,
+                "longitude": 77.5952
+              },
+              {
+                "latitude": 12.9711,
+                "longitude": 77.5952
+              },
+              {
+                "latitude": 12.9711,
+                "longitude": 77.5939
+              }
+            ]
+          ]
+        }
+      },
+      "AttendanceGeofencePublishedVersion": {
+        "type": "object",
+        "required": [
+          "id",
+          "company_id",
+          "geofence_id",
+          "version_number",
+          "version_status",
+          "shape_type",
+          "effective_from",
+          "canonical_hash",
+          "published_at",
+          "published_by_user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Geofence version UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Company UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "geofence_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Geofence UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "version_number": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 2
+          },
+          "version_status": {
+            "type": "string",
+            "enum": [
+              "published"
+            ],
+            "example": "published"
+          },
+          "shape_type": {
+            "type": "string",
+            "enum": [
+              "circle",
+              "polygon"
+            ],
+            "example": "polygon"
+          },
+          "circle_radius_meters": {
+            "type": "string",
+            "nullable": true,
+            "example": "100.00"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive effective start timestamp",
+            "example": "2026-05-04T10:00:00.000Z"
+          },
+          "effective_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive effective end timestamp",
+            "example": "2026-05-04T10:00:00.000Z",
+            "nullable": true
+          },
+          "canonical_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Publication timestamp",
+            "example": "2026-05-04T10:00:00.000Z"
+          },
+          "published_by_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Publishing actor UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "geometry_diagnostics": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true,
+        "example": {
+          "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9302",
+          "company_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9001",
+          "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9301",
+          "version_number": 2,
+          "version_status": "published",
+          "shape_type": "polygon",
+          "circle_radius_meters": null,
+          "effective_from": "2026-05-04T00:00:00.000Z",
+          "effective_until": null,
+          "canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "published_at": "2026-05-04T03:35:00.000Z",
+          "published_by_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9002",
+          "geometry_diagnostics": {
+            "vertex_count": 5,
+            "self_intersections": 0
+          }
+        }
+      },
+      "AttendanceOfflineEventEnvelope": {
+        "type": "object",
+        "required": [
+          "client_event_id",
+          "sequence",
+          "command_kind",
+          "captured_at",
+          "source",
+          "event_type"
+        ],
+        "properties": {
+          "client_event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+            "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 7
+          },
+          "command_kind": {
+            "type": "string",
+            "enum": [
+              "employee_manual_now"
+            ],
+            "example": "employee_manual_now"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Client capture timestamp with offset. Server time remains authoritative for command execution.",
+            "example": "2026-05-04T10:00:00.000Z"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "mobile_offline"
+            ],
+            "default": "mobile_offline",
+            "example": "mobile_offline"
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "check_in",
+              "break_start",
+              "break_end",
+              "check_out"
+            ],
+            "example": "check_in"
+          },
+          "work_mode": {
+            "type": "string",
+            "enum": [
+              "office",
+              "remote",
+              "wfh",
+              "field"
+            ],
+            "default": "office",
+            "example": "office"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app_session_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "app_state": {
+                "type": "string",
+                "enum": [
+                  "foreground",
+                  "background",
+                  "terminated",
+                  "unknown"
+                ]
+              },
+              "capture_method": {
+                "type": "string",
+                "enum": [
+                  "user_action",
+                  "system_retry"
+                ]
+              },
+              "client_timezone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "example": "Asia/Kolkata"
+              },
+              "network_state": {
+                "type": "string",
+                "enum": [
+                  "offline",
+                  "online",
+                  "unknown"
+                ]
+              },
+              "offline_reason": {
+                "type": "string",
+                "enum": [
+                  "network_unavailable",
+                  "app_backgrounded",
+                  "manual_retry",
+                  "unknown"
+                ]
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 280
+              }
+            }
+          },
+          "location": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "latitude",
+                  "longitude",
+                  "accuracy_meters",
+                  "captured_at"
+                ],
+                "properties": {
+                  "latitude": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90,
+                    "example": 12.971599
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180,
+                    "example": 77.594566
+                  },
+                  "accuracy_meters": {
+                    "type": "number",
+                    "minimum": 0,
+                    "example": 12.5
+                  },
+                  "captured_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "One-shot browser capture timestamp from the employee action.",
+                    "example": "2026-05-04T10:00:00.000Z"
+                  },
+                  "age_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "example": 30000
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "browser",
+                      "device",
+                      "network",
+                      "unknown"
+                    ],
+                    "example": "browser"
+                  },
+                  "permission_state": {
+                    "type": "string",
+                    "enum": [
+                      "granted",
+                      "unknown"
+                    ],
+                    "default": "unknown",
+                    "example": "granted"
+                  },
+                  "altitude_meters": {
+                    "type": "number",
+                    "example": 920.4
+                  },
+                  "is_mocked": {
+                    "type": "boolean",
+                    "example": false
+                  },
+                  "integrity_status": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "example": "browser_reported"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "permission_state"
+                ],
+                "properties": {
+                  "captured_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Optional one-shot browser failure timestamp.",
+                    "example": "2026-05-04T10:00:00.000Z"
+                  },
+                  "age_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "example": 30000
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "browser",
+                      "device",
+                      "network",
+                      "unknown"
+                    ],
+                    "example": "browser"
+                  },
+                  "permission_state": {
+                    "type": "string",
+                    "enum": [
+                      "denied",
+                      "unavailable"
+                    ],
+                    "example": "denied"
+                  },
+                  "integrity_status": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "example": "permission_denied"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ],
+            "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+            "example": {
+              "latitude": 12.971599,
+              "longitude": 77.594566,
+              "accuracy_meters": 12.5,
+              "captured_at": "2026-05-04T03:40:00.000Z",
+              "provider": "browser",
+              "permission_state": "granted"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+          "sequence": 7,
+          "command_kind": "employee_manual_now",
+          "captured_at": "2026-05-04T09:10:00.000+05:30",
+          "source": "mobile_offline",
+          "event_type": "check_in",
+          "work_mode": "office",
+          "metadata": {
+            "app_state": "foreground",
+            "capture_method": "user_action",
+            "client_timezone": "Asia/Kolkata",
+            "network_state": "offline",
+            "offline_reason": "network_unavailable"
+          },
+          "location": {
+            "latitude": 12.971599,
+            "longitude": 77.594566,
+            "accuracy_meters": 12.5,
+            "captured_at": "2026-05-04T03:40:00.000Z",
+            "provider": "device",
+            "permission_state": "granted"
+          }
+        }
+      },
+      "AttendanceOfflineBatchEnvelope": {
+        "type": "object",
+        "required": [
+          "contract_version",
+          "batch_id",
+          "device",
+          "events"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "enum": [
+              "attendance.offline_sync.v1"
+            ],
+            "example": "attendance.offline_sync.v1"
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Offline sync batch UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "device": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "example": "browser-session-device"
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "ios",
+                  "android"
+                ],
+                "example": "web"
+              },
+              "app_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "example": "2026.08.03"
+              },
+              "os_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "example": "Windows 11"
+              }
+            },
+            "additionalProperties": false,
+            "description": "Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
+          },
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "client_event_id",
+                "sequence",
+                "command_kind",
+                "captured_at",
+                "source",
+                "event_type"
+              ],
+              "properties": {
+                "client_event_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+                  "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "example": 7
+                },
+                "command_kind": {
+                  "type": "string",
+                  "enum": [
+                    "employee_manual_now"
+                  ],
+                  "example": "employee_manual_now"
+                },
+                "captured_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Client capture timestamp with offset. Server time remains authoritative for command execution.",
+                  "example": "2026-05-04T10:00:00.000Z"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "mobile_offline"
+                  ],
+                  "default": "mobile_offline",
+                  "example": "mobile_offline"
+                },
+                "event_type": {
+                  "type": "string",
+                  "enum": [
+                    "check_in",
+                    "break_start",
+                    "break_end",
+                    "check_out"
+                  ],
+                  "example": "check_in"
+                },
+                "work_mode": {
+                  "type": "string",
+                  "enum": [
+                    "office",
+                    "remote",
+                    "wfh",
+                    "field"
+                  ],
+                  "default": "office",
+                  "example": "office"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "app_session_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "app_state": {
+                      "type": "string",
+                      "enum": [
+                        "foreground",
+                        "background",
+                        "terminated",
+                        "unknown"
+                      ]
+                    },
+                    "capture_method": {
+                      "type": "string",
+                      "enum": [
+                        "user_action",
+                        "system_retry"
+                      ]
+                    },
+                    "client_timezone": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "example": "Asia/Kolkata"
+                    },
+                    "network_state": {
+                      "type": "string",
+                      "enum": [
+                        "offline",
+                        "online",
+                        "unknown"
+                      ]
+                    },
+                    "offline_reason": {
+                      "type": "string",
+                      "enum": [
+                        "network_unavailable",
+                        "app_backgrounded",
+                        "manual_retry",
+                        "unknown"
+                      ]
+                    },
+                    "note": {
+                      "type": "string",
+                      "maxLength": 280
+                    }
+                  }
+                },
+                "location": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "latitude",
+                        "longitude",
+                        "accuracy_meters",
+                        "captured_at"
+                      ],
+                      "properties": {
+                        "latitude": {
+                          "type": "number",
+                          "minimum": -90,
+                          "maximum": 90,
+                          "example": 12.971599
+                        },
+                        "longitude": {
+                          "type": "number",
+                          "minimum": -180,
+                          "maximum": 180,
+                          "example": 77.594566
+                        },
+                        "accuracy_meters": {
+                          "type": "number",
+                          "minimum": 0,
+                          "example": 12.5
+                        },
+                        "captured_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "One-shot browser capture timestamp from the employee action.",
+                          "example": "2026-05-04T10:00:00.000Z"
+                        },
+                        "age_ms": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 30000
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "browser",
+                            "device",
+                            "network",
+                            "unknown"
+                          ],
+                          "example": "browser"
+                        },
+                        "permission_state": {
+                          "type": "string",
+                          "enum": [
+                            "granted",
+                            "unknown"
+                          ],
+                          "default": "unknown",
+                          "example": "granted"
+                        },
+                        "altitude_meters": {
+                          "type": "number",
+                          "example": 920.4
+                        },
+                        "is_mocked": {
+                          "type": "boolean",
+                          "example": false
+                        },
+                        "integrity_status": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80,
+                          "example": "browser_reported"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "permission_state"
+                      ],
+                      "properties": {
+                        "captured_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Optional one-shot browser failure timestamp.",
+                          "example": "2026-05-04T10:00:00.000Z"
+                        },
+                        "age_ms": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "example": 30000
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "browser",
+                            "device",
+                            "network",
+                            "unknown"
+                          ],
+                          "example": "browser"
+                        },
+                        "permission_state": {
+                          "type": "string",
+                          "enum": [
+                            "denied",
+                            "unavailable"
+                          ],
+                          "example": "denied"
+                        },
+                        "integrity_status": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80,
+                          "example": "permission_denied"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+                  "example": {
+                    "latitude": 12.971599,
+                    "longitude": 77.594566,
+                    "accuracy_meters": 12.5,
+                    "captured_at": "2026-05-04T03:40:00.000Z",
+                    "provider": "browser",
+                    "permission_state": "granted"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "example": {
+                "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                "sequence": 7,
+                "command_kind": "employee_manual_now",
+                "captured_at": "2026-05-04T09:10:00.000+05:30",
+                "source": "mobile_offline",
+                "event_type": "check_in",
+                "work_mode": "office",
+                "metadata": {
+                  "app_state": "foreground",
+                  "capture_method": "user_action",
+                  "client_timezone": "Asia/Kolkata",
+                  "network_state": "offline",
+                  "offline_reason": "network_unavailable"
+                },
+                "location": {
+                  "latitude": 12.971599,
+                  "longitude": 77.594566,
+                  "accuracy_meters": 12.5,
+                  "captured_at": "2026-05-04T03:40:00.000Z",
+                  "provider": "device",
+                  "permission_state": "granted"
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "contract_version": "attendance.offline_sync.v1",
+          "batch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+          "device": {
+            "device_id": "ios-device-001",
+            "platform": "ios",
+            "app_version": "2026.08.03",
+            "os_version": "iOS 18.5"
+          },
+          "events": [
+            {
+              "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+              "sequence": 7,
+              "command_kind": "employee_manual_now",
+              "captured_at": "2026-05-04T09:10:00.000+05:30",
+              "source": "mobile_offline",
+              "event_type": "check_in",
+              "work_mode": "office",
+              "metadata": {
+                "app_state": "foreground",
+                "capture_method": "user_action",
+                "client_timezone": "Asia/Kolkata",
+                "network_state": "offline",
+                "offline_reason": "network_unavailable"
+              },
+              "location": {
+                "latitude": 12.971599,
+                "longitude": 77.594566,
+                "accuracy_meters": 12.5,
+                "captured_at": "2026-05-04T03:40:00.000Z",
+                "provider": "device",
+                "permission_state": "granted"
+              }
+            }
+          ]
+        }
+      },
+      "AttendanceOfflineSyncResult": {
+        "type": "object",
+        "required": [
+          "client_event_id",
+          "sequence",
+          "sync_status",
+          "verification_status",
+          "replayed",
+          "server_received_at",
+          "payroll_eligible"
+        ],
+        "properties": {
+          "client_event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+            "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 7
+          },
+          "sync_status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "replayed",
+              "conflict",
+              "rejected",
+              "deferred"
+            ],
+            "example": "accepted"
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "review_required",
+              "rejected"
+            ],
+            "example": "unverified"
+          },
+          "replayed": {
+            "type": "boolean",
+            "example": false
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "offline_sync.accepted_unverified",
+              "offline_sync.replayed",
+              "offline_sync.changed_body_conflict",
+              "offline_sync.validation_failed",
+              "offline_sync.processing_deferred",
+              "offline_sync.sequence_gap",
+              "offline_sync.sequence_out_of_order",
+              "offline_sync.duplicate_sequence",
+              "offline_sync.review_required"
+            ],
+            "nullable": true
+          },
+          "server_received_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server receipt timestamp",
+            "example": "2026-05-04T10:00:00.000Z"
+          },
+          "processed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server processing timestamp",
+            "example": "2026-05-04T10:00:00.000Z",
+            "nullable": true
+          },
+          "payroll_eligible": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Offline results do not imply payroll eligibility.",
+            "example": false
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+          "sequence": 7,
+          "sync_status": "accepted",
+          "verification_status": "unverified",
+          "replayed": false,
+          "reason_code": "offline_sync.accepted_unverified",
+          "server_received_at": "2026-05-04T03:45:00.000Z",
+          "processed_at": "2026-05-04T03:45:01.000Z",
+          "payroll_eligible": false
+        }
+      },
+      "AttendanceOfflineSyncResponse": {
+        "type": "object",
+        "required": [
+          "contract_version",
+          "batch_id",
+          "server_received_at",
+          "results"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "enum": [
+              "attendance.offline_sync.v1"
+            ],
+            "example": "attendance.offline_sync.v1"
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Offline sync batch UUID",
+            "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+          },
+          "server_received_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server receipt timestamp",
+            "example": "2026-05-04T10:00:00.000Z"
+          },
+          "results": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "client_event_id",
+                "sequence",
+                "sync_status",
+                "verification_status",
+                "replayed",
+                "server_received_at",
+                "payroll_eligible"
+              ],
+              "properties": {
+                "client_event_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+                  "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "example": 7
+                },
+                "sync_status": {
+                  "type": "string",
+                  "enum": [
+                    "accepted",
+                    "replayed",
+                    "conflict",
+                    "rejected",
+                    "deferred"
+                  ],
+                  "example": "accepted"
+                },
+                "verification_status": {
+                  "type": "string",
+                  "enum": [
+                    "unverified",
+                    "review_required",
+                    "rejected"
+                  ],
+                  "example": "unverified"
+                },
+                "replayed": {
+                  "type": "boolean",
+                  "example": false
+                },
+                "reason_code": {
+                  "type": "string",
+                  "enum": [
+                    "offline_sync.accepted_unverified",
+                    "offline_sync.replayed",
+                    "offline_sync.changed_body_conflict",
+                    "offline_sync.validation_failed",
+                    "offline_sync.processing_deferred",
+                    "offline_sync.sequence_gap",
+                    "offline_sync.sequence_out_of_order",
+                    "offline_sync.duplicate_sequence",
+                    "offline_sync.review_required"
+                  ],
+                  "nullable": true
+                },
+                "server_received_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Server receipt timestamp",
+                  "example": "2026-05-04T10:00:00.000Z"
+                },
+                "processed_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Server processing timestamp",
+                  "example": "2026-05-04T10:00:00.000Z",
+                  "nullable": true
+                },
+                "payroll_eligible": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ],
+                  "description": "Offline results do not imply payroll eligibility.",
+                  "example": false
+                }
+              },
+              "additionalProperties": false,
+              "example": {
+                "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                "sequence": 7,
+                "sync_status": "accepted",
+                "verification_status": "unverified",
+                "replayed": false,
+                "reason_code": "offline_sync.accepted_unverified",
+                "server_received_at": "2026-05-04T03:45:00.000Z",
+                "processed_at": "2026-05-04T03:45:01.000Z",
+                "payroll_eligible": false
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "contract_version": "attendance.offline_sync.v1",
+          "batch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+          "server_received_at": "2026-05-04T03:45:00.000Z",
+          "results": [
+            {
+              "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+              "sequence": 7,
+              "sync_status": "accepted",
+              "verification_status": "unverified",
+              "replayed": false,
+              "reason_code": "offline_sync.accepted_unverified",
+              "server_received_at": "2026-05-04T03:45:00.000Z",
+              "processed_at": "2026-05-04T03:45:01.000Z",
+              "payroll_eligible": false
+            },
+            {
+              "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+              "sequence": 7,
+              "sync_status": "replayed",
+              "verification_status": "unverified",
+              "replayed": true,
+              "reason_code": "offline_sync.replayed",
+              "server_received_at": "2026-05-04T03:46:00.000Z",
+              "processed_at": "2026-05-04T03:46:00.000Z",
+              "payroll_eligible": false
+            },
+            {
+              "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e798",
+              "sequence": 8,
+              "sync_status": "deferred",
+              "verification_status": "review_required",
+              "replayed": false,
+              "reason_code": "offline_sync.processing_deferred",
+              "server_received_at": "2026-05-04T03:47:00.000Z",
+              "processed_at": null,
+              "payroll_eligible": false
+            },
+            {
+              "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e799",
+              "sequence": 9,
+              "sync_status": "rejected",
+              "verification_status": "rejected",
+              "replayed": false,
+              "reason_code": "offline_sync.validation_failed",
+              "server_received_at": "2026-05-04T03:48:00.000Z",
+              "processed_at": "2026-05-04T03:48:00.000Z",
+              "payroll_eligible": false
+            }
+          ]
+        }
+      },
       "RateLimitResponse": {
         "type": "object",
         "required": [
@@ -65138,9 +67586,8 @@
                                 "type": "string",
                                 "enum": [
                                   "browser",
-                                  "gps",
+                                  "device",
                                   "network",
-                                  "manual",
                                   "unknown"
                                 ],
                                 "example": "browser"
@@ -65192,9 +67639,8 @@
                                 "type": "string",
                                 "enum": [
                                   "browser",
-                                  "gps",
+                                  "device",
                                   "network",
-                                  "manual",
                                   "unknown"
                                 ],
                                 "example": "browser"
@@ -65217,13 +67663,63 @@
                             "additionalProperties": false
                           }
                         ],
-                        "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates."
+                        "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+                        "example": {
+                          "latitude": 12.971599,
+                          "longitude": 77.594566,
+                          "accuracy_meters": 12.5,
+                          "captured_at": "2026-05-04T03:40:00.000Z",
+                          "provider": "browser",
+                          "permission_state": "granted"
+                        }
                       }
                     },
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "example": {
+                      "event_type": "check_in",
+                      "work_mode": "office",
+                      "source": "web_geo",
+                      "metadata": {
+                        "client_timezone": "Asia/Kolkata"
+                      },
+                      "location": {
+                        "latitude": 12.971599,
+                        "longitude": 77.594566,
+                        "accuracy_meters": 12.5,
+                        "captured_at": "2026-05-04T03:40:00.000Z",
+                        "provider": "browser",
+                        "permission_state": "granted"
+                      }
+                    }
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "example": {
+                  "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                  "captured_at": "2026-05-04T09:10:00.000+05:30",
+                  "device": {
+                    "device_id": "browser-session-device",
+                    "platform": "web",
+                    "app_version": "2026.08.03",
+                    "os_version": "Windows 11"
+                  },
+                  "command": {
+                    "event_type": "check_in",
+                    "work_mode": "office",
+                    "source": "web_geo",
+                    "metadata": {
+                      "client_timezone": "Asia/Kolkata"
+                    },
+                    "location": {
+                      "latitude": 12.971599,
+                      "longitude": 77.594566,
+                      "accuracy_meters": 12.5,
+                      "captured_at": "2026-05-04T03:40:00.000Z",
+                      "provider": "browser",
+                      "permission_state": "granted"
+                    }
+                  }
+                }
               }
             }
           },
@@ -65316,9 +67812,7 @@
                         "id",
                         "employee_user_id",
                         "event_type",
-                        "occurred_at",
-                        "work_date",
-                        "time"
+                        "occurred_at"
                       ],
                       "properties": {
                         "id": {
@@ -65376,8 +67870,11 @@
                             "web",
                             "web_geo",
                             "mobile",
+                            "mobile_foreground",
+                            "mobile_offline",
                             "kiosk",
-                            "admin"
+                            "admin",
+                            "auto_geofence"
                           ],
                           "example": "web_geo"
                         },
@@ -65392,7 +67889,17 @@
                           ]
                         }
                       },
-                      "additionalProperties": true
+                      "additionalProperties": true,
+                      "example": {
+                        "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+                        "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                        "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                        "event_type": "check_in",
+                        "occurred_at": "2026-05-04T03:40:12.123Z",
+                        "work_mode": "office",
+                        "source": "web_geo",
+                        "origin": "employee_manual_now"
+                      }
                     },
                     "day_status": {
                       "type": "object",
@@ -65443,15 +67950,15 @@
                           "type": "string",
                           "enum": [
                             "not_required",
+                            "inside_confident",
+                            "outside_confident",
+                            "boundary_uncertain",
+                            "stale_evidence",
+                            "accuracy_exceeded",
                             "missing",
                             "permission_denied",
                             "location_unavailable",
-                            "stale_evidence",
-                            "accuracy_exceeded",
-                            "fence_not_configured",
-                            "inside_confident",
-                            "outside_confident",
-                            "boundary_uncertain"
+                            "fence_not_configured"
                           ],
                           "example": "inside_confident"
                         },
@@ -65478,12 +67985,28 @@
                         },
                         "reason_code": {
                           "type": "string",
+                          "enum": [
+                            "geo_not_required",
+                            "geo_evidence_missing",
+                            "geo_permission_denied",
+                            "geo_location_unavailable",
+                            "geo_fence_not_configured",
+                            "geo_inside_fence",
+                            "geo_outside_fence",
+                            "geo_boundary_uncertain",
+                            "geo_stale_evidence",
+                            "geo_accuracy_exceeded",
+                            "geo_policy_mode_unknown",
+                            "geo_action_unknown",
+                            "geo_manual_fallback_allowed",
+                            "geo_manual_fallback_disallowed"
+                          ],
                           "nullable": true,
-                          "example": null
+                          "example": "geo_inside_fence"
                         },
                         "evaluator_version": {
                           "type": "string",
-                          "example": "attendance_geo_policy_v1"
+                          "example": "attendance-geo-v2"
                         },
                         "geofence_id": {
                           "type": "string",
@@ -65522,8 +68045,9 @@
                         },
                         "geofence_canonical_hash": {
                           "type": "string",
+                          "pattern": "^[0-9a-f]{64}$",
                           "nullable": true,
-                          "example": "3f786850e387550fdab836ed7e6dc881de23001b"
+                          "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                         },
                         "evaluation": {
                           "type": "object",
@@ -65532,10 +68056,90 @@
                           "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
                         }
                       },
-                      "additionalProperties": true
+                      "additionalProperties": true,
+                      "example": {
+                        "factual_outcome": "inside_confident",
+                        "category": "inside_confident",
+                        "selected_action": "allow",
+                        "fallback_used": false,
+                        "allowed": true,
+                        "reason_code": "geo_inside_fence",
+                        "evaluator_version": "attendance-geo-v2",
+                        "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+                        "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+                        "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+                        "geofence_version_number": 2,
+                        "geofence_shape_type": "polygon",
+                        "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                        "evaluation": {
+                          "category": "inside_confident",
+                          "evaluator_version": "attendance-geo-v2",
+                          "candidate_count": 1,
+                          "valid_candidate_count": 1,
+                          "inside_match_count": 1,
+                          "multiple_inside_matches": false,
+                          "selected_candidate_ordinal": 1,
+                          "selection_reason": "nearest_effective_geofence",
+                          "reported_accuracy_meters": 12.5,
+                          "grace_meters": 25
+                        }
+                      }
                     }
                   },
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "example": {
+                    "allowed": true,
+                    "command_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9200",
+                    "decision_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9202",
+                    "session_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9203",
+                    "punch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+                    "punch": {
+                      "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+                      "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                      "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                      "event_type": "check_in",
+                      "occurred_at": "2026-05-04T03:40:12.123Z",
+                      "work_mode": "office",
+                      "source": "web_geo",
+                      "origin": "employee_manual_now"
+                    },
+                    "day_status": {
+                      "work_date": "2026-05-04",
+                      "presence_state": "present"
+                    },
+                    "next_allowed_actions": [
+                      "break_start",
+                      "check_out"
+                    ],
+                    "next_allowed_action": "break_start",
+                    "geo_policy": {
+                      "factual_outcome": "inside_confident",
+                      "category": "inside_confident",
+                      "selected_action": "allow",
+                      "fallback_used": false,
+                      "allowed": true,
+                      "reason_code": "geo_inside_fence",
+                      "evaluator_version": "attendance-geo-v2",
+                      "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+                      "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+                      "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+                      "geofence_version_number": 2,
+                      "geofence_shape_type": "polygon",
+                      "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "evaluation": {
+                        "category": "inside_confident",
+                        "evaluator_version": "attendance-geo-v2",
+                        "candidate_count": 1,
+                        "valid_candidate_count": 1,
+                        "inside_match_count": 1,
+                        "multiple_inside_matches": false,
+                        "selected_candidate_ordinal": 1,
+                        "selection_reason": "nearest_effective_geofence",
+                        "reported_accuracy_meters": 12.5,
+                        "grace_meters": 25
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -65726,8 +68330,233 @@
                     },
                     "details": {
                       "type": "object",
+                      "properties": {
+                        "reason_code": {
+                          "type": "string",
+                          "enum": [
+                            "already_checked_in",
+                            "no_open_session",
+                            "break_already_started",
+                            "no_open_break",
+                            "open_break_must_end",
+                            "attendance_cycle_completed",
+                            "session_ownership_invalid",
+                            "policy_window_rejected",
+                            "invalid_chronology",
+                            "invalid_state_transition",
+                            "geo_not_required",
+                            "geo_evidence_missing",
+                            "geo_permission_denied",
+                            "geo_location_unavailable",
+                            "geo_fence_not_configured",
+                            "geo_inside_fence",
+                            "geo_outside_fence",
+                            "geo_boundary_uncertain",
+                            "geo_stale_evidence",
+                            "geo_accuracy_exceeded",
+                            "geo_policy_mode_unknown",
+                            "geo_action_unknown",
+                            "geo_manual_fallback_allowed",
+                            "geo_manual_fallback_disallowed"
+                          ],
+                          "nullable": true,
+                          "description": "Stable attendance command or geo-policy reason code when the failure is a persisted business denial."
+                        },
+                        "reason_detail": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "next_allowed_actions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "check_in",
+                              "break_start",
+                              "break_end",
+                              "check_out"
+                            ]
+                          }
+                        },
+                        "geo_policy": {
+                          "type": "object",
+                          "required": [
+                            "factual_outcome",
+                            "selected_action",
+                            "fallback_used",
+                            "allowed",
+                            "reason_code"
+                          ],
+                          "properties": {
+                            "factual_outcome": {
+                              "type": "string",
+                              "enum": [
+                                "not_required",
+                                "inside_confident",
+                                "outside_confident",
+                                "boundary_uncertain",
+                                "stale_evidence",
+                                "accuracy_exceeded",
+                                "missing",
+                                "permission_denied",
+                                "location_unavailable",
+                                "fence_not_configured"
+                              ],
+                              "example": "inside_confident"
+                            },
+                            "category": {
+                              "type": "string",
+                              "example": "inside_confident"
+                            },
+                            "selected_action": {
+                              "type": "string",
+                              "enum": [
+                                "allow",
+                                "deny",
+                                "manual_fallback"
+                              ],
+                              "example": "allow"
+                            },
+                            "fallback_used": {
+                              "type": "boolean",
+                              "example": false
+                            },
+                            "allowed": {
+                              "type": "boolean",
+                              "example": true
+                            },
+                            "reason_code": {
+                              "type": "string",
+                              "enum": [
+                                "geo_not_required",
+                                "geo_evidence_missing",
+                                "geo_permission_denied",
+                                "geo_location_unavailable",
+                                "geo_fence_not_configured",
+                                "geo_inside_fence",
+                                "geo_outside_fence",
+                                "geo_boundary_uncertain",
+                                "geo_stale_evidence",
+                                "geo_accuracy_exceeded",
+                                "geo_policy_mode_unknown",
+                                "geo_action_unknown",
+                                "geo_manual_fallback_allowed",
+                                "geo_manual_fallback_disallowed"
+                              ],
+                              "nullable": true,
+                              "example": "geo_inside_fence"
+                            },
+                            "evaluator_version": {
+                              "type": "string",
+                              "example": "attendance-geo-v2"
+                            },
+                            "geofence_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "Effective geofence UUID",
+                              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                              "nullable": true
+                            },
+                            "geofence_version_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "Effective geofence version UUID",
+                              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                              "nullable": true
+                            },
+                            "work_site_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "Selected work site UUID",
+                              "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001",
+                              "nullable": true
+                            },
+                            "geofence_version_number": {
+                              "type": "integer",
+                              "nullable": true,
+                              "example": 1
+                            },
+                            "geofence_shape_type": {
+                              "type": "string",
+                              "enum": [
+                                "circle",
+                                "polygon"
+                              ],
+                              "nullable": true,
+                              "example": "polygon"
+                            },
+                            "geofence_canonical_hash": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$",
+                              "nullable": true,
+                              "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                            },
+                            "evaluation": {
+                              "type": "object",
+                              "nullable": true,
+                              "additionalProperties": true,
+                              "description": "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+                            }
+                          },
+                          "additionalProperties": true,
+                          "example": {
+                            "factual_outcome": "inside_confident",
+                            "category": "inside_confident",
+                            "selected_action": "allow",
+                            "fallback_used": false,
+                            "allowed": true,
+                            "reason_code": "geo_inside_fence",
+                            "evaluator_version": "attendance-geo-v2",
+                            "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+                            "geofence_version_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+                            "work_site_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+                            "geofence_version_number": 2,
+                            "geofence_shape_type": "polygon",
+                            "geofence_canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            "evaluation": {
+                              "category": "inside_confident",
+                              "evaluator_version": "attendance-geo-v2",
+                              "candidate_count": 1,
+                              "valid_candidate_count": 1,
+                              "inside_match_count": 1,
+                              "multiple_inside_matches": false,
+                              "selected_candidate_ordinal": 1,
+                              "selection_reason": "nearest_effective_geofence",
+                              "reported_accuracy_meters": 12.5,
+                              "grace_meters": 25
+                            }
+                          }
+                        }
+                      },
                       "additionalProperties": true,
-                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                      "example": {
+                        "reason_code": "geo_outside_fence",
+                        "reason_detail": "The submitted location is outside the effective geofence.",
+                        "next_allowed_actions": [
+                          "check_in"
+                        ],
+                        "geo_policy": {
+                          "factual_outcome": "outside_confident",
+                          "category": "outside_confident",
+                          "selected_action": "deny",
+                          "fallback_used": false,
+                          "allowed": false,
+                          "reason_code": "geo_outside_fence",
+                          "evaluator_version": "attendance-geo-v2",
+                          "evaluation": {
+                            "category": "outside_confident",
+                            "evaluator_version": "attendance-geo-v2",
+                            "candidate_count": 1,
+                            "valid_candidate_count": 1,
+                            "inside_match_count": 0,
+                            "multiple_inside_matches": false,
+                            "selected_candidate_ordinal": 1,
+                            "selection_reason": "nearest_effective_geofence",
+                            "reported_accuracy_meters": 18,
+                            "grace_meters": 25
+                          }
+                        }
+                      }
                     },
                     "request_id": {
                       "type": "string",
@@ -65870,13 +68699,157 @@
                     "type": "object",
                     "additionalProperties": true
                   },
+                  "location": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "latitude",
+                          "longitude",
+                          "accuracy_meters",
+                          "captured_at"
+                        ],
+                        "properties": {
+                          "latitude": {
+                            "type": "number",
+                            "minimum": -90,
+                            "maximum": 90,
+                            "example": 12.971599
+                          },
+                          "longitude": {
+                            "type": "number",
+                            "minimum": -180,
+                            "maximum": 180,
+                            "example": 77.594566
+                          },
+                          "accuracy_meters": {
+                            "type": "number",
+                            "minimum": 0,
+                            "example": 12.5
+                          },
+                          "captured_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "One-shot browser capture timestamp from the employee action.",
+                            "example": "2026-05-04T10:00:00.000Z"
+                          },
+                          "age_ms": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "example": 30000
+                          },
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "browser",
+                              "device",
+                              "network",
+                              "unknown"
+                            ],
+                            "example": "browser"
+                          },
+                          "permission_state": {
+                            "type": "string",
+                            "enum": [
+                              "granted",
+                              "unknown"
+                            ],
+                            "default": "unknown",
+                            "example": "granted"
+                          },
+                          "altitude_meters": {
+                            "type": "number",
+                            "example": 920.4
+                          },
+                          "is_mocked": {
+                            "type": "boolean",
+                            "example": false
+                          },
+                          "integrity_status": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "example": "browser_reported"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "permission_state"
+                        ],
+                        "properties": {
+                          "captured_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Optional one-shot browser failure timestamp.",
+                            "example": "2026-05-04T10:00:00.000Z"
+                          },
+                          "age_ms": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "example": 30000
+                          },
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "browser",
+                              "device",
+                              "network",
+                              "unknown"
+                            ],
+                            "example": "browser"
+                          },
+                          "permission_state": {
+                            "type": "string",
+                            "enum": [
+                              "denied",
+                              "unavailable"
+                            ],
+                            "example": "denied"
+                          },
+                          "integrity_status": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "example": "permission_denied"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+                    "example": {
+                      "latitude": 12.971599,
+                      "longitude": 77.594566,
+                      "accuracy_meters": 12.5,
+                      "captured_at": "2026-05-04T03:40:00.000Z",
+                      "provider": "browser",
+                      "permission_state": "granted"
+                    }
+                  },
                   "reason": {
                     "type": "string",
                     "minLength": 3,
                     "maxLength": 1000
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "example": {
+                  "event_type": "check_in",
+                  "work_mode": "office",
+                  "metadata": {
+                    "manager_note": "Front desk assisted punch"
+                  },
+                  "location": {
+                    "captured_at": "2026-05-04T03:40:00.000Z",
+                    "provider": "browser",
+                    "permission_state": "unavailable",
+                    "integrity_status": "location_unavailable"
+                  },
+                  "reason": "Employee device unavailable at shift start."
+                }
               }
             }
           }
@@ -66236,8 +69209,6 @@
                     "type": "string",
                     "enum": [
                       "check_in",
-                      "break_start",
-                      "break_end",
                       "check_out"
                     ],
                     "example": "check_in"
@@ -66773,9 +69744,7 @@
                           "id",
                           "employee_user_id",
                           "event_type",
-                          "occurred_at",
-                          "work_date",
-                          "time"
+                          "occurred_at"
                         ],
                         "properties": {
                           "id": {
@@ -66833,8 +69802,11 @@
                               "web",
                               "web_geo",
                               "mobile",
+                              "mobile_foreground",
+                              "mobile_offline",
                               "kiosk",
-                              "admin"
+                              "admin",
+                              "auto_geofence"
                             ],
                             "example": "web_geo"
                           },
@@ -66849,7 +69821,17 @@
                             ]
                           }
                         },
-                        "additionalProperties": true
+                        "additionalProperties": true,
+                        "example": {
+                          "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+                          "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "actor_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "event_type": "check_in",
+                          "occurred_at": "2026-05-04T03:40:12.123Z",
+                          "work_mode": "office",
+                          "source": "web_geo",
+                          "origin": "employee_manual_now"
+                        }
                       }
                     },
                     "page": {
@@ -70216,7 +73198,18 @@
                     }
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "example": {
+                  "work_date": "2026-05-04",
+                  "reason": "Forgot to punch out after shift handoff.",
+                  "items": [
+                    {
+                      "operation": "add",
+                      "event_type": "check_out",
+                      "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                    }
+                  ]
+                }
               }
             }
           }
@@ -70369,7 +73362,34 @@
                       "example": 1
                     }
                   },
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "example": {
+                    "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9401",
+                    "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                    "submitted_by_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                    "work_date": "2026-05-04",
+                    "reason": "Forgot to punch out after shift handoff.",
+                    "requested_punches": [
+                      {
+                        "event_type": "check_out",
+                        "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                      }
+                    ],
+                    "items": [
+                      {
+                        "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9402",
+                        "ordinal": 0,
+                        "operation": "add",
+                        "target_punch_event_id": null,
+                        "event_type": "check_out",
+                        "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                      }
+                    ],
+                    "status": "pending",
+                    "current_approver_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9004",
+                    "decision_remarks": null,
+                    "version": 1
+                  }
                 }
               }
             }
@@ -70941,7 +73961,34 @@
                             "example": 1
                           }
                         },
-                        "additionalProperties": true
+                        "additionalProperties": true,
+                        "example": {
+                          "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9401",
+                          "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "submitted_by_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "work_date": "2026-05-04",
+                          "reason": "Forgot to punch out after shift handoff.",
+                          "requested_punches": [
+                            {
+                              "event_type": "check_out",
+                              "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                            }
+                          ],
+                          "items": [
+                            {
+                              "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9402",
+                              "ordinal": 0,
+                              "operation": "add",
+                              "target_punch_event_id": null,
+                              "event_type": "check_out",
+                              "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                            }
+                          ],
+                          "status": "pending",
+                          "current_approver_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9004",
+                          "decision_remarks": null,
+                          "version": 1
+                        }
                       }
                     },
                     "page": {
@@ -71532,7 +74579,34 @@
                             "example": 1
                           }
                         },
-                        "additionalProperties": true
+                        "additionalProperties": true,
+                        "example": {
+                          "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9401",
+                          "employee_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "submitted_by_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+                          "work_date": "2026-05-04",
+                          "reason": "Forgot to punch out after shift handoff.",
+                          "requested_punches": [
+                            {
+                              "event_type": "check_out",
+                              "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                            }
+                          ],
+                          "items": [
+                            {
+                              "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9402",
+                              "ordinal": 0,
+                              "operation": "add",
+                              "target_punch_event_id": null,
+                              "event_type": "check_out",
+                              "occurred_at": "2026-05-04T18:20:00.000+05:30"
+                            }
+                          ],
+                          "status": "pending",
+                          "current_approver_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9004",
+                          "decision_remarks": null,
+                          "version": 1
+                        }
                       }
                     },
                     "page": {
@@ -71870,7 +74944,12 @@
                     "example": 1
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "example": {
+                  "decision": "approve",
+                  "remarks": "Access log confirms the requested punch.",
+                  "expected_version": 1
+                }
               }
             }
           }
@@ -72337,7 +75416,7 @@
                         "canonical_hash": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{64}$",
-                          "example": "3f786850e387550fdab836ed7e6dc881de23001b"
+                          "example": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                         },
                         "published_at": {
                           "type": "string",
@@ -72356,7 +75435,25 @@
                           "additionalProperties": true
                         }
                       },
-                      "additionalProperties": true
+                      "additionalProperties": true,
+                      "example": {
+                        "id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9302",
+                        "company_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9001",
+                        "geofence_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9301",
+                        "version_number": 2,
+                        "version_status": "published",
+                        "shape_type": "polygon",
+                        "circle_radius_meters": null,
+                        "effective_from": "2026-05-04T00:00:00.000Z",
+                        "effective_until": null,
+                        "canonical_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                        "published_at": "2026-05-04T03:35:00.000Z",
+                        "published_by_user_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9002",
+                        "geometry_diagnostics": {
+                          "vertex_count": 5,
+                          "self_intersections": 0
+                        }
+                      }
                     }
                   },
                   "additionalProperties": true

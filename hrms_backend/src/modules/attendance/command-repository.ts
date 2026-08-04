@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import type {
   AttendanceLocationEvidenceInput,
+  AttendanceAdditionalCommandReasonCode,
   AttendanceEvidenceSourceChannel,
   AttendancePunchEventType,
   AttendancePunchSourceChannel,
@@ -25,9 +26,7 @@ export const ATTENDANCE_GEO_EVALUATOR_VERSION = "attendance-geo-v2";
 export type AttendanceCommandDecisionReasonCode =
   | AttendanceDecisionReasonCode
   | AttendanceGeoDecisionReasonCode
-  | "policy_window_rejected"
-  | "invalid_chronology"
-  | "invalid_state_transition";
+  | AttendanceAdditionalCommandReasonCode;
 
 export interface AttendanceEmployeeCommandStateRecord {
   company_id: UUID;
