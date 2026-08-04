@@ -1,10 +1,21 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import {
+  AttendanceCommandReasonCodeValues,
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+} from "#shared";
 
 type OpenApiDocument = {
   openapi?: string;
   tags?: Array<{ name?: string }>;
   paths?: Record<string, PathItem>;
+  components?: {
+    schemas?: Record<string, JsonObject>;
+  };
 };
 
 type PathItem = Record<string, Operation | undefined>;
@@ -325,6 +336,7 @@ function verifySpec(spec: OpenApiDocument): void {
   verifyLoginOperation(spec);
   verifyHierarchyAndTimeline(spec);
   verifyFinanceGrouping(spec);
+  verifyAttendanceContract(spec);
 }
 
 function verifyLoginOperation(spec: OpenApiDocument): void {
@@ -369,6 +381,130 @@ function verifyFinanceGrouping(spec: OpenApiDocument): void {
     if (isFinanceRoute && !operation.tags?.includes("Finance Management")) {
       failures.push(`${key} must be grouped under Finance Management.`);
     }
+  }
+}
+
+function verifyAttendanceContract(spec: OpenApiDocument): void {
+  if (spec.paths?.["/api/v1/attendance/offline-sync"]) {
+    failures.push("Attendance OpenAPI must not document an unimplemented offline-sync route.");
+  }
+
+  const punch = spec.paths?.["/api/v1/attendance/punches"]?.post;
+  const punchRequest = jsonBodySchema(punch);
+  const location = getObject(punchRequest, "properties", "command", "properties", "location");
+  expectEnum(
+    getObject(location, "oneOf", 0, "properties", "provider", "enum"),
+    [...AttendanceLocationProviderValues],
+    "Attendance punch location provider enum",
+  );
+  expectEnum(
+    getObject(location, "oneOf", 1, "properties", "provider", "enum"),
+    [...AttendanceLocationProviderValues],
+    "Attendance punch failure-location provider enum",
+  );
+  if (JSON.stringify(location ?? {}).includes("\"gps\"") || JSON.stringify(location ?? {}).includes("\"manual\"")) {
+    failures.push("Attendance location provider docs must not include gps/manual.");
+  }
+
+  const punchResponse = responseJsonSchema(punch, "200");
+  const punchRequired = getObject(punchResponse, "properties", "punch", "required");
+  if (Array.isArray(punchRequired) && (punchRequired.includes("work_date") || punchRequired.includes("time"))) {
+    failures.push("Attendance command punch response must not require work_date/time.");
+  }
+
+  const punch409 = responseJsonSchema(punch, "409");
+  expectEnum(
+    getObject(punch409, "properties", "details", "properties", "reason_code", "enum"),
+    [...AttendanceCommandReasonCodeValues],
+    "Attendance 409 details.reason_code enum",
+  );
+
+  const assisted = spec.paths?.["/api/v1/attendance/employees/{employeeUserId}/assisted-current-punches"]?.post;
+  if (!getObject(jsonBodySchema(assisted), "properties", "location")) {
+    failures.push("Manager-assisted current punch docs must include optional location evidence.");
+  }
+
+  const historical = spec.paths?.["/api/v1/attendance/employees/{employeeUserId}/historical-corrections"]?.post;
+  expectEnum(
+    getObject(jsonBodySchema(historical), "properties", "event_type", "enum"),
+    [...AttendanceHistoricalCorrectionEventTypeValues],
+    "Attendance historical correction event_type enum",
+  );
+
+  const offlineResult = spec.components?.schemas?.AttendanceOfflineSyncResult;
+  expectEnum(
+    getObject(offlineResult, "properties", "sync_status", "enum"),
+    [...AttendanceOfflineSyncStatusValues],
+    "Attendance offline sync_status enum",
+  );
+  expectEnum(
+    getObject(offlineResult, "properties", "verification_status", "enum"),
+    [...AttendanceOfflineVerificationStatusValues],
+    "Attendance offline verification_status enum",
+  );
+  expectEnum(
+    getObject(offlineResult, "properties", "reason_code", "enum"),
+    [...AttendanceOfflineSyncReasonCodeValues],
+    "Attendance offline reason_code enum",
+  );
+
+  for (const componentName of [
+    "AttendanceLocationEvidenceInput",
+    "AttendanceGeoEvaluation",
+    "AttendanceBusinessErrorDetails",
+    "AttendancePunchCommandResponse",
+    "AttendanceRegularizationItem",
+    "AttendanceGeofenceCircleShape",
+    "AttendanceGeofencePolygonShape",
+    "AttendanceGeofencePublishedVersion",
+    "AttendanceOfflineEventEnvelope",
+    "AttendanceOfflineBatchEnvelope",
+    "AttendanceOfflineSyncResponse",
+  ]) {
+    if (!spec.components?.schemas?.[componentName]) {
+      failures.push(`Missing attendance OpenAPI component ${componentName}.`);
+    }
+  }
+}
+
+function jsonBodySchema(operation: Operation | undefined): JsonObject | undefined {
+  return operation?.requestBody?.content?.["application/json"]?.schema;
+}
+
+function responseJsonSchema(
+  operation: Operation | undefined,
+  statusCode: string,
+): JsonObject | undefined {
+  const response = operation?.responses?.[statusCode];
+  if (!isObject(response)) return undefined;
+  return getObject(response, "content", "application/json", "schema") as JsonObject | undefined;
+}
+
+function getObject(
+  value: unknown,
+  ...path: Array<string | number>
+): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) return undefined;
+      current = current[segment];
+      continue;
+    }
+    if (!isObject(current)) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+function expectEnum(value: unknown, expected: string[], label: string): void {
+  if (!Array.isArray(value)) {
+    failures.push(`${label} must be an enum.`);
+    return;
+  }
+  const actual = value.map(String);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    failures.push(`${label} must equal ${JSON.stringify(expected)}, found ${JSON.stringify(actual)}.`);
   }
 }
 
