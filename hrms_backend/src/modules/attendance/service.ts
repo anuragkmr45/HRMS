@@ -49,6 +49,7 @@ import { isWorkingDate } from "../../platform/work-schedule.js";
 import { CoreService } from "../core/service.js";
 import {
   appendAttendanceOutboxEvent,
+  buildMissingCheckoutDetectedEvent,
   buildExportRequestedEvent,
   buildPunchRecordedEvent,
   buildRegularizationDecisionEvent,
@@ -1956,6 +1957,22 @@ export class AttendanceService {
         }
       }
       for (const closure of userClosures) {
+        const checkoutPunch = closure.created_punches.find(
+          (punch) => punch.event_type === AttendancePunchEventTypes.CheckOut,
+        );
+        if (checkoutPunch) {
+          appendAttendanceOutboxEvent(
+            this.store,
+            buildMissingCheckoutDetectedEvent({
+              companyId,
+              actorUserId: employeeUserId,
+              subjectEmployeeUserId: employeeUserId,
+              punchEventId: checkoutPunch.id,
+              workDate: closure.work_date,
+              occurredAt: checkoutPunch.occurred_at,
+            }),
+          );
+        }
         for (const punch of closure.created_punches) {
           appendAttendanceOutboxEvent(
             this.store,

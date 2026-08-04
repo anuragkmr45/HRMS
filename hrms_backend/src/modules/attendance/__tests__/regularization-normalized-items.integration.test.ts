@@ -22,6 +22,59 @@ describe("regularization normalized items and actions", () => {
     await app.ready();
   }
 
+  const forbiddenPayloadKeys = new Set([
+    "latitude",
+    "longitude",
+    "lat",
+    "lng",
+    "coordinates",
+    "coordinate",
+    "geometry",
+    "geography",
+    "location",
+    "location_evidence",
+    "accuracy",
+    "distance",
+    "altitude",
+    "raw_payload",
+    "request_snapshot",
+    "response_snapshot",
+    "metadata",
+    "reason",
+    "remarks",
+    "requested_punches",
+  ]);
+
+  function expectNoForbiddenPayloadKeys(value: unknown, path: string[] = []): void {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => expectNoForbiddenPayloadKeys(item, [...path, String(index)]));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      const normalized = key.trim().toLowerCase().replaceAll("-", "_");
+      expect(
+        forbiddenPayloadKeys.has(normalized),
+        `Forbidden payload key ${[...path, key].join(".")}`,
+      ).toBe(false);
+      expectNoForbiddenPayloadKeys(nested, [...path, key]);
+    }
+  }
+
+  async function outboxRows(input: { aggregateId: string; eventType: string }) {
+    return (await app.store.pgPool!.query<{
+      aggregate_id: string;
+      event_type: string;
+      payload: Record<string, unknown>;
+    }>(
+      `SELECT aggregate_id, event_type, payload
+         FROM platform.outbox_events
+        WHERE aggregate_id = $1 AND event_type = $2
+        ORDER BY id`,
+      [input.aggregateId, input.eventType],
+    )).rows;
+  }
+
   beforeEach(async () => {
     app = await buildRealApp();
     await app.ready();
@@ -544,6 +597,83 @@ describe("regularization normalized items and actions", () => {
       `SELECT status, version FROM attendance.regularization_requests WHERE id = $1`,
       [losingRequestId],
     )).rows[0]).toMatchObject({ status: "pending", version: 1 });
+  });
+
+  it("emits safe approved and rejected regularization decision events once", async () => {
+    const employee = await loginAs(app, "E1");
+    const manager = await loginAs(app, "D1");
+    const approvedRequest = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-21",
+        reason: "Approval event payload check",
+        items: [
+          { operation: "add", event_type: "check_in", occurred_at: "2026-05-21T03:30:00.000Z" },
+          { operation: "add", event_type: "check_out", occurred_at: "2026-05-21T12:30:00.000Z" },
+        ],
+      },
+    });
+    expect(approvedRequest.statusCode, approvedRequest.body).toBe(200);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${approvedRequest.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+
+    const rejectedRequest = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-22",
+        reason: "Rejected event payload check",
+        items: [{ operation: "add", event_type: "check_in", occurred_at: "2026-05-22T03:30:00.000Z" }],
+      },
+    });
+    expect(rejectedRequest.statusCode, rejectedRequest.body).toBe(200);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${rejectedRequest.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "reject", remarks: "Insufficient evidence", expected_version: 1 },
+    });
+    expect(rejected.statusCode, rejected.body).toBe(200);
+    const repeatedReject = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${rejectedRequest.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "reject", remarks: "Insufficient evidence", expected_version: 1 },
+    });
+    expect(repeatedReject.statusCode).toBe(409);
+
+    const approvedRows = await outboxRows({
+      aggregateId: approvedRequest.json().id,
+      eventType: "attendance.regularization.approved",
+    });
+    const rejectedRows = await outboxRows({
+      aggregateId: rejectedRequest.json().id,
+      eventType: "attendance.regularization.rejected",
+    });
+    expect(approvedRows).toHaveLength(1);
+    expect(rejectedRows).toHaveLength(1);
+    expect(approvedRows[0]!.payload).toMatchObject({
+      company_id: approved.json().company_id,
+      regularization_request_id: approvedRequest.json().id,
+      next_status: "approved",
+      version: 2,
+    });
+    expect(rejectedRows[0]!.payload).toMatchObject({
+      company_id: rejected.json().company_id,
+      regularization_request_id: rejectedRequest.json().id,
+      next_status: "rejected",
+      version: 2,
+    });
+    expectNoForbiddenPayloadKeys(approvedRows[0]!.payload);
+    expectNoForbiddenPayloadKeys(rejectedRows[0]!.payload);
   });
 
   it("rolls back request state when action insertion fails", async () => {

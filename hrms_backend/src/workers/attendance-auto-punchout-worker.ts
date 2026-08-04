@@ -478,19 +478,21 @@ async function insertPunch(
 ): Promise<void> {
   await client.query(
     `INSERT INTO attendance.punch_events (
-      id, company_id, employee_user_id, event_type, occurred_at, work_mode, source,
-      metadata, created_at, deleted_at
+      id, company_id, employee_user_id, actor_user_id, event_type, occurred_at,
+      work_mode, source, origin, metadata, created_at, deleted_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
     ON CONFLICT (id) DO NOTHING`,
     [
       punch.id,
       punch.company_id,
       punch.employee_user_id,
+      punch.actor_user_id,
       punch.event_type,
       punch.occurred_at,
       punch.work_mode,
       punch.source,
+      punch.origin,
       JSON.stringify(punch.metadata),
       punch.created_at,
       punch.deleted_at,

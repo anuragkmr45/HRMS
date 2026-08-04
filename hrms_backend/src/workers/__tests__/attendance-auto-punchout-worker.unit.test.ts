@@ -64,6 +64,42 @@ function user(store: MemoryDataStore, employeeCode: string): AuthUser {
   return found;
 }
 
+const forbiddenPayloadKeys = new Set([
+  "latitude",
+  "longitude",
+  "lat",
+  "lng",
+  "coordinates",
+  "coordinate",
+  "geometry",
+  "geography",
+  "location",
+  "location_evidence",
+  "accuracy",
+  "distance",
+  "altitude",
+  "raw_payload",
+  "request_snapshot",
+  "response_snapshot",
+  "metadata",
+]);
+
+function expectNoForbiddenPayloadKeys(value: unknown, path: string[] = []): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectNoForbiddenPayloadKeys(item, [...path, String(index)]));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = key.trim().toLowerCase().replaceAll("-", "_");
+    expect(
+      forbiddenPayloadKeys.has(normalized),
+      `Forbidden payload key ${[...path, key].join(".")}`,
+    ).toBe(false);
+    expectNoForbiddenPayloadKeys(nested, [...path, key]);
+  }
+}
+
 describe("AttendanceAutoPunchoutWorker", () => {
   it("closes forgotten open sessions for multiple active employees", async () => {
     const store = storeWithAutoPunchOut("18:30");
@@ -100,6 +136,20 @@ describe("AttendanceAutoPunchoutWorker", () => {
     expect(checkOuts.every((punch) => punch.source === "admin")).toBe(true);
     expect(checkOuts.every((punch) => punch.metadata.auto_punch_out === true)).toBe(true);
     expect(store.attendanceDayRecords.filter((record) => record.last_check_out === "2026-05-20T13:00:00.000Z")).toHaveLength(2);
+    const missingCheckoutEvents = store.outbox.filter((event) => event.event_type === "attendance.missing_checkout.detected");
+    expect(missingCheckoutEvents).toHaveLength(2);
+    expect(missingCheckoutEvents.map((event) => event.aggregate_id).sort()).toEqual(
+      checkOuts.map((punch) => punch.id).sort(),
+    );
+    for (const event of missingCheckoutEvents) {
+      expect(event.idempotency_key).toBe(`attendance.missing_checkout.detected:${event.aggregate_id}`);
+      expect(event.payload).toMatchObject({
+        schema_version: 1,
+        punch_event_id: event.aggregate_id,
+        origin: "system",
+      });
+      expectNoForbiddenPayloadKeys(event.payload);
+    }
   });
 
   it("ends an open break before auto punch-out", async () => {
@@ -142,6 +192,7 @@ describe("AttendanceAutoPunchoutWorker", () => {
       presence_state: "present",
       evidence_state: "complete"
     });
+    expect(store.outbox.filter((event) => event.event_type === "attendance.missing_checkout.detected")).toHaveLength(1);
   });
 
   it("is idempotent when the same due session is processed more than once", async () => {
@@ -162,6 +213,7 @@ describe("AttendanceAutoPunchoutWorker", () => {
     expect(first.closed_sessions).toBe(1);
     expect(second.closed_sessions).toBe(0);
     expect(store.attendancePunches.filter((punch) => punch.event_type === "check_out")).toHaveLength(1);
+    expect(store.outbox.filter((event) => event.event_type === "attendance.missing_checkout.detected")).toHaveLength(1);
   });
 
   it("leaves sessions open until the configured cutoff has passed", async () => {
@@ -320,6 +372,14 @@ describe("AttendanceAutoPunchoutWorker", () => {
       ]),
     );
     expect(store.outbox).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ payload: expect.objectContaining({ company_id: companyAId }) }),
+        expect.objectContaining({ payload: expect.objectContaining({ company_id: companyBId }) }),
+      ]),
+    );
+    const missingCheckoutEvents = store.outbox.filter((event) => event.event_type === "attendance.missing_checkout.detected");
+    expect(missingCheckoutEvents).toHaveLength(2);
+    expect(missingCheckoutEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ payload: expect.objectContaining({ company_id: companyAId }) }),
         expect.objectContaining({ payload: expect.objectContaining({ company_id: companyBId }) }),

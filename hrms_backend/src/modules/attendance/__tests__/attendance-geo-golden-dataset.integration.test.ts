@@ -692,7 +692,7 @@ async function expectGoldenCommandOutcome(
   expect(await mutationCounts(app)).toMatchObject({
     sessions: input.expectedStatus === 200 ? "1" : "0",
     punches: input.expectedStatus === 200 ? "1" : "0",
-    outbox: input.expectedStatus === 200 ? "1" : "0",
+    outbox: "1",
   });
 }
 
@@ -1270,7 +1270,7 @@ describe("attendance geo golden dataset", () => {
         valid_candidate_count: 0,
       },
     });
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
   });
 
   it("tenant-safe foreign geofence references are rejected by composite constraints", async () => {

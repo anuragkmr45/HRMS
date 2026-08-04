@@ -26,6 +26,14 @@ Version one is authenticated self-service only. The server derives company and a
 - No session, daily projection, outbox, payroll, or worker changes.
 - No frontend or mobile queue implementation.
 
+## Outbox Readiness
+
+Sprint 13 GEO-S13-008 adds the `attendance.provisional.recorded` outbox event contract only. This document still does not define an executable ingestion endpoint, and the event is not emitted by current ordinary attendance commands.
+
+The future producer belongs inside the future offline event-level ingestion transaction after one logical event is accepted provisionally with `verification_status=unverified` or `verification_status=review_required`. It must run only when the durable `client_event_id` check determines the logical event is not a replay. The future outbox identity is `aggregate_type=attendance`, `aggregate_id=attendance_event_id`, with a stable idempotency key derived from the accepted attendance event or authoritative provisional transition.
+
+The provisional event payload is an explicit allowlist: schema version, company and actor IDs from server context, subject employee ID, attendance event ID, optional command ID, source channel, verification status, provisional reason code, captured time, and server receipt time. It must not contain exact coordinates, raw location evidence, request snapshots, device envelopes, device secrets, tokens, authorization inputs, or raw client metadata.
+
 ## Request Envelope
 
 Top-level request fields:

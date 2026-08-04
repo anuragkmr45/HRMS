@@ -27,6 +27,25 @@ function headersWithIdempotency(
   };
 }
 
+function employeePunchRequest(
+  token: string,
+  command: Record<string, unknown>,
+  clientEventId = randomUUID(),
+): {
+  headers: Record<string, string>;
+  payload: Record<string, unknown>;
+} {
+  return {
+    headers: headersWithIdempotency(token, clientEventId),
+    payload: {
+      client_event_id: clientEventId,
+      captured_at: "2026-05-22T05:30:00.000Z",
+      device: null,
+      command,
+    },
+  };
+}
+
 function employeeCompanyId(app: TestApp, employeeUserId: string): string {
   const companyId = app.store.userSessionPreferences.find(
     (preference) => preference.user_id === employeeUserId,
@@ -261,6 +280,52 @@ async function mutationCounts(app: TestApp): Promise<Record<string, string>> {
   return counts.rows[0] ?? {};
 }
 
+const forbiddenPayloadKeys = new Set([
+  "latitude",
+  "longitude",
+  "lat",
+  "lng",
+  "coordinates",
+  "coordinate",
+  "geometry",
+  "geography",
+  "location",
+  "location_evidence",
+  "accuracy",
+  "distance",
+  "altitude",
+  "raw_payload",
+  "request_snapshot",
+  "response_snapshot",
+  "device_envelope",
+  "push_token",
+  "installation_id",
+  "installation_hash",
+  "attestation",
+  "fingerprint",
+  "authorization",
+  "session_token",
+  "ip_address",
+  "user_agent",
+  "metadata",
+]);
+
+function expectNoForbiddenPayloadKeys(value: unknown, path: string[] = []): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectNoForbiddenPayloadKeys(item, [...path, String(index)]));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = key.trim().toLowerCase().replaceAll("-", "_");
+    expect(
+      forbiddenPayloadKeys.has(normalized),
+      `Forbidden payload key ${[...path, key].join(".")}`,
+    ).toBe(false);
+    expectNoForbiddenPayloadKeys(nested, [...path, key]);
+  }
+}
+
 async function commandIdForIdempotencyKey(
   app: TestApp,
   idempotencyKey: string,
@@ -274,6 +339,31 @@ async function commandIdForIdempotencyKey(
   const commandId = result.rows[0]?.id;
   if (!commandId) throw new Error("Command execution fixture was not found.");
   return commandId;
+}
+
+async function geoRejectedOutboxRowsForCommand(
+  app: TestApp,
+  commandId: string,
+): Promise<Array<{
+  aggregate_id: string;
+  event_type: string;
+  idempotency_key: string;
+  payload: Record<string, unknown>;
+}>> {
+  return (await app.store.pgPool!.query<{
+    aggregate_id: string;
+    event_type: string;
+    idempotency_key: string;
+    payload: Record<string, unknown>;
+  }>(
+    `SELECT aggregate_id, event_type, idempotency_key, payload
+       FROM platform.outbox_events
+      WHERE aggregate_type = 'attendance'
+        AND event_type = 'attendance.geo.rejected'
+        AND payload ->> 'command_id' = $1
+      ORDER BY id`,
+    [commandId],
+  )).rows;
 }
 
 async function decisionReasonCodesForCommand(
@@ -333,14 +423,16 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       config: { effectiveGeofenceId: geofenceId },
     });
 
-    const idempotencyKey = `geo-s12-005-missing-${randomUUID()}`;
-    const requestHeaders = headersWithIdempotency(employee.token, idempotencyKey);
-    const payload = { event_type: "check_in", work_mode: "office", source: "web", metadata: {} };
+    const idempotencyKey = randomUUID();
+    const request = employeePunchRequest(
+      employee.token,
+      { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
+      idempotencyKey,
+    );
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: requestHeaders,
-      payload,
+      ...request,
     });
 
     expect(response.statusCode).toBe(409);
@@ -352,21 +444,117 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
         allowed: false,
       },
     });
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
     const commandId = await commandIdForIdempotencyKey(app, idempotencyKey);
     let reasonCodes = await decisionReasonCodesForCommand(app, commandId);
     expect(reasonCodes).toEqual(["geo_evidence_missing"]);
     expectUniqueReasonCodes(reasonCodes);
+    let outboxRows = await geoRejectedOutboxRowsForCommand(app, commandId);
+    expect(outboxRows).toHaveLength(1);
+    expect(outboxRows[0]).toMatchObject({
+      event_type: "attendance.geo.rejected",
+      idempotency_key: `attendance.geo.rejected:${outboxRows[0]!.aggregate_id}`,
+      payload: expect.objectContaining({
+        schema_version: 1,
+        company_id: companyId,
+        actor_user_id: employee.user.id,
+        subject_employee_user_id: employee.user.id,
+        command_id: commandId,
+        decision_id: outboxRows[0]!.aggregate_id,
+        source_channel: "web",
+        selected_action: "deny",
+        factual_outcome: "missing",
+        reason_code: "geo_evidence_missing",
+        fallback_used: false,
+      }),
+    });
+    expectNoForbiddenPayloadKeys(outboxRows[0]!.payload);
 
     const replay = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: requestHeaders,
-      payload,
+      ...request,
     });
     expect(replay.statusCode).toBe(409);
     reasonCodes = await decisionReasonCodesForCommand(app, commandId);
     expect(reasonCodes).toEqual(["geo_evidence_missing"]);
+    outboxRows = await geoRejectedOutboxRowsForCommand(app, commandId);
+    expect(outboxRows).toHaveLength(1);
+  });
+
+  it("rolls back a denied geo command when rejected-geo outbox insertion fails", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const geofenceId = await createPublishedPolygonGeofence(app, companyId);
+    await assignAttendancePolicy(app, {
+      companyId,
+      employeeUserId: employee.user.id,
+      config: { effectiveGeofenceId: geofenceId },
+    });
+    const pool = app.store.pgPool!;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION platform.fail_geo_rejected_outbox_test_insert()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'geo rejected outbox test failure';
+      END;
+      $$;
+      CREATE TRIGGER geo_rejected_outbox_test_failure_trg
+      BEFORE INSERT ON platform.outbox_events
+      FOR EACH ROW
+      WHEN (NEW.event_type = 'attendance.geo.rejected')
+      EXECUTE FUNCTION platform.fail_geo_rejected_outbox_test_insert();
+    `);
+    try {
+      const idempotencyKey = randomUUID();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/attendance/punches",
+        ...employeePunchRequest(
+          employee.token,
+          { event_type: "check_in", work_mode: "office", source: "web", metadata: {} },
+          idempotencyKey,
+        ),
+      });
+      expect(response.statusCode).toBe(500);
+      const counts = await pool.query<{
+        commands: string;
+        command_decisions: string;
+        audit_decisions: string;
+        evidence: string;
+        sessions: string;
+        punches: string;
+        outbox: string;
+        completed_keys: string;
+      }>(
+        `SELECT
+          (SELECT count(*) FROM attendance.command_executions) AS commands,
+          (SELECT count(*) FROM attendance.command_decisions) AS command_decisions,
+          (SELECT count(*) FROM attendance.attendance_decisions) AS audit_decisions,
+          (SELECT count(*) FROM attendance.attendance_events) AS evidence,
+          (SELECT count(*) FROM attendance.sessions) AS sessions,
+          (SELECT count(*) FROM attendance.punch_events) AS punches,
+          (SELECT count(*) FROM platform.outbox_events WHERE aggregate_type = 'attendance') AS outbox,
+          (SELECT count(*) FROM platform.idempotency_keys WHERE status = 'completed' AND scope LIKE 'attendance.%') AS completed_keys`,
+      );
+      expect(counts.rows[0]).toEqual({
+        commands: "0",
+        command_decisions: "0",
+        audit_decisions: "0",
+        evidence: "0",
+        sessions: "0",
+        punches: "0",
+        outbox: "0",
+        completed_keys: "0",
+      });
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS geo_rejected_outbox_test_failure_trg ON platform.outbox_events;
+        DROP FUNCTION IF EXISTS platform.fail_geo_rejected_outbox_test_insert();
+      `);
+    }
   });
 
   it.each([
@@ -382,20 +570,22 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       config: { effectiveGeofenceId: geofenceId },
     });
 
-    const idempotencyKey = `geo-s12-005-${permissionState}-${randomUUID()}`;
-    const requestHeaders = headersWithIdempotency(employee.token, idempotencyKey);
-    const payload = {
-      event_type: "check_in",
-      work_mode: "office",
-      source: "web",
-      metadata: {},
-      location: { permission_state: permissionState, provider: "browser" },
-    };
+    const idempotencyKey = randomUUID();
+    const request = employeePunchRequest(
+      employee.token,
+      {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: { permission_state: permissionState, provider: "browser" },
+      },
+      idempotencyKey,
+    );
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: requestHeaders,
-      payload,
+      ...request,
     });
 
     expect(response.statusCode).toBe(409);
@@ -421,8 +611,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const replay = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: requestHeaders,
-      payload,
+      ...request,
     });
     expect(replay.statusCode).toBe(409);
     reasonCodes = await decisionReasonCodesForCommand(app, commandId);
@@ -444,14 +633,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: { latitude: 12.972, longitude: 77.595 },
         location,
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(200);
@@ -474,7 +662,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       config: { effectiveGeofenceId: geofenceId },
     });
 
-    const checkInKey = `geo-s12-007-web-geo-in-${randomUUID()}`;
+    const checkInKey = randomUUID();
     const checkInPayload = {
       event_type: "check_in",
       work_mode: "office",
@@ -482,11 +670,11 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       metadata: { browser: "desktop" },
       location: coordinateLocation(12.972, 77.595),
     };
+    const checkInRequest = employeePunchRequest(employee.token, checkInPayload, checkInKey);
     const checkIn = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, checkInKey),
-      payload: checkInPayload,
+      ...checkInRequest,
     });
     expect(checkIn.statusCode).toBe(200);
     expect(checkIn.json().punch.source).toBe("web_geo");
@@ -499,8 +687,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const replay = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, checkInKey),
-      payload: checkInPayload,
+      ...checkInRequest,
     });
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toEqual(checkIn.json());
@@ -508,14 +695,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const checkOut = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_out",
         work_mode: "office",
         source: "web_geo",
         metadata: {},
         location: coordinateLocation(12.972, 77.595),
-      },
+      }),
     });
     expect(checkOut.statusCode).toBe(200);
     expect(checkOut.json().punch.source).toBe("web_geo");
@@ -576,19 +762,18 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web_geo",
         metadata: {},
         location: { permission_state: permissionState, provider: "browser" },
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(409);
     expect(response.json().details.reason_code).toBe(reasonCode);
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
     const persisted = await app.store.pgPool!.query<{
       source_channel: string | null;
       permission_state: string;
@@ -626,14 +811,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
         location,
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(statusCode);
@@ -663,14 +847,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
         location: coordinateLocation(12.971, 77.595),
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(409);
@@ -698,14 +881,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
         location: coordinateLocation(12.972, 77.595),
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(200);
@@ -736,8 +918,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const stale = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
@@ -746,7 +927,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
           ...coordinateLocation(12.972, 77.595),
           captured_at: new Date(Date.now() - 120_000).toISOString(),
         },
-      },
+      }),
     });
 
     expect(stale.statusCode).toBe(409);
@@ -774,14 +955,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const inaccurate = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
         location: coordinateLocation(12.972, 77.595),
-      },
+      }),
     });
 
     expect(inaccurate.statusCode).toBe(409);
@@ -813,8 +993,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const allowed = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: { event_type: "check_in", work_mode: "office", source: "web", metadata: {}, location: outside },
+      ...employeePunchRequest(employee.token, {
+        event_type: "check_in",
+        work_mode: "office",
+        source: "web",
+        metadata: {},
+        location: outside,
+      }),
     });
     expect(allowed.statusCode).toBe(200);
     expect(allowed.json().geo_policy).toMatchObject({
@@ -830,12 +1015,21 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       employeeUserId: employee.user.id,
       config: { effectiveGeofenceId: denyGeofenceId, outsideFenceAction: "deny" },
     });
-    const denyIdempotencyKey = `geo-s12-005-outside-deny-${randomUUID()}`;
+    const denyIdempotencyKey = randomUUID();
     const denied = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, denyIdempotencyKey),
-      payload: { event_type: "check_in", work_mode: "office", source: "web", metadata: {}, location: outside },
+      ...employeePunchRequest(
+        employee.token,
+        {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+          location: outside,
+        },
+        denyIdempotencyKey,
+      ),
     });
     expect(denied.statusCode).toBe(409);
     expect(denied.json().details.reason_code).toBe("geo_outside_fence");
@@ -843,7 +1037,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const denyReasonCodes = await decisionReasonCodesForCommand(app, denyCommandId);
     expect(denyReasonCodes).toEqual(["geo_outside_fence"]);
     expectUniqueReasonCodes(denyReasonCodes);
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
 
     await clearGeoPolicyFixtures(app);
     const fallbackGeofenceId = await createPublishedPolygonGeofence(app, companyId);
@@ -856,12 +1050,21 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
         fallbackApprovalMode: "approval_required",
       },
     });
-    const fallbackIdempotencyKey = `geo-s12-005-outside-fallback-${randomUUID()}`;
+    const fallbackIdempotencyKey = randomUUID();
     const fallback = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, fallbackIdempotencyKey),
-      payload: { event_type: "check_in", work_mode: "office", source: "web", metadata: {}, location: outside },
+      ...employeePunchRequest(
+        employee.token,
+        {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+          location: outside,
+        },
+        fallbackIdempotencyKey,
+      ),
     });
     expect(fallback.statusCode).toBe(200);
     expect(fallback.json().geo_policy).toMatchObject({
@@ -891,18 +1094,21 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
       },
     });
 
-    const noFenceIdempotencyKey = `geo-s12-005-no-fence-${randomUUID()}`;
+    const noFenceIdempotencyKey = randomUUID();
     const noFence = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, noFenceIdempotencyKey),
-      payload: {
-        event_type: "check_in",
-        work_mode: "office",
-        source: "web",
-        metadata: {},
-        location: coordinateLocation(12.972, 77.595),
-      },
+      ...employeePunchRequest(
+        employee.token,
+        {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+          location: coordinateLocation(12.972, 77.595),
+        },
+        noFenceIdempotencyKey,
+      ),
     });
     expect(noFence.statusCode).toBe(409);
     expect(noFence.json().details.reason_code).toBe("geo_fence_not_configured");
@@ -924,18 +1130,21 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
         fallbackApprovalMode: "disabled",
       },
     });
-    const fallbackDisabledIdempotencyKey = `geo-s12-005-fallback-disabled-${randomUUID()}`;
+    const fallbackDisabledIdempotencyKey = randomUUID();
     const fallbackDisabled = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headersWithIdempotency(employee.token, fallbackDisabledIdempotencyKey),
-      payload: {
-        event_type: "check_in",
-        work_mode: "office",
-        source: "web",
-        metadata: {},
-        location: coordinateLocation(12.974, 77.597),
-      },
+      ...employeePunchRequest(
+        employee.token,
+        {
+          event_type: "check_in",
+          work_mode: "office",
+          source: "web",
+          metadata: {},
+          location: coordinateLocation(12.974, 77.597),
+        },
+        fallbackDisabledIdempotencyKey,
+      ),
     });
     expect(fallbackDisabled.statusCode).toBe(409);
     expect(fallbackDisabled.json().details.geo_policy).toMatchObject({
@@ -983,14 +1192,13 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance/punches",
-      headers: headers(employee.token),
-      payload: {
+      ...employeePunchRequest(employee.token, {
         event_type: "check_in",
         work_mode: "office",
         source: "web",
         metadata: {},
         location: coordinateLocation(12.972, 77.595),
-      },
+      }),
     });
 
     expect(response.statusCode).toBe(409);
@@ -1001,7 +1209,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
         allowed: false,
       },
     });
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
   });
 
   it("sanitizes legacy denied or unavailable coordinate rows before adding the retention permission constraint", async () => {
@@ -1116,7 +1324,7 @@ describe("PostgreSQL attendance geo policy enforcement", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().details.reason_code).toBe("geo_evidence_missing");
-    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "0" });
+    expect(await mutationCounts(app)).toMatchObject({ sessions: "0", punches: "0", outbox: "1" });
   });
 
   it("keeps historical corrections outside live geo enforcement", async () => {

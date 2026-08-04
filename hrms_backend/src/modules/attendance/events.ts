@@ -1,9 +1,21 @@
-import type { AttendancePunchEventType, AttendancePunchSourceChannel, UUID } from "#shared";
+import type {
+  AttendanceGeoDecisionReasonCode,
+  AttendanceGeoFactualOutcome,
+  AttendanceGeoPolicyAction,
+  AttendanceOfflineSyncReasonCode,
+  AttendanceOfflineVerificationStatus,
+  AttendancePunchEventType,
+  AttendancePunchSourceChannel,
+  UUID,
+} from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import { appendOutboxEvent } from "../expenses/events.js";
 
 export const attendanceEvents = {
   PunchRecorded: "attendance.punch.recorded",
+  ProvisionalRecorded: "attendance.provisional.recorded",
+  GeoRejected: "attendance.geo.rejected",
+  MissingCheckoutDetected: "attendance.missing_checkout.detected",
   RegularizationSubmitted: "attendance.regularization.submitted",
   RegularizationApproved: "attendance.regularization.approved",
   RegularizationReturned: "attendance.regularization.returned",
@@ -35,6 +47,38 @@ export type AttendancePunchRecordedPayload = AttendanceEventBase & {
   day_status: string | null;
 };
 
+export type AttendanceProvisionalRecordedPayload = AttendanceEventBase & {
+  subject_employee_user_id: UUID;
+  attendance_event_id: UUID;
+  command_id: UUID | null;
+  source_channel: AttendancePunchSourceChannel;
+  verification_status: AttendanceOfflineVerificationStatus;
+  provisional_reason_code: AttendanceOfflineSyncReasonCode;
+  captured_at: string;
+  received_at: string;
+};
+
+export type AttendanceGeoRejectedPayload = AttendanceEventBase & {
+  subject_employee_user_id: UUID;
+  command_id: UUID;
+  decision_id: UUID;
+  source_channel: AttendancePunchSourceChannel;
+  selected_action: AttendanceGeoPolicyAction;
+  factual_outcome: AttendanceGeoFactualOutcome;
+  reason_code: AttendanceGeoDecisionReasonCode;
+  fallback_used: boolean;
+  decided_at: string;
+};
+
+export type AttendanceMissingCheckoutDetectedPayload = AttendanceEventBase & {
+  subject_employee_user_id: UUID;
+  attendance_session_id: UUID | null;
+  punch_event_id: UUID;
+  work_date: string;
+  occurred_at: string;
+  origin: "system";
+};
+
 export type AttendanceRegularizationSubmittedPayload = AttendanceEventBase & {
   subject_employee_user_id: UUID;
   regularization_request_id: UUID;
@@ -62,6 +106,9 @@ export type AttendanceExportRequestedPayload = AttendanceEventBase & {
 
 export type AttendanceOutboxPayload =
   | AttendancePunchRecordedPayload
+  | AttendanceProvisionalRecordedPayload
+  | AttendanceGeoRejectedPayload
+  | AttendanceMissingCheckoutDetectedPayload
   | AttendanceRegularizationSubmittedPayload
   | AttendanceRegularizationDecisionPayload
   | AttendanceExportRequestedPayload;
@@ -111,6 +158,102 @@ export function buildPunchRecordedEvent(input: {
     eventType: attendanceEvents.PunchRecorded,
     payload,
     idempotencyKey: `attendance.punch.recorded:${input.punchEventId}`,
+  };
+}
+
+export function buildProvisionalRecordedEvent(input: {
+  companyId: UUID;
+  actorUserId: UUID;
+  subjectEmployeeUserId: UUID;
+  attendanceEventId: UUID;
+  commandId?: UUID | null;
+  sourceChannel: AttendanceProvisionalRecordedPayload["source_channel"];
+  verificationStatus: AttendanceProvisionalRecordedPayload["verification_status"];
+  provisionalReasonCode: AttendanceProvisionalRecordedPayload["provisional_reason_code"];
+  capturedAt: string;
+  receivedAt: string;
+}): AttendanceOutboxEventContract {
+  const payload: AttendanceProvisionalRecordedPayload = {
+    schema_version: 1,
+    company_id: input.companyId,
+    actor_user_id: input.actorUserId,
+    subject_employee_user_id: input.subjectEmployeeUserId,
+    attendance_event_id: input.attendanceEventId,
+    command_id: input.commandId ?? null,
+    source_channel: input.sourceChannel,
+    verification_status: input.verificationStatus,
+    provisional_reason_code: input.provisionalReasonCode,
+    captured_at: input.capturedAt,
+    received_at: input.receivedAt,
+  };
+  return {
+    aggregateId: input.attendanceEventId,
+    eventType: attendanceEvents.ProvisionalRecorded,
+    payload,
+    idempotencyKey: `attendance.provisional.recorded:${input.attendanceEventId}`,
+  };
+}
+
+export function buildGeoRejectedEvent(input: {
+  companyId: UUID;
+  actorUserId: UUID;
+  subjectEmployeeUserId: UUID;
+  commandId: UUID;
+  decisionId: UUID;
+  sourceChannel: AttendanceGeoRejectedPayload["source_channel"];
+  selectedAction: AttendanceGeoRejectedPayload["selected_action"];
+  factualOutcome: AttendanceGeoRejectedPayload["factual_outcome"];
+  reasonCode: AttendanceGeoRejectedPayload["reason_code"];
+  fallbackUsed: boolean;
+  decidedAt: string;
+}): AttendanceOutboxEventContract {
+  const payload: AttendanceGeoRejectedPayload = {
+    schema_version: 1,
+    company_id: input.companyId,
+    actor_user_id: input.actorUserId,
+    subject_employee_user_id: input.subjectEmployeeUserId,
+    command_id: input.commandId,
+    decision_id: input.decisionId,
+    source_channel: input.sourceChannel,
+    selected_action: input.selectedAction,
+    factual_outcome: input.factualOutcome,
+    reason_code: input.reasonCode,
+    fallback_used: input.fallbackUsed,
+    decided_at: input.decidedAt,
+  };
+  return {
+    aggregateId: input.decisionId,
+    eventType: attendanceEvents.GeoRejected,
+    payload,
+    idempotencyKey: `attendance.geo.rejected:${input.decisionId}`,
+  };
+}
+
+export function buildMissingCheckoutDetectedEvent(input: {
+  companyId: UUID;
+  actorUserId: UUID;
+  subjectEmployeeUserId: UUID;
+  attendanceSessionId?: UUID | null;
+  punchEventId: UUID;
+  workDate: string;
+  occurredAt: string;
+}): AttendanceOutboxEventContract {
+  const payload: AttendanceMissingCheckoutDetectedPayload = {
+    schema_version: 1,
+    company_id: input.companyId,
+    actor_user_id: input.actorUserId,
+    subject_employee_user_id: input.subjectEmployeeUserId,
+    attendance_session_id: input.attendanceSessionId ?? null,
+    punch_event_id: input.punchEventId,
+    work_date: input.workDate,
+    occurred_at: input.occurredAt,
+    origin: "system",
+  };
+  return {
+    aggregateId: input.punchEventId,
+    eventType: attendanceEvents.MissingCheckoutDetected,
+    payload,
+    idempotencyKey: `attendance.missing_checkout.detected:${input.punchEventId}`,
   };
 }
 

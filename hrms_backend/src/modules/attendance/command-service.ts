@@ -24,6 +24,7 @@ import {
   type AttendanceCommandExecutionRecord,
 } from "./command-repository.js";
 import {
+  buildGeoRejectedEvent,
   buildPunchRecordedEvent,
   buildRegularizationDecisionEvent,
 } from "./events.js";
@@ -32,8 +33,10 @@ import {
   type EffectiveAttendancePolicy,
 } from "./policy-config.js";
 import {
+  AttendanceGeoDecisionReasonCodes,
   evaluateAttendanceGeoPolicy,
   type AttendanceGeoDecision,
+  type AttendanceGeoDecisionReasonCode,
   type AttendanceGeoEvidenceWideEvaluation,
   type AttendanceGeoNoEffectiveEvaluation,
 } from "./geo-policy.js";
@@ -239,6 +242,28 @@ function geoDecisionSnapshot(decision: AttendanceGeoDecision): Record<string, un
     geofence_canonical_hash: decision.geofence?.canonicalHash ?? null,
     evaluation: decision.evaluation,
   };
+}
+
+const geoRejectedReasonCodes = new Set<AttendanceGeoDecisionReasonCode>([
+  AttendanceGeoDecisionReasonCodes.GeoEvidenceMissing,
+  AttendanceGeoDecisionReasonCodes.GeoPermissionDenied,
+  AttendanceGeoDecisionReasonCodes.GeoLocationUnavailable,
+  AttendanceGeoDecisionReasonCodes.GeoFenceNotConfigured,
+  AttendanceGeoDecisionReasonCodes.GeoOutsideFence,
+  AttendanceGeoDecisionReasonCodes.GeoBoundaryUncertain,
+  AttendanceGeoDecisionReasonCodes.GeoStaleEvidence,
+  AttendanceGeoDecisionReasonCodes.GeoAccuracyExceeded,
+  AttendanceGeoDecisionReasonCodes.GeoPolicyModeUnknown,
+  AttendanceGeoDecisionReasonCodes.GeoActionUnknown,
+  AttendanceGeoDecisionReasonCodes.GeoManualFallbackDisallowed,
+]);
+
+function isRecognizedGeoRejectedDecision(decision: AttendanceGeoDecision): boolean {
+  return !decision.allowed && geoRejectedReasonCodes.has(decision.reasonCode);
+}
+
+function isoDateTime(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
 }
 
 function evidenceWideGeoEvaluation(input: {
@@ -736,6 +761,23 @@ export class AttendanceCommandService {
               punch_policy: policy,
               geo_policy: geoDecisionSnapshot(geoDecision),
             };
+            if (isRecognizedGeoRejectedDecision(geoDecision)) {
+              await tx.insertOutboxEvent(
+                buildGeoRejectedEvent({
+                  companyId: input.companyId,
+                  actorUserId: input.actor.id,
+                  subjectEmployeeUserId,
+                  commandId: command.id,
+                  decisionId: decision.id,
+                  sourceChannel: commandInput.source,
+                  selectedAction: geoDecision.selectedAction,
+                  factualOutcome: geoDecision.factualOutcome,
+                  reasonCode: geoDecision.reasonCode,
+                  fallbackUsed: geoDecision.fallbackUsed,
+                  decidedAt: isoDateTime(decision.created_at),
+                }),
+              );
+            }
             const responseHash = canonicalAttendanceResponseHash(response);
             await tx.completeCommand({
               commandExecutionId: command.id,
