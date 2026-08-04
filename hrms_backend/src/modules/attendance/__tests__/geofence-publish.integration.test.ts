@@ -426,6 +426,34 @@ describe("geofence publish workflow", () => {
       effectiveUntil: "2026-08-04T00:00:00.000Z",
     });
     expect(crossCompanyPublish.statusCode).toBe(404);
+
+    const siblingGeofence = await createGeofence(app, { companyId });
+    const siblingVersionPublish = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/geofences/${siblingGeofence.geofenceId}/versions/${inCompany.versionId}/publish`,
+      headers: authHeader(admin.token),
+      payload: {
+        effectiveFrom: "2026-08-05T00:00:00.000Z",
+        effectiveUntil: "2026-08-06T00:00:00.000Z",
+      },
+    });
+    expect(siblingVersionPublish.statusCode).toBe(404);
+    const pointers = await app.store.pgPool!.query<{
+      id: string;
+      current_published_version_id: string | null;
+    }>(
+      `SELECT id, current_published_version_id
+       FROM attendance.geofences
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id`,
+      [[inCompany.geofenceId, siblingGeofence.geofenceId]],
+    );
+    expect(pointers.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: inCompany.geofenceId, current_published_version_id: null }),
+        expect.objectContaining({ id: siblingGeofence.geofenceId, current_published_version_id: null }),
+      ]),
+    );
   });
 
   it("allows one concurrent overlapping publish to succeed and rolls back the other", async () => {

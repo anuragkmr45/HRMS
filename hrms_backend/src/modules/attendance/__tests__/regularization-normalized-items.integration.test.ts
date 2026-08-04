@@ -75,6 +75,50 @@ describe("regularization normalized items and actions", () => {
     )).rows;
   }
 
+  function companyIdFor(userId: string): string {
+    const companyId = app.store.userSessionPreferences.find(
+      (preference) => preference.user_id === userId,
+    )?.company_id;
+    if (!companyId) throw new Error("Company fixture was not found.");
+    return companyId;
+  }
+
+  async function insertPunchFixture(input: {
+    id?: string;
+    companyId: string;
+    employeeUserId: string;
+    actorUserId?: string;
+    eventType?: "check_in" | "check_out";
+    occurredAt: string;
+  }): Promise<string> {
+    const punchId = input.id ?? randomUUID();
+    const actorUserId = input.actorUserId ?? input.employeeUserId;
+    const eventType = input.eventType ?? "check_in";
+    await app.store.pgPool!.query(
+      `INSERT INTO attendance.punch_events (
+         id, company_id, employee_user_id, actor_user_id, event_type, occurred_at,
+         work_mode, source, origin, metadata
+       ) VALUES ($1,$2,$3,$4,$5,$6,'office','web','employee_manual_now','{}')`,
+      [punchId, input.companyId, input.employeeUserId, actorUserId, eventType, input.occurredAt],
+    );
+    app.store.attendancePunches.push({
+      id: punchId,
+      company_id: input.companyId,
+      employee_user_id: input.employeeUserId,
+      actor_user_id: actorUserId,
+      event_type: eventType,
+      occurred_at: input.occurredAt,
+      work_mode: "office",
+      source: "web",
+      origin: "employee_manual_now",
+      regularization_request_id: null,
+      metadata: {},
+      created_at: new Date().toISOString(),
+      deleted_at: null,
+    });
+    return punchId;
+  }
+
   beforeEach(async () => {
     app = await buildRealApp();
     await app.ready();
@@ -470,6 +514,175 @@ describe("regularization normalized items and actions", () => {
        WHERE aggregate_id = $1 AND event_type = 'attendance.regularization.approved'`,
       [request.json().id],
     )).rows[0].count).toBe(1);
+  });
+
+  it("rejects non-approver and self regularization decisions without side effects", async () => {
+    const employee = await loginAs(app, "E1");
+    const peer = await loginAs(app, "E2");
+    const request = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-24",
+        reason: "Unauthorized decision check",
+        items: [{ operation: "add", event_type: "check_in", occurred_at: "2026-05-24T03:30:00.000Z" }],
+      },
+    });
+    expect(request.statusCode, request.body).toBe(200);
+
+    const peerDecision = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(peer.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(peerDecision.statusCode).toBe(403);
+
+    const selfDecision = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(employee.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(selfDecision.statusCode).toBe(403);
+
+    const pool = app.store.pgPool!;
+    expect((await pool.query(
+      `SELECT status, version FROM attendance.regularization_requests WHERE id = $1`,
+      [request.json().id],
+    )).rows[0]).toMatchObject({ status: "pending", version: 1 });
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM attendance.regularization_actions
+       WHERE regularization_request_id = $1 AND action_kind <> 'submitted'`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM attendance.punch_events
+       WHERE regularization_request_id = $1`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM platform.outbox_events
+       WHERE aggregate_id = $1 AND event_type = 'attendance.regularization.approved'`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
+  });
+
+  it("rejects regularization items targeting another employee or company before creating a request", async () => {
+    const employee = await loginAs(app, "E1");
+    const otherEmployee = await loginAs(app, "E2");
+    const companyId = companyIdFor(employee.user.id);
+    const otherEmployeePunchId = await insertPunchFixture({
+      companyId,
+      employeeUserId: otherEmployee.user.id,
+      occurredAt: "2026-05-25T03:30:00.000Z",
+    });
+    const foreignCompanyPunchId = await insertPunchFixture({
+      companyId: randomUUID(),
+      employeeUserId: employee.user.id,
+      occurredAt: "2026-05-26T03:30:00.000Z",
+    });
+    const outboxBefore = app.store.outbox.length;
+
+    const otherEmployeeTarget = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-25",
+        reason: "Target another employee",
+        items: [{
+          operation: "replace",
+          target_punch_event_id: otherEmployeePunchId,
+          event_type: "check_in",
+          occurred_at: "2026-05-25T04:00:00.000Z",
+        }],
+      },
+    });
+    expect(otherEmployeeTarget.statusCode).toBe(400);
+    expect(otherEmployeeTarget.body).toContain("Target punch does not belong to the regularization employee.");
+
+    const foreignCompanyTarget = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-26",
+        reason: "Target foreign company punch",
+        items: [{
+          operation: "replace",
+          target_punch_event_id: foreignCompanyPunchId,
+          event_type: "check_in",
+          occurred_at: "2026-05-26T04:00:00.000Z",
+        }],
+      },
+    });
+    expect(foreignCompanyTarget.statusCode).toBe(400);
+    expect(foreignCompanyTarget.body).toContain("Target punch does not belong to the active company.");
+    expect(app.store.outbox).toHaveLength(outboxBefore);
+  });
+
+  it("authorizes regularization decisions against the locked database row", async () => {
+    const employee = await loginAs(app, "E1");
+    const manager = await loginAs(app, "D1");
+    const peer = await loginAs(app, "E2");
+    const request = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: "2026-05-27",
+        reason: "Approver race check",
+        items: [{ operation: "add", event_type: "check_in", occurred_at: "2026-05-27T03:30:00.000Z" }],
+      },
+    });
+    expect(request.statusCode, request.body).toBe(200);
+    expect(app.store.attendanceRegularizations.find(
+      (candidate) => candidate.id === request.json().id,
+    )?.current_approver_user_id).toBe(manager.user.id);
+
+    await app.store.pgPool!.query(
+      `UPDATE attendance.regularization_requests
+          SET current_approver_user_id = $1
+        WHERE id = $2`,
+      [peer.user.id, request.json().id],
+    );
+
+    const denied = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(denied.statusCode, denied.body).toBe(403);
+
+    const pool = app.store.pgPool!;
+    expect((await pool.query(
+      `SELECT status, version, current_approver_user_id
+         FROM attendance.regularization_requests
+        WHERE id = $1`,
+      [request.json().id],
+    )).rows[0]).toMatchObject({
+      status: "pending",
+      version: 1,
+      current_approver_user_id: peer.user.id,
+    });
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM attendance.regularization_actions
+       WHERE regularization_request_id = $1 AND action_kind = 'approved'`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM attendance.punch_events
+       WHERE regularization_request_id = $1`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM platform.outbox_events
+       WHERE aggregate_id = $1 AND event_type = 'attendance.regularization.approved'`,
+      [request.json().id],
+    )).rows[0].count).toBe(0);
   });
 
   it("allows only one concurrent correction across requests targeting the same punch", async () => {

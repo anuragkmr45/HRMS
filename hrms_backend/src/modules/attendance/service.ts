@@ -1306,9 +1306,12 @@ export class AttendanceService {
       remarks: input.remarks?.trim() ?? null,
       decision: input.decision,
       timeZone,
-      // Re-evaluate authorization after the database row is locked. The
-      // request snapshot is protected by its expected version and lock.
-      authorize: () => assertCanDecideRegularization(actor, current),
+      // Re-evaluate authorization against the row locked inside the mutation
+      // transaction, so approver changes cannot race the decision side effects.
+      authorize: (locked) => assertCanDecideRegularization(actor, {
+        employee_user_id: locked.employee_user_id,
+        current_approver_user_id: locked.current_approver_user_id,
+      }),
     });
     const nextStatus = input.decision === "approve"
       ? AttendanceRegularizationStatuses.Approved

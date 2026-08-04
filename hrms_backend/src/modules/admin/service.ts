@@ -70,6 +70,7 @@ import {
   assertCanReadAdminAuditLog,
 } from "./policy.js";
 import { badRequest, conflict, notFound } from "../../platform/errors.js";
+import { resolveActiveCompanyMembershipContext } from "../../platform/company-membership-context.js";
 import { DocumentService } from "../documents/service.js";
 
 export interface CompanyLogoUploadInput {
@@ -263,9 +264,9 @@ export class AdminService {
     actor: AuthUser,
     query: AdminPoliciesQuery,
   ): AdminPolicyListResponse {
+    const companyId = this.activeCompanyIdForActor(actor, "admin.policies.list");
     assertCanManagePolicySettings(actor);
     const moduleFilter = query.module?.trim().toLowerCase();
-    const companyId = this.companyIdForActor(actor);
     const policies = this.repository
       .listAdminPolicies(companyId)
       .filter(
@@ -398,8 +399,8 @@ export class AdminService {
     policyKey: AdminPolicyKey,
     input: AdminPolicyUpdateInput,
   ): Promise<AdminPolicyMutationResponse> {
+    const companyId = this.activeCompanyIdForActor(actor, "admin.policies.update");
     assertCanManagePolicySettings(actor);
-    const companyId = this.companyIdForActor(actor);
     const current = this.repository.adminPolicyByKey(policyKey, companyId);
     const config = input.config
       ? normalizeAdminPolicyConfig(policyKey, current.config, input.config)
@@ -942,6 +943,14 @@ export class AdminService {
         (preference) => preference.user_id === actor.id,
       )?.company_id ?? null
     );
+  }
+
+  private activeCompanyIdForActor(actor: AuthUser, operation: string): string {
+    return resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      operation,
+      requireActiveEmployment: true,
+    }).companyId;
   }
 
   private userBelongsToCompany(
@@ -1985,6 +1994,7 @@ function normalizeAdminPolicyConfig(
       next[key] = value;
     }
   }
+
   if (policyKey === "attendance") {
     const classes = next.coordinateRetentionClasses;
     const defaultClass = next.defaultCoordinateRetentionClass;

@@ -156,6 +156,58 @@ describe("admin policy settings", () => {
     ).toEqual(["leave"]);
   });
 
+  it("fails closed for missing or stale company context before policy read or update side effects", async () => {
+    const admin = await loginAs(app, "ADM");
+    const preference = app.store.userSessionPreferences.find(
+      (candidate) => candidate.user_id === admin.user.id,
+    );
+    if (!preference) throw new Error("Admin session preference fixture is unavailable.");
+    const originalCompanyId = preference.company_id;
+    const outboxBefore = app.store.outbox.length;
+
+    preference.company_id = null;
+    const nullContextList = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(nullContextList.statusCode).toBe(400);
+
+    const nullContextUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: { expected_version: 1, config: { graceMinutes: 20 } },
+    });
+    expect(nullContextUpdate.statusCode).toBe(400);
+
+    preference.company_id = randomUUID();
+    const staleContextList = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(staleContextList.statusCode).toBe(400);
+
+    const staleContextUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: { expected_version: 1, config: { graceMinutes: 25 } },
+    });
+    expect(staleContextUpdate.statusCode).toBe(400);
+    expect(app.store.outbox).toHaveLength(outboxBefore);
+
+    preference.company_id = originalCompanyId;
+    const restored = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().versions.attendance).toBe(1);
+  });
+
   it("updates policy config with OCC and validation", async () => {
     const admin = await loginAs(app, "ADM");
 

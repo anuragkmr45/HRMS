@@ -1208,7 +1208,13 @@ export class AttendanceCommandService {
     remarks: string | null;
     decision: "approve" | "reject" | "return";
     timeZone: string;
-    authorize: () => void;
+    authorize: (request: {
+      company_id: UUID;
+      employee_user_id: UUID;
+      current_approver_user_id: UUID | null;
+      status: string;
+      version: number;
+    }) => void;
   }): Promise<{
     version: number;
     decidedAt: string;
@@ -1229,8 +1235,8 @@ export class AttendanceCommandService {
     if (!pool) throw new Error("PostgreSQL attendance commands require a configured pgPool.");
     return new PostgresAttendanceCommandRepository(pool).transaction(async (tx) => {
       const locked = (await tx.query<{
-        company_id: UUID; employee_user_id: UUID; status: string; version: number;
-      }>(`SELECT company_id, employee_user_id, status, version
+        company_id: UUID; employee_user_id: UUID; current_approver_user_id: UUID | null; status: string; version: number;
+      }>(`SELECT company_id, employee_user_id, current_approver_user_id, status, version
           FROM attendance.regularization_requests
           WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL FOR UPDATE`,
         [input.regularizationRequestId, input.companyId])).rows[0];
@@ -1241,7 +1247,7 @@ export class AttendanceCommandService {
         throw conflict("Only the expected pending attendance regularization request can be decided.");
       }
       await tx.ensureAndLockEmployeeState(input.companyId, input.employeeUserId);
-      input.authorize();
+      input.authorize(locked);
       const items = (await tx.query<{
         id: UUID;
         ordinal: number;
