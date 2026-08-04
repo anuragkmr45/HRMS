@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
   attendancePunchCommandEnvelopeSchema,
+  attendancePunchSchema,
   attendanceAssistedCurrentPunchSchema,
   attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
@@ -55,10 +56,12 @@ const attendanceExportSchema = z.object({
   columns: z.array(z.string().min(1).max(80)).max(80).optional(),
   format: z.enum(["csv", "xlsx", "json"]).optional(),
 });
-const geofenceVersionPublishSchema = z.object({
-  effectiveFrom: isoDateTimeSchema,
-  effectiveUntil: isoDateTimeSchema.nullish(),
-}).strict();
+const geofenceVersionPublishSchema = z
+  .object({
+    effectiveFrom: isoDateTimeSchema,
+    effectiveUntil: isoDateTimeSchema.nullish(),
+  })
+  .strict();
 
 export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
   const withReplayHeader = (
@@ -75,57 +78,123 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    const idempotencyKey = clientEventIdHeaderSchema.parse(
+
+    const rawIdempotencyKey = idempotencyKeySchema.parse(
       request.headers["idempotency-key"],
     );
+
     const service = new AttendanceService(fastify.store);
-    const input = attendancePunchCommandEnvelopeSchema.parse(request.body);
-    if (input.client_event_id !== idempotencyKey) {
-      throw badRequest("Idempotency-Key header must match body client_event_id.", {
-        header: "Idempotency-Key",
-        field: "client_event_id",
-      });
+    const isEnvelopeRequest = isPunchCommandEnvelope(request.body);
+
+    if (!isEnvelopeRequest) {
+      const input = attendancePunchSchema.parse(request.body);
+
+      const response =
+        fastify.store.kind === "postgres"
+          ? await service.recordEmployeeManualNowPostgres(
+              request.actor,
+              input,
+              rawIdempotencyKey,
+            )
+          : service.recordEmployeeManualNow(request.actor, input);
+
+      return withReplayHeader(reply, response);
     }
-    const response = fastify.store.kind === "postgres"
-      ? await service.recordEmployeeManualNowPostgres(
-        request.actor,
-        input.command,
-        idempotencyKey,
+
+    const clientEventId = clientEventIdHeaderSchema.parse(rawIdempotencyKey);
+    const input = attendancePunchCommandEnvelopeSchema.parse(request.body);
+
+    if (input.client_event_id !== clientEventId) {
+      throw badRequest(
+        "Idempotency-Key header must match body client_event_id.",
         {
-          clientEventId: input.client_event_id,
-          capturedAt: input.captured_at,
-          device: input.device,
+          header: "Idempotency-Key",
+          field: "client_event_id",
         },
-      )
-      : service.recordEmployeeManualNow(request.actor, input.command);
+      );
+    }
+
+    const response =
+      fastify.store.kind === "postgres"
+        ? await service.recordEmployeeManualNowPostgres(
+            request.actor,
+            input.command,
+            clientEventId,
+            {
+              clientEventId: input.client_event_id,
+              capturedAt: input.captured_at,
+              device: input.device,
+            },
+          )
+        : service.recordEmployeeManualNow(request.actor, input.command);
+
     return withReplayHeader(reply, response);
   });
 
-  fastify.post("/employees/:employeeUserId/assisted-current-punches", async (request, reply) => {
-    if (!request.actor) throw unauthorized();
-    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
-    const params = employeeParamSchema.parse(request.params);
-    const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
-    const service = new AttendanceService(fastify.store);
-    const response = fastify.store.kind === "postgres"
-      ? await service.recordManagerAssistedCurrentPunchPostgres(request.actor, params.employeeUserId, input, idempotencyKey)
-      : service.recordManagerAssistedCurrentPunch(request.actor, params.employeeUserId, input);
-    return withReplayHeader(reply, response);
-  });
+  function isPunchCommandEnvelope(
+    value: unknown,
+  ): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
 
-  fastify.post("/employees/:employeeUserId/historical-corrections", async (request, reply) => {
-    if (!request.actor) throw unauthorized();
-    const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
-    const params = employeeParamSchema.parse(request.params);
-    const input = attendanceHistoricalCorrectionSchema.parse(request.body);
-    const response = await new AttendanceService(fastify.store).recordHistoricalCorrection(
-      request.actor,
-      params.employeeUserId,
-      input,
-      idempotencyKey,
+    const body = value as Record<string, unknown>;
+
+    return (
+      Object.hasOwn(body, "client_event_id") ||
+      Object.hasOwn(body, "command") ||
+      Object.hasOwn(body, "captured_at") ||
+      Object.hasOwn(body, "device")
     );
-    return withReplayHeader(reply, response);
-  });
+  }
+
+  fastify.post(
+    "/employees/:employeeUserId/assisted-current-punches",
+    async (request, reply) => {
+      if (!request.actor) throw unauthorized();
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const params = employeeParamSchema.parse(request.params);
+      const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
+      const service = new AttendanceService(fastify.store);
+      const response =
+        fastify.store.kind === "postgres"
+          ? await service.recordManagerAssistedCurrentPunchPostgres(
+              request.actor,
+              params.employeeUserId,
+              input,
+              idempotencyKey,
+            )
+          : service.recordManagerAssistedCurrentPunch(
+              request.actor,
+              params.employeeUserId,
+              input,
+            );
+      return withReplayHeader(reply, response);
+    },
+  );
+
+  fastify.post(
+    "/employees/:employeeUserId/historical-corrections",
+    async (request, reply) => {
+      if (!request.actor) throw unauthorized();
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const params = employeeParamSchema.parse(request.params);
+      const input = attendanceHistoricalCorrectionSchema.parse(request.body);
+      const response = await new AttendanceService(
+        fastify.store,
+      ).recordHistoricalCorrection(
+        request.actor,
+        params.employeeUserId,
+        input,
+        idempotencyKey,
+      );
+      return withReplayHeader(reply, response);
+    },
+  );
 
   fastify.get("/punches/my", async (request) => {
     if (!request.actor) {
@@ -215,27 +284,34 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     const input = attendanceRegularizationDecisionSchema.parse(request.body);
     const service = new AttendanceService(fastify.store);
     if (fastify.store.kind === "postgres") {
-      return service.decideRegularizationPostgres(request.actor, params.id, input);
+      return service.decideRegularizationPostgres(
+        request.actor,
+        params.id,
+        input,
+      );
     }
     return service.decideRegularization(request.actor, params.id, input);
   });
 
-  fastify.post("/geofences/:geofenceId/versions/:versionId/publish", async (request) => {
-    if (!request.actor) {
-      throw unauthorized();
-    }
-    const params = geofencePublishParamSchema.parse(request.params);
-    const input = geofenceVersionPublishSchema.parse(request.body);
-    return new AttendanceService(fastify.store).publishGeofenceVersion(
-      request.actor,
-      params.geofenceId,
-      params.versionId,
-      {
-        effectiveFrom: input.effectiveFrom,
-        effectiveUntil: input.effectiveUntil ?? null,
-      },
-    );
-  });
+  fastify.post(
+    "/geofences/:geofenceId/versions/:versionId/publish",
+    async (request) => {
+      if (!request.actor) {
+        throw unauthorized();
+      }
+      const params = geofencePublishParamSchema.parse(request.params);
+      const input = geofenceVersionPublishSchema.parse(request.body);
+      return new AttendanceService(fastify.store).publishGeofenceVersion(
+        request.actor,
+        params.geofenceId,
+        params.versionId,
+        {
+          effectiveFrom: input.effectiveFrom,
+          effectiveUntil: input.effectiveUntil ?? null,
+        },
+      );
+    },
+  );
 
   fastify.get("/exceptions", async (request) => {
     if (!request.actor) {

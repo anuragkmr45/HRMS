@@ -576,6 +576,9 @@ export const attendancePunchEvents = attendance.table(
     source: text("source").notNull().default("web"),
     origin: text("origin").notNull().default("employee_manual_now"),
     regularizationRequestId: uuid("regularization_request_id"),
+    commandExecutionId: uuid("command_execution_id"),
+    sessionId: uuid("session_id"),
+    decisionId: uuid("decision_id"),
     metadata: jsonb("metadata").notNull().default({}),
     createdAt,
     deletedAt
@@ -691,6 +694,31 @@ export const attendanceCommandExecutions = attendance.table(
       "attendance_commands_replay_metadata_complete_check",
       sql`${table.status} NOT IN ('completed', 'denied') OR (${table.responseSnapshot} IS NOT NULL AND ${table.responseHash} IS NOT NULL AND ${table.responseStatus} IS NOT NULL AND ${table.completedAt} IS NOT NULL)`
     )
+  ]
+);
+
+export const attendanceCommandDecisions = attendance.table(
+  "command_decisions",
+  {
+    id: uuidPk.defaultRandom(),
+    commandExecutionId: uuid("command_execution_id").notNull(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    outcome: text("outcome").notNull(),
+    reasonCode: text("reason_code"),
+    reasonDetail: text("reason_detail"),
+    previousState: text("previous_state").notNull(),
+    nextState: text("next_state").notNull(),
+    policySnapshot: jsonb("policy_snapshot").notNull().default({}),
+    evidenceSnapshot: jsonb("evidence_snapshot").notNull().default({}),
+    createdAt
+  },
+  (table) => [
+    unique("command_decisions_command_execution_id_key").on(table.commandExecutionId),
+    index("attendance_decisions_employee_created_idx").on(table.companyId, table.employeeUserId, table.createdAt.desc()),
+    check("attendance_command_decisions_outcome_check", sql`${table.outcome} IN ('allowed', 'denied')`),
+    check("attendance_command_decisions_previous_state_check", sql`${table.previousState} IN ('not_checked_in', 'working', 'on_break', 'completed')`),
+    check("attendance_command_decisions_next_state_check", sql`${table.nextState} IN ('not_checked_in', 'working', 'on_break', 'completed')`)
   ]
 );
 
@@ -1102,6 +1130,40 @@ export const attendanceRegularizationCorrectionApplications = attendance.table(
     uniqueIndex("attendance_regularization_applications_replacement_uq").on(table.replacementPunchEventId).where(sql`${table.replacementPunchEventId} IS NOT NULL`),
     index("attendance_regularization_applications_company_request_idx").on(table.companyId, table.regularizationRequestId, table.appliedAt, table.id),
     check("attendance_regularization_applications_operation_check", sql`${table.operation} IN ('add', 'replace', 'void')`)
+  ]
+);
+
+export const attendanceProjectionRebuildRuns = attendance.table(
+  "projection_rebuild_runs",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    requestedByUserId: uuid("requested_by_user_id").notNull(),
+    mode: text("mode").notNull(),
+    dateFrom: date("date_from").notNull(),
+    dateTo: date("date_to").notNull(),
+    status: text("status").notNull(),
+    sourceRecordCount: integer("source_record_count").notNull().default(0),
+    sourceFingerprint: text("source_fingerprint").notNull(),
+    differenceSummary: jsonb("difference_summary").notNull().default({}),
+    versionSummary: jsonb("version_summary").notNull().default({}),
+    rowsWritten: jsonb("rows_written").notNull().default({}),
+    failureCode: text("failure_code"),
+    sanitizedFailureDetails: text("sanitized_failure_details"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt
+  },
+  (table) => [
+    index("projection_rebuild_runs_employee_range_idx")
+      .on(table.companyId, table.employeeUserId, table.dateFrom, table.dateTo, table.createdAt.desc()),
+    index("projection_rebuild_runs_status_created_idx")
+      .on(table.companyId, table.status, table.createdAt.desc()),
+    check("projection_rebuild_runs_mode_check", sql`${table.mode} IN ('reconcile', 'rebuild')`),
+    check("projection_rebuild_runs_status_check", sql`${table.status} IN ('started', 'succeeded', 'failed')`),
+    check("projection_rebuild_runs_date_range_check", sql`${table.dateFrom} <= ${table.dateTo}`),
+    check("projection_rebuild_runs_source_count_check", sql`${table.sourceRecordCount} >= 0`)
   ]
 );
 
@@ -2411,6 +2473,7 @@ export const schema = {
   attendanceBreakSegments,
   attendanceEmployeeCommandStates,
   attendanceCommandExecutions,
+  attendanceCommandDecisions,
   attendanceEvents,
   attendanceLocationEvidence,
   attendanceAttestationEvidence,
@@ -2422,6 +2485,7 @@ export const schema = {
   attendanceRegularizationRequestItems,
   attendanceRegularizationActions,
   attendanceRegularizationCorrectionApplications,
+  attendanceProjectionRebuildRuns,
   attendancePolicies,
   attendancePolicyVersions,
   attendancePolicyAssignments,

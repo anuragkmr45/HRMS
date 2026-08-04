@@ -688,6 +688,7 @@ export class AttendanceCommandService {
             outcome: denied ? "failed" : "passed",
             policyKey: "attendance",
             policyVersion: policy.policyVersion,
+            evaluatorVersion: ATTENDANCE_GEO_EVALUATOR_VERSION,
             evaluatedAt: occurredAt,
             evidenceDigest: auditEvidenceDigest,
             policySnapshot: policy,
@@ -1011,6 +1012,10 @@ export class AttendanceCommandService {
       if (platformKey.status === "completed") {
         return this.replayCompletedCommand(tx, platformKey, requestHash, principal.companyId);
       }
+      await tx.ensureAndLockEmployeeState(
+        principal.companyId,
+        principal.subjectEmployeeUserId,
+      );
       const receivedAt = await tx.getTransactionTimestamp();
       if (Date.parse(input.command.occurred_at) >= Date.parse(receivedAt)) {
         throw badRequest("Historical correction occurrence time must be in the past.");
@@ -1067,6 +1072,7 @@ export class AttendanceCommandService {
         outcome: "passed",
         policyKey: "attendance",
         policyVersion: policy.policyVersion,
+        evaluatorVersion: ATTENDANCE_GEO_EVALUATOR_VERSION,
         evaluatedAt: receivedAt,
         evidenceDigest,
         policySnapshot: policy,
@@ -1234,6 +1240,7 @@ export class AttendanceCommandService {
       if (locked.status !== "pending" || locked.version !== input.expectedVersion) {
         throw conflict("Only the expected pending attendance regularization request can be decided.");
       }
+      await tx.ensureAndLockEmployeeState(input.companyId, input.employeeUserId);
       input.authorize();
       const items = (await tx.query<{
         id: UUID;
@@ -1566,6 +1573,7 @@ export class AttendanceCommandService {
         outcome: "passed",
         policyKey: "attendance",
         policyVersion: input.policy.policyVersion,
+        evaluatorVersion: ATTENDANCE_GEO_EVALUATOR_VERSION,
         evaluatedAt: receivedAt,
         evidenceDigest,
         policySnapshot: input.policy,
