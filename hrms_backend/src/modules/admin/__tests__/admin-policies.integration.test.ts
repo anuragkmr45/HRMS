@@ -1,20 +1,94 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FastifyInstance } from "fastify";
+import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 
+type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
+
 describe("admin policy settings", () => {
-  let app: FastifyInstance;
+  let app: TestApp;
+
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalTestDatabaseUrl = process.env.TEST_DATABASE_URL;
+
+  function restoreDatabaseEnvironment(): void {
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
+
+    if (originalTestDatabaseUrl === undefined) {
+      delete process.env.TEST_DATABASE_URL;
+    } else {
+      process.env.TEST_DATABASE_URL = originalTestDatabaseUrl;
+    }
+  }
 
   beforeEach(async () => {
+    restoreDatabaseEnvironment();
+
     app = await buildRealApp();
     await app.ready();
-  });
+  }, 30_000);
 
   afterEach(async () => {
-    await app?.close();
-  });
+    try {
+      if (app?.store.pgPool) {
+        await app.store.pgPool.query(`
+          TRUNCATE TABLE
+            attendance.policy_assignments,
+            attendance.policy_versions,
+            attendance.policies,
+            attendance.geofence_versions,
+            attendance.geofences,
+            attendance.work_sites
+          RESTART IDENTITY CASCADE
+        `);
+      }
+    } finally {
+      await app?.close();
+      restoreDatabaseEnvironment();
+    }
+  }, 30_000);
 
+  function adminCompanyId(userId: string): string {
+    const companyId = app.store.userSessionPreferences.find(
+      (preference) => preference.user_id === userId,
+    )?.company_id;
+    if (!companyId) throw new Error("Admin company fixture is unavailable.");
+    return companyId;
+  }
+
+  async function createPolicyGeofence(
+    companyId: string,
+    options: { deleted?: boolean } = {},
+  ): Promise<string> {
+    const site = await app.store.pgPool!.query<{ id: string }>(
+      `INSERT INTO attendance.work_sites (
+          company_id, site_code, name, site_type, timezone, metadata
+        ) VALUES ($1, $2, 'Policy Fixture Site', 'office', 'Asia/Kolkata', '{}'::jsonb)
+        RETURNING id`,
+      [companyId, `ADMIN-SITE-${randomUUID()}`],
+    );
+    const siteId = site.rows[0]?.id;
+    if (!siteId) throw new Error("Work-site fixture was not created.");
+
+    const geofence = await app.store.pgPool!.query<{ id: string }>(
+      `INSERT INTO attendance.geofences (
+          company_id, work_site_id, geofence_code, name, metadata, deleted_at
+        ) VALUES (
+          $1, $2, $3, 'Policy Fixture Fence', '{}'::jsonb,
+          CASE WHEN $4 THEN now() ELSE NULL END
+        )
+        RETURNING id`,
+      [companyId, siteId, `ADMIN-GEO-${randomUUID()}`, options.deleted === true],
+    );
+    const geofenceId = geofence.rows[0]?.id;
+    if (!geofenceId) throw new Error("Geofence fixture was not created.");
+    return geofenceId;
+  }
   it("lists policy configurations for admins only", async () => {
     const admin = await loginAs(app, "ADM");
     const employee = await loginAs(app, "E1");
@@ -22,14 +96,14 @@ describe("admin policy settings", () => {
     const forbidden = await app.inject({
       method: "GET",
       url: "/api/v1/admin/policies",
-      headers: authHeader(employee.token)
+      headers: authHeader(employee.token),
     });
     expect(forbidden.statusCode).toBe(403);
 
     const list = await app.inject({
       method: "GET",
       url: "/api/v1/admin/policies",
-      headers: authHeader(admin.token)
+      headers: authHeader(admin.token),
     });
     expect(list.statusCode).toBe(200);
     expect(list.json().items).toEqual(
@@ -48,20 +122,90 @@ describe("admin policy settings", () => {
             punchOutEnd: "23:59",
             autoPunchOutEnabled: true,
             autoPunchOutTime: "23:59",
-            allowOffDayPunches: false
-          })
-        })
-      ])
+            allowOffDayPunches: false,
+            attendanceMode: "manual_only",
+            fallbackApprovalMode: "disabled",
+            regularizationMode: "approval_required",
+            locationUnavailableAction: "allow",
+            permissionDeniedAction: "allow",
+            outsideFenceAction: "allow",
+            boundaryUncertainAction: "allow",
+            staleEvidenceAction: "allow",
+            accuracyExceededAction: "allow",
+            effectiveGeofenceId: null,
+            effectiveGeofenceIds: [],
+            geofenceGraceMeters: 0,
+            maxLocationAgeMs: null,
+            maxAccuracyMeters: null,
+          }),
+        }),
+      ]),
     );
     expect(list.json().versions.attendance).toBe(1);
 
     const filtered = await app.inject({
       method: "GET",
       url: "/api/v1/admin/policies?module=leave_wfh&active_only=true",
-      headers: authHeader(admin.token)
+      headers: authHeader(admin.token),
     });
     expect(filtered.statusCode).toBe(200);
-    expect(filtered.json().items.map((policy: { policy_key: string }) => policy.policy_key)).toEqual(["leave"]);
+    expect(
+      filtered
+        .json()
+        .items.map((policy: { policy_key: string }) => policy.policy_key),
+    ).toEqual(["leave"]);
+  });
+
+  it("fails closed for missing or stale company context before policy read or update side effects", async () => {
+    const admin = await loginAs(app, "ADM");
+    const preference = app.store.userSessionPreferences.find(
+      (candidate) => candidate.user_id === admin.user.id,
+    );
+    if (!preference) throw new Error("Admin session preference fixture is unavailable.");
+    const originalCompanyId = preference.company_id;
+    const outboxBefore = app.store.outbox.length;
+
+    preference.company_id = null;
+    const nullContextList = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(nullContextList.statusCode).toBe(400);
+
+    const nullContextUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: { expected_version: 1, config: { graceMinutes: 20 } },
+    });
+    expect(nullContextUpdate.statusCode).toBe(400);
+
+    preference.company_id = randomUUID();
+    const staleContextList = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(staleContextList.statusCode).toBe(400);
+
+    const staleContextUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: { expected_version: 1, config: { graceMinutes: 25 } },
+    });
+    expect(staleContextUpdate.statusCode).toBe(400);
+    expect(app.store.outbox).toHaveLength(outboxBefore);
+
+    preference.company_id = originalCompanyId;
+    const restored = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/policies",
+      headers: authHeader(admin.token),
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().versions.attendance).toBe(1);
   });
 
   it("updates policy config with OCC and validation", async () => {
@@ -85,12 +229,49 @@ describe("admin policy settings", () => {
           punchOutEnd: "22:30",
           autoPunchOutEnabled: false,
           autoPunchOutTime: "22:45",
-          allowOffDayPunches: true
-        }
-      }
+          allowOffDayPunches: true,
+          attendanceMode: "geo_preferred",
+          fallbackApprovalMode: "approval_required",
+          regularizationMode: "disabled",
+          locationUnavailableAction: "manual_fallback",
+          permissionDeniedAction: "deny",
+          outsideFenceAction: "allow",
+          boundaryUncertainAction: "manual_fallback",
+          staleEvidenceAction: "deny",
+          accuracyExceededAction: "manual_fallback",
+          effectiveGeofenceId: null,
+          effectiveGeofenceIds: [],
+          geofenceGraceMeters: 12.5,
+          maxLocationAgeMs: 120000,
+          maxAccuracyMeters: 50,
+          coordinateRetentionClasses: {
+            standard: 2592000,
+            short: 86400,
+          },
+          defaultCoordinateRetentionClass: "short",
+        },
+      },
     });
+
+    const updateBody = update.json();
+
+    if (update.statusCode !== 200) {
+      console.error(
+        "Attendance policy update failed:",
+        JSON.stringify(
+          {
+            statusCode: update.statusCode,
+            body: updateBody,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
     expect(update.statusCode).toBe(200);
-    expect(update.json().policy).toMatchObject({
+
+    expect(updateBody.policy).toMatchObject({
       policy_key: "attendance",
       label: "Attendance guardrails",
       active: true,
@@ -104,8 +285,65 @@ describe("admin policy settings", () => {
         punchOutEnd: "22:30",
         autoPunchOutEnabled: false,
         autoPunchOutTime: "22:45",
-        allowOffDayPunches: true
-      })
+        allowOffDayPunches: true,
+        attendanceMode: "geo_preferred",
+        fallbackApprovalMode: "approval_required",
+        regularizationMode: "disabled",
+        locationUnavailableAction: "manual_fallback",
+        permissionDeniedAction: "deny",
+        outsideFenceAction: "allow",
+        boundaryUncertainAction: "manual_fallback",
+        staleEvidenceAction: "deny",
+        accuracyExceededAction: "manual_fallback",
+        effectiveGeofenceId: null,
+        effectiveGeofenceIds: [],
+        geofenceGraceMeters: 12.5,
+        maxLocationAgeMs: 120000,
+        maxAccuracyMeters: 50,
+        coordinateRetentionClasses: {
+          standard: 2592000,
+          short: 86400,
+        },
+        defaultCoordinateRetentionClass: "short",
+      }),
+    });
+
+    const persistedVersion = await app.store.pgPool!.query<{
+      version_number: number;
+      config: Record<string, unknown>;
+    }>(
+      `SELECT version_number, config
+       FROM attendance.policy_versions
+      WHERE policy_id = $1
+        AND version_number = $2`,
+      [updateBody.policy.id, updateBody.policy.version],
+    );
+
+    expect(persistedVersion.rows).toHaveLength(1);
+
+    expect(persistedVersion.rows[0]).toMatchObject({
+      version_number: 2,
+      config: expect.objectContaining({
+        attendanceMode: "geo_preferred",
+        fallbackApprovalMode: "approval_required",
+        regularizationMode: "disabled",
+        locationUnavailableAction: "manual_fallback",
+        permissionDeniedAction: "deny",
+        outsideFenceAction: "allow",
+        boundaryUncertainAction: "manual_fallback",
+        staleEvidenceAction: "deny",
+        accuracyExceededAction: "manual_fallback",
+        effectiveGeofenceId: null,
+        effectiveGeofenceIds: [],
+        geofenceGraceMeters: 12.5,
+        maxLocationAgeMs: 120000,
+        maxAccuracyMeters: 50,
+        coordinateRetentionClasses: {
+          standard: 2592000,
+          short: 86400,
+        },
+        defaultCoordinateRetentionClass: "short",
+      }),
     });
 
     const stale = await app.inject({
@@ -114,9 +352,12 @@ describe("admin policy settings", () => {
       headers: authHeader(admin.token),
       payload: {
         expected_version: 1,
-        config: { graceMinutes: 20 }
-      }
+        config: {
+          graceMinutes: 20,
+        },
+      },
     });
+
     expect(stale.statusCode).toBe(409);
 
     const invalid = await app.inject({
@@ -125,10 +366,27 @@ describe("admin policy settings", () => {
       headers: authHeader(admin.token),
       payload: {
         expected_version: 2,
-        config: { unknownField: true }
-      }
+        config: {
+          unknownField: true,
+        },
+      },
     });
+
     expect(invalid.statusCode).toBe(400);
+
+    const invalidMode = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          attendanceMode: "site_required",
+        },
+      },
+    });
+
+    expect(invalidMode.statusCode).toBe(400);
 
     const invalidTime = await app.inject({
       method: "PUT",
@@ -136,11 +394,214 @@ describe("admin policy settings", () => {
       headers: authHeader(admin.token),
       payload: {
         expected_version: 2,
-        config: { punchInStart: "25:00" }
-      }
+        config: {
+          punchInStart: "25:00",
+        },
+      },
     });
+
     expect(invalidTime.statusCode).toBe(400);
 
+    const invalidGrace = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          geofenceGraceMeters: -1,
+        },
+      },
+    });
+
+    expect(invalidGrace.statusCode).toBe(400);
+
+    const invalidMaxAge = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          maxLocationAgeMs: 0,
+        },
+      },
+    });
+
+    expect(invalidMaxAge.statusCode).toBe(400);
+
+    const invalidMaxAccuracy = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          maxAccuracyMeters: 0,
+        },
+      },
+    });
+
+    expect(invalidMaxAccuracy.statusCode).toBe(400);
+
+    for (const seconds of [
+      0,
+      -1,
+      1.5,
+      Number.POSITIVE_INFINITY,
+      AttendanceCoordinateRetentionDefaults.MaxSeconds + 1,
+    ]) {
+      const invalidRetention = await app.inject({
+        method: "PUT",
+        url: "/api/v1/admin/policies/attendance",
+        headers: authHeader(admin.token),
+        payload: {
+          expected_version: 2,
+          config: {
+            coordinateRetentionClasses: {
+              standard: seconds,
+            },
+          },
+        },
+      });
+      expect(invalidRetention.statusCode).toBe(400);
+    }
+
+    const orphanedDefault = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: {
+          coordinateRetentionClasses: {
+            standard: AttendanceCoordinateRetentionDefaults.Seconds,
+          },
+        },
+      },
+    });
+    expect(orphanedDefault.statusCode).toBe(400);
+
     expect(app.store.outbox.at(-1)?.event_type).toBe("admin.policy.updated");
+  });
+
+  it("validates attendance effective geofence references during policy updates", async () => {
+    const admin = await loginAs(app, "ADM");
+    const companyId = adminCompanyId(admin.user.id);
+    const activeGeofenceId = await createPolicyGeofence(companyId);
+
+    const valid = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 1,
+        config: { effectiveGeofenceId: activeGeofenceId },
+      },
+    });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json().policy).toMatchObject({
+      version: 2,
+      config: expect.objectContaining({ effectiveGeofenceId: activeGeofenceId }),
+    });
+
+    const secondGeofenceId = await createPolicyGeofence(companyId);
+    const validList = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 2,
+        config: { effectiveGeofenceIds: [activeGeofenceId, secondGeofenceId] },
+      },
+    });
+    expect(validList.statusCode).toBe(200);
+    expect(validList.json().policy).toMatchObject({
+      version: 3,
+      config: expect.objectContaining({ effectiveGeofenceIds: [activeGeofenceId, secondGeofenceId] }),
+    });
+
+    const malformed = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceId: "not-a-uuid" },
+      },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const malformedList = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceIds: [activeGeofenceId, "not-a-uuid"] },
+      },
+    });
+    expect(malformedList.statusCode).toBe(400);
+
+    const duplicateList = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceIds: [activeGeofenceId, activeGeofenceId] },
+      },
+    });
+    expect(duplicateList.statusCode).toBe(400);
+
+    const missing = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceId: randomUUID() },
+      },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const deletedGeofenceId = await createPolicyGeofence(companyId, { deleted: true });
+    const deleted = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceId: deletedGeofenceId },
+      },
+    });
+    expect(deleted.statusCode).toBe(400);
+
+    const crossCompanyGeofenceId = await createPolicyGeofence(randomUUID());
+    const crossCompany = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceId: crossCompanyGeofenceId },
+      },
+    });
+    expect(crossCompany.statusCode).toBe(400);
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: "/api/v1/admin/policies/attendance",
+      headers: authHeader(admin.token),
+      payload: {
+        expected_version: 3,
+        config: { effectiveGeofenceId: null },
+      },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().policy).toMatchObject({
+      version: 4,
+      config: expect.objectContaining({ effectiveGeofenceId: null }),
+    });
   });
 });

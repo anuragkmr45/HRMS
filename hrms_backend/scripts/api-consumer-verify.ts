@@ -31,6 +31,7 @@ const requiredDocs = [
 
 const requiredTags = [
   "Platform / Health",
+  "Platform / Devices",
   "Auth & Sessions",
   "Core / Employees & Hierarchy",
   "Expenses / Requester",
