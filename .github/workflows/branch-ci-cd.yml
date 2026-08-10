@@ -38,7 +38,7 @@ jobs:
       JWT_REFRESH_SECRET: ci-refresh-${{ github.run_id }}-${{ github.run_attempt }}-secret
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgis/postgis:16-3.5-alpine
         env:
           POSTGRES_DB: hrms_ci_test
           POSTGRES_USER: hrms_ci

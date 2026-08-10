@@ -1,29 +1,43 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { Client } from "pg";
-import { fail } from "./lib.js";
 import { loadRuntimeEnv, requireEnv } from "./env.js";
-
-function migrationSql(): string {
-  for (const directory of ["src/db/migrations", "dist/src/db/migrations"]) {
-    if (!existsSync(directory)) {
-      continue;
-    }
-    const files = readdirSync(directory).filter((file) => file.endsWith(".sql")).sort();
-    if (files.length > 0) {
-      return files.map((file) => readFileSync(`${directory}/${file}`, "utf8")).join("\n");
-    }
-  }
-  fail("SQL migrations are missing from src/db/migrations or dist/src/db/migrations");
-}
+import {
+  acquireMigrationLock,
+  applyPendingMigrations,
+  discoverMigrations,
+  ensureMigrationLedger,
+  loadAppliedMigrations,
+  releaseMigrationLock,
+  validateMigrationPlan,
+} from "./db-migration-lib.js";
 
 loadRuntimeEnv();
 
-const migration = migrationSql();
 const client = new Client({ connectionString: requireEnv("DATABASE_URL") });
+
 await client.connect();
+
+let lockAcquired = false;
+
 try {
-  await client.query(migration);
-  console.log("Migration applied successfully.");
+  await acquireMigrationLock(client);
+  lockAcquired = true;
+
+  await ensureMigrationLedger(client);
+
+  const migrationFiles = discoverMigrations();
+  const appliedMigrations = await loadAppliedMigrations(client);
+  const plan = validateMigrationPlan(migrationFiles, appliedMigrations);
+
+  const appliedCount = await applyPendingMigrations(client, plan.pending);
+
+  console.log(
+    `Migration completed successfully. ` +
+      `${appliedCount} applied, ${plan.applied.length} already applied.`,
+  );
 } finally {
+  if (lockAcquired) {
+    await releaseMigrationLock(client).catch(() => undefined);
+  }
+
   await client.end();
 }
