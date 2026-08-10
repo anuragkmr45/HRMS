@@ -5,6 +5,7 @@ import {
   AttendanceProjectionRebuildService,
   AttendanceProjectionReplayError,
 } from "../projection-rebuild-service.js";
+import { AttendanceCoordinatePurgeWorker } from "../../../workers/attendance-coordinate-purge-worker.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 
@@ -106,6 +107,24 @@ describe("PostgreSQL attendance projection rebuild service", () => {
     await service().run(baseInput("rebuild"));
 
     await expect(immutableCounts(app, companyId)).resolves.toEqual(before);
+  });
+
+  it("rebuilds projections from persisted decisions after exact coordinates are purged", async () => {
+    await insertExpiredLocationEvidence(app, companyId, idsFor(1).attendanceEvent);
+
+    const purge = await new AttendanceCoordinatePurgeWorker(app.store).purgeExpired({
+      batchSize: 10,
+    });
+    const rebuild = await service().run(baseInput("rebuild"));
+    const snapshot = await projectionSnapshot(app, companyId);
+
+    expect(purge.purged).toBe(1);
+    expect(rebuild.status).toBe("succeeded");
+    expect(rebuild.safe_to_rebuild).toBe(true);
+    expect(snapshot.session_count).toBe(1);
+    expect(snapshot.break_count).toBe(1);
+    expect(snapshot.work_seconds).toBe(30_600);
+    expect(snapshot.break_seconds).toBe(1_800);
   });
 
   it("fails closed and records a sanitized failed run when evaluator metadata is unsupported", async () => {
@@ -416,6 +435,36 @@ async function insertEmployeeCommandState(
        '2026-05-01T00:00:00.000Z','2026-05-01T00:00:00.000Z')
      ON CONFLICT (company_id, employee_user_id) DO NOTHING`,
     [companyId, seedIds.employee1],
+  );
+}
+
+async function insertExpiredLocationEvidence(
+  app: TestApp,
+  companyId: string,
+  attendanceEventId: string,
+): Promise<void> {
+  await app.store.pgPool!.query(
+    `INSERT INTO attendance.location_evidence (
+       attendance_event_id, company_id, employee_user_id, captured_at,
+       received_at, latitude, longitude, accuracy_meters, altitude_meters,
+       provider, is_mocked, integrity_status, raw_payload, age_ms,
+       permission_state, coordinates_expire_at, coordinate_retention_class,
+       coordinate_retention_seconds
+     )
+     VALUES (
+       $1,$2,$3,'2026-05-18T09:00:00.000Z',
+       now() - interval '31 days',12.971599,77.594566,8.50,920.12,
+       'browser',false,'basic',$4::jsonb,0,'granted',
+       now() - interval '1 day','standard',2592000
+     )`,
+    [
+      attendanceEventId,
+      companyId,
+      seedIds.employee1,
+      JSON.stringify({
+        location: { latitude: 12.971599, longitude: 77.594566 },
+      }),
+    ],
   );
 }
 

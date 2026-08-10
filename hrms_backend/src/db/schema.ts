@@ -1037,6 +1037,48 @@ export const attendanceLocationAccessAuditLogs = attendance.table(
   ]
 );
 
+export const attendanceLocationRetentionActions = attendance.table(
+  "location_retention_actions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    locationEvidenceId: uuid("location_evidence_id").notNull(),
+    attendanceEventId: uuid("attendance_event_id"),
+    retentionPolicyVersionId: uuid("retention_policy_version_id"),
+    coordinateRetentionClass: text("coordinate_retention_class"),
+    coordinateRetentionSeconds: integer("coordinate_retention_seconds"),
+    coordinatesExpireAt: timestamp("coordinates_expire_at", { withTimezone: true }).notNull(),
+    coordinatesPurgedAt: timestamp("coordinates_purged_at", { withTimezone: true }).notNull(),
+    actionType: text("action_type").notNull(),
+    workerOrigin: text("worker_origin").notNull(),
+    workerVersion: text("worker_version").notNull(),
+    storageSurfaces: jsonb("storage_surfaces").notNull().default([]),
+    redactedCommandSnapshotCount: integer("redacted_command_snapshot_count").notNull().default(0),
+    redactedOfflineEventPayloadCount: integer("redacted_offline_event_payload_count").notNull().default(0),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("location_retention_actions_evidence_action_uq")
+      .on(table.companyId, table.locationEvidenceId, table.actionType),
+    index("location_retention_actions_company_created_idx").on(table.companyId, table.createdAt.desc()),
+    index("location_retention_actions_event_idx")
+      .on(table.companyId, table.attendanceEventId)
+      .where(sql`${table.attendanceEventId} IS NOT NULL`),
+    check("location_retention_actions_type_check", sql`${table.actionType} IN ('attendance.location_coordinates.purged')`),
+    check("location_retention_actions_worker_origin_check", sql`${table.workerOrigin} IN ('attendance-coordinate-purge-worker')`),
+    check("location_retention_actions_worker_version_check", sql`btrim(${table.workerVersion}) <> ''`),
+    check("location_retention_actions_storage_surfaces_array_check", sql`jsonb_typeof(${table.storageSurfaces}) = 'array'`),
+    check("location_retention_actions_storage_surfaces_check", sql`${table.storageSurfaces} <@ '["attendance.location_evidence","attendance.command_executions.request_snapshot","attendance.offline_event_inbox.event_payload"]'::jsonb`),
+    check("location_retention_actions_primary_surface_check", sql`${table.actionType} <> 'attendance.location_coordinates.purged' OR ${table.storageSurfaces} @> '["attendance.location_evidence"]'::jsonb`),
+    check("location_retention_actions_command_count_check", sql`${table.redactedCommandSnapshotCount} >= 0`),
+    check("location_retention_actions_offline_count_check", sql`${table.redactedOfflineEventPayloadCount} >= 0`),
+    check("location_retention_actions_command_surface_count_check", sql`(${table.redactedCommandSnapshotCount} > 0) = (${table.storageSurfaces} @> '["attendance.command_executions.request_snapshot"]'::jsonb)`),
+    check("location_retention_actions_offline_surface_count_check", sql`(${table.redactedOfflineEventPayloadCount} > 0) = (${table.storageSurfaces} @> '["attendance.offline_event_inbox.event_payload"]'::jsonb)`),
+    check("location_retention_actions_expiry_order_check", sql`${table.coordinatesPurgedAt} >= ${table.coordinatesExpireAt}`),
+    check("location_retention_actions_retention_seconds_check", sql`${table.coordinateRetentionSeconds} IS NULL OR ${table.coordinateRetentionSeconds} BETWEEN 60 AND 315360000`)
+  ]
+);
+
 export const attendanceDecisions = attendance.table(
   "attendance_decisions",
   {
@@ -2596,6 +2638,7 @@ export const schema = {
   attendanceLocationEvidence,
   attendanceAttestationEvidence,
   attendanceLocationAccessAuditLogs,
+  attendanceLocationRetentionActions,
   attendanceDecisions,
   attendanceDecisionReasons,
   attendanceDailyRecords,
