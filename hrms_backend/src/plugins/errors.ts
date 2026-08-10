@@ -8,9 +8,16 @@ type HttpError = Error & {
   statusCode?: number;
 };
 
+const approvedAppErrorHeaders = new Set(["Idempotency-Replayed"]);
+
 export const errorsPlugin = fp(async (fastify) => {
   fastify.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
+      for (const [header, value] of Object.entries(error.headers ?? {})) {
+        if (approvedAppErrorHeaders.has(header)) {
+          reply.header(header, value);
+        }
+      }
       reply.status(error.statusCode).send({
         code: error.code,
         message: error.message,
