@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 251
+Documented operations: 254
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2355,6 +2355,165 @@ Required: yes
 |---|---|
 | `200` | Successful response. |
 | `201` | Device registered. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/revoke
+
+| Field | Contract |
+|---|---|
+| Purpose | Revoke registered device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/suspend
+
+| Field | Contract |
+|---|---|
+| Purpose | Suspend registered device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/restore
+
+| Field | Contract |
+|---|---|
+| Purpose | Restore suspended device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
 | `400` | Validation failed or invalid business request. |
 | `401` | Authentication required or invalid session. |
 | `403` | Authenticated actor is not allowed to perform this action. |
@@ -9267,7 +9426,7 @@ Required: yes
 |---|---|---|---|
 | `client_event_id` | string<uuid> | required | Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization. |
 | `captured_at` | string<date-time> | required | Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at. |
-| `device` | object | required, nullable | Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
+| `device` | object | required, nullable | Bounded device envelope. registered_device_id is the canonical platform registry reference required for personal-mobile attendance sources; other device fields are untrusted audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
 | `command` | object | required | Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted. |
 
 

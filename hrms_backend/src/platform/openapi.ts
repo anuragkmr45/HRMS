@@ -573,6 +573,18 @@ const platformDeviceRegistrationBodySchema = {
   additionalProperties: false
 };
 
+const platformDeviceLifecycleBodySchema = {
+  type: "object",
+  properties: {
+    reason: {
+      type: "string",
+      enum: ["lost", "replaced", "user_requested", "security", "administrative"],
+      example: "lost"
+    }
+  },
+  additionalProperties: false
+};
+
 const platformRegisteredDeviceListSchema = {
   type: "object",
   required: ["items"],
@@ -2409,13 +2421,14 @@ const attendancePunchCommandBody = {
 const attendanceCommandDeviceBody = {
   type: "object",
   properties: {
+    registered_device_id: uuid("Canonical platform registered device UUID required for personal-mobile attendance sources."),
     device_id: { type: "string", minLength: 1, maxLength: 128, example: "browser-session-device" },
     platform: { type: "string", enum: ["web", "ios", "android"], example: "web" },
     app_version: { type: "string", minLength: 1, maxLength: 64, example: "2026.08.03" },
     os_version: { type: "string", minLength: 1, maxLength: 64, example: "Windows 11" }
   },
   additionalProperties: false,
-  description: "Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
+  description: "Bounded device envelope. registered_device_id is the canonical platform registry reference required for personal-mobile attendance sources; other device fields are untrusted audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
 };
 
 const attendancePunchBody = {
@@ -5063,6 +5076,9 @@ const routeDocs: Record<string, RouteSchema> = {
 
   "POST /api/v1/platform/devices": operation("Platform / Devices", "Register mobile device", "Registers the authenticated user's mobile app installation in the active company using a tenant-scoped lowercase SHA-256 installation hash. The server derives company and owner from the authenticated active-company context. First registration creates the device and emits platform.device.registered transactionally with HTTP 201; same-owner retries for an already registered device return the existing device with HTTP 200 and do not emit another event. Cross-owner claims and suspended or revoked devices return 409.", { body: platformDeviceRegistrationBodySchema, response200: platformRegisteredDeviceSchema, response: { 201: success(platformRegisteredDeviceSchema, "Device registered.") } }),
   "GET /api/v1/platform/devices": operation("Platform / Devices", "List my mobile devices", "Lists registered, suspended, and revoked mobile devices owned by the authenticated actor in the active company. The backend scopes by both company_id and user_id derived from server context.", { response200: platformRegisteredDeviceListSchema }),
+  "POST /api/v1/platform/devices/{deviceId}/revoke": operation("Platform / Devices", "Revoke registered device", "Revokes a registered or suspended device in the authenticated active company. Device owners may revoke their own device; Admin may revoke any device in their active company. Revoked is terminal. Same-state retries are idempotent and emit no duplicate lifecycle event.", { params: idParamSchema, body: platformDeviceLifecycleBodySchema, response200: platformRegisteredDeviceSchema }),
+  "POST /api/v1/platform/devices/{deviceId}/suspend": operation("Platform / Devices", "Suspend registered device", "Admin-only lifecycle action that suspends a registered device in the Admin's active company. Same-state retries are idempotent and emit no duplicate lifecycle event.", { params: idParamSchema, body: platformDeviceLifecycleBodySchema, response200: platformRegisteredDeviceSchema }),
+  "POST /api/v1/platform/devices/{deviceId}/restore": operation("Platform / Devices", "Restore suspended device", "Admin-only lifecycle action that restores a suspended device to registered in the Admin's active company. Revoked devices cannot be restored. Same-state retries are idempotent and emit no duplicate lifecycle event.", { params: idParamSchema, body: platformDeviceLifecycleBodySchema, response200: platformRegisteredDeviceSchema }),
 
   "GET /api/v1/core/master-data/org-selectors": operation("Core / Employees & Hierarchy", "Org selectors", "Returns active departments, designations, manager candidates, and backend role labels used by employee create/edit forms. The list is scoped by the authenticated actor where manager visibility is restricted.", { response200: orgSelectorsResponseSchema }),
   "GET /api/v1/core/users": operation("Core / Employees & Hierarchy", "List users", "Paginated employee/user search for authorized modules and admins. Supports frontend table filters, manager scoping, login-state filters, sorting, compact org references, and summary counts.", { querystring: { ...paginationQuerySchema, properties: { ...paginationQuerySchema.properties, q: { type: "string", description: "Optional employee code/name/email search.", example: "E1" }, department_id: uuid("Filter by department UUID"), designation_id: uuid("Filter by designation UUID"), role: { type: "string", description: "Filter by assigned role label.", example: "Employee" }, employment_status: { type: "string", enum: ["active", "inactive", "terminated", "suspended"], example: "active" }, manager_user_id: uuid("Filter by direct manager UUID"), login_state: { type: "string", enum: ["enabled", "disabled", "setup_pending"], example: "enabled" } } }, response200: coreUserListResponseSchema }),

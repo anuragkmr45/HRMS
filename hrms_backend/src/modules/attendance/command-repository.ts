@@ -86,6 +86,13 @@ export interface PlatformIdempotencyKeyRecord {
   is_expired: boolean;
 }
 
+export interface AttendanceRegisteredDeviceRecord {
+  id: UUID;
+  company_id: UUID;
+  user_id: UUID;
+  status: "registered" | "suspended" | "revoked";
+}
+
 export interface ClaimPlatformIdempotencyKeyInput {
   scope: string;
   idempotencyKey: string;
@@ -363,6 +370,21 @@ export class AttendanceCommandTransactionRepository {
         WHERE scope = $1 AND actor_user_id = $2 AND idempotency_key = $3
         FOR UPDATE`,
       [input.scope, input.actorUserId, input.idempotencyKey],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findRegisteredDeviceForMobileEvidenceShare(input: {
+    companyId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
+      `SELECT id, company_id, user_id, status
+       FROM platform.registered_devices
+       WHERE company_id = $1
+         AND id = $2
+       FOR SHARE`,
+      [input.companyId, input.registeredDeviceId],
     );
     return result.rows[0] ?? null;
   }

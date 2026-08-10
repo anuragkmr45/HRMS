@@ -69,6 +69,7 @@ export interface AttendanceCommandInput {
 }
 
 export interface AttendanceCommandDeviceMetadata {
+  registered_device_id?: UUID;
   device_id?: string;
   platform?: "web" | "ios" | "android";
   app_version?: string;
@@ -425,6 +426,12 @@ export class AttendanceCommandService {
               );
             }
           }
+          await this.assertRegisteredDeviceAllowsMobileEvidence(tx, {
+            companyId: input.companyId,
+            actorUserId: input.actor.id,
+            sourceChannel: commandInput.source,
+            device: input.clientEnvelope?.device ?? null,
+          });
           const platformKey = await this.acquirePlatformIdempotencyKey(tx, {
             scope,
             actorUserId: input.actor.id,
@@ -1909,6 +1916,47 @@ export class AttendanceCommandService {
       : result.response;
   }
 
+  private async assertRegisteredDeviceAllowsMobileEvidence(
+    tx: AttendanceCommandTransactionRepository,
+    input: {
+      companyId: UUID;
+      actorUserId: UUID;
+      sourceChannel: AttendanceCommandInput["source"];
+      device: AttendanceCommandDeviceMetadata | null;
+    },
+  ): Promise<void> {
+    if (!isPersonalMobileSource(input.sourceChannel)) {
+      return;
+    }
+    const registeredDeviceId = input.device?.registered_device_id;
+    if (!registeredDeviceId) {
+      throw badRequest("registered_device_id is required for mobile attendance evidence.", {
+        reason_code: "mobile_registered_device_required",
+        source_channel: input.sourceChannel,
+      });
+    }
+    const device = await tx.findRegisteredDeviceForMobileEvidenceShare({
+      companyId: input.companyId,
+      registeredDeviceId,
+    });
+    if (!device || device.user_id !== input.actorUserId) {
+      throw conflict("Registered mobile device is not active for attendance.", {
+        reason_code: "mobile_registered_device_unavailable",
+        source_channel: input.sourceChannel,
+      });
+    }
+    if (device.status !== "registered") {
+      throw conflict("Registered mobile device is not active for attendance.", {
+        reason_code:
+          device.status === "suspended"
+            ? "mobile_registered_device_suspended"
+            : "mobile_registered_device_revoked",
+        source_channel: input.sourceChannel,
+        registered_device_id: registeredDeviceId,
+      });
+    }
+  }
+
   private async persistLocationEvidence(
     tx: AttendanceCommandTransactionRepository,
     input: {
@@ -1993,6 +2041,16 @@ export class AttendanceCommandService {
     if (action === "end_break") return tx.endBreak(args);
     return tx.closeSession(args);
   }
+}
+
+function isPersonalMobileSource(
+  sourceChannel: AttendanceCommandInput["source"],
+): boolean {
+  return (
+    sourceChannel === "mobile" ||
+    sourceChannel === "mobile_foreground" ||
+    sourceChannel === "mobile_offline"
+  );
 }
 
 type PostgresConstraintError = {

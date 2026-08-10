@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDeviceLifecycleEvent,
   buildDeviceRegisteredEvent,
   platformDeviceEvents,
 } from "../events.js";
@@ -44,6 +45,9 @@ describe("platform device outbox event contract", () => {
   it("uses the canonical device event name", () => {
     expect(platformDeviceEvents).toEqual({
       DeviceRegistered: "platform.device.registered",
+      DeviceRevoked: "platform.device.revoked",
+      DeviceSuspended: "platform.device.suspended",
+      DeviceRestored: "platform.device.restored",
     });
   });
 
@@ -74,6 +78,40 @@ describe("platform device outbox event contract", () => {
         platform: "android",
         status: "registered",
         registered_at: "2026-08-03T03:30:03.000Z",
+      },
+    });
+    expectNoForbiddenPayloadKeys(event.payload);
+  });
+
+  it("allowlists lifecycle events without installation hashes or trust evidence", () => {
+    const event = buildDeviceLifecycleEvent({
+      companyId,
+      userId,
+      actorUserId: userId,
+      registeredDeviceId,
+      previousStatus: "registered",
+      newStatus: "revoked",
+      reason: "lost",
+      changedAt: "2026-08-03T04:00:00.000Z",
+      installation_hash: "a".repeat(64),
+      attestation: { provider_metadata: { fingerprint: "secret" } },
+    } as Parameters<typeof buildDeviceLifecycleEvent>[0]);
+
+    expect(event).toEqual({
+      aggregateType: "device",
+      aggregateId: registeredDeviceId,
+      eventType: "platform.device.revoked",
+      idempotencyKey: `platform.device.revoked:${registeredDeviceId}:2026-08-03T04:00:00.000Z`,
+      payload: {
+        schema_version: 1,
+        company_id: companyId,
+        user_id: userId,
+        actor_user_id: userId,
+        registered_device_id: registeredDeviceId,
+        previous_status: "registered",
+        new_status: "revoked",
+        reason: "lost",
+        changed_at: "2026-08-03T04:00:00.000Z",
       },
     });
     expectNoForbiddenPayloadKeys(event.payload);

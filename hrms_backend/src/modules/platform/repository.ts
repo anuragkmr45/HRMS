@@ -1,10 +1,15 @@
 import { nowIso } from "../../platform/data-store.js";
-import { conflict } from "../../platform/errors.js";
+import { conflict, notFound } from "../../platform/errors.js";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import type { FinanceGovernanceConfig, UUID } from "#shared";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
-import { buildDeviceRegisteredEvent } from "./events.js";
+import {
+  buildDeviceLifecycleEvent,
+  buildDeviceRegisteredEvent,
+  type PlatformDeviceLifecycleReason,
+  type PlatformDeviceLifecycleStatus,
+} from "./events.js";
 
 export interface RegisteredDeviceReadModel {
   registered_device_id: UUID;
@@ -159,6 +164,99 @@ export class PlatformRepository {
     return result.rows.map(presentRegisteredDevice);
   }
 
+  async transitionDeviceLifecycle(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    actorCanManageCompanyDevices: boolean;
+    deviceId: UUID;
+    targetStatus: PlatformDeviceLifecycleStatus;
+    reason: PlatformDeviceLifecycleReason | null;
+  }): Promise<RegisteredDeviceReadModel> {
+    const pool = this.store.pgPool;
+    if (!pool) {
+      throw conflict("Device lifecycle management requires PostgreSQL persistence.", {
+        aggregate: "registered_device",
+        reason: "postgres_unavailable",
+      });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<RegisteredDeviceRow>(
+        `SELECT id, company_id, user_id, installation_id_hash, platform, status,
+           status_changed_at, created_at, updated_at
+         FROM platform.registered_devices
+         WHERE company_id = $1
+           AND id = $2
+         FOR UPDATE`,
+        [input.companyId, input.deviceId],
+      );
+      const device = existing.rows[0];
+      if (!device) {
+        throw notFound("Registered device not found.");
+      }
+      if (!input.actorCanManageCompanyDevices && device.user_id !== input.actorUserId) {
+        throw notFound("Registered device not found.");
+      }
+      if (device.status === input.targetStatus) {
+        await client.query("COMMIT");
+        return presentRegisteredDevice(device);
+      }
+      if (device.status === "revoked") {
+        throw conflict("Revoked devices cannot transition to another lifecycle status.", {
+          aggregate: "registered_device",
+          registered_device_id: device.id,
+          current_status: device.status,
+          requested_status: input.targetStatus,
+          reason: "device_revoked_terminal",
+        });
+      }
+      if (!isAllowedLifecycleTransition(device.status, input.targetStatus)) {
+        throw conflict("Device lifecycle transition is not allowed.", {
+          aggregate: "registered_device",
+          registered_device_id: device.id,
+          current_status: device.status,
+          requested_status: input.targetStatus,
+          reason: "device_lifecycle_transition_invalid",
+        });
+      }
+
+      const updated = await client.query<RegisteredDeviceRow>(
+        `UPDATE platform.registered_devices
+         SET status = $3,
+             status_changed_at = transaction_timestamp(),
+             updated_at = transaction_timestamp()
+         WHERE company_id = $1
+           AND id = $2
+         RETURNING id, company_id, user_id, installation_id_hash, platform, status,
+           status_changed_at, created_at, updated_at`,
+        [input.companyId, input.deviceId, input.targetStatus],
+      );
+      const updatedDevice = updated.rows[0];
+      if (!updatedDevice) {
+        throw conflict("Device lifecycle update could not be persisted.", {
+          aggregate: "registered_device",
+          registered_device_id: device.id,
+          reason: "device_lifecycle_update_failed",
+        });
+      }
+      await this.insertDeviceLifecycleOutboxEvent(
+        client,
+        device,
+        updatedDevice,
+        input.actorUserId,
+        input.reason,
+      );
+      await client.query("COMMIT");
+      return presentRegisteredDevice(updatedDevice);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   private async insertDeviceRegisteredOutboxEvent(
     client: PoolClient,
     device: RegisteredDeviceRow,
@@ -169,6 +267,38 @@ export class PlatformRepository {
       registeredDeviceId: device.id,
       platform: device.platform,
       registeredAt: device.created_at.toISOString(),
+    });
+    await client.query(
+      `INSERT INTO platform.outbox_events (
+         aggregate_type, aggregate_id, event_type, payload, idempotency_key
+       )
+       VALUES ($1, $2, $3, $4::jsonb, $5)`,
+      [
+        event.aggregateType,
+        event.aggregateId,
+        event.eventType,
+        JSON.stringify(event.payload),
+        event.idempotencyKey,
+      ],
+    );
+  }
+
+  private async insertDeviceLifecycleOutboxEvent(
+    client: PoolClient,
+    previous: RegisteredDeviceRow,
+    device: RegisteredDeviceRow,
+    actorUserId: UUID,
+    reason: PlatformDeviceLifecycleReason | null,
+  ): Promise<void> {
+    const event = buildDeviceLifecycleEvent({
+      companyId: device.company_id,
+      userId: device.user_id,
+      actorUserId,
+      registeredDeviceId: device.id,
+      previousStatus: previous.status,
+      newStatus: device.status,
+      reason,
+      changedAt: device.status_changed_at.toISOString(),
     });
     await client.query(
       `INSERT INTO platform.outbox_events (
@@ -264,4 +394,14 @@ function presentRegisteredDevice(
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
+}
+
+function isAllowedLifecycleTransition(
+  current: PlatformDeviceLifecycleStatus,
+  target: PlatformDeviceLifecycleStatus,
+): boolean {
+  return (
+    (current === "registered" && (target === "suspended" || target === "revoked")) ||
+    (current === "suspended" && (target === "registered" || target === "revoked"))
+  );
 }

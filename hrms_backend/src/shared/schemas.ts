@@ -393,6 +393,7 @@ export const attendancePunchSchema = z.object({
 });
 
 export const attendanceCommandDeviceSchema = z.object({
+  registered_device_id: uuidSchema.optional(),
   device_id: z.string().trim().min(1).max(128).optional(),
   platform: z.enum(["web", "ios", "android"]).optional(),
   app_version: z.string().trim().min(1).max(64).optional(),

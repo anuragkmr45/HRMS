@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
 import type { AttendancePunchSourceChannel } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
@@ -58,6 +59,32 @@ function employeeCompanyId(app: TestApp, employeeUserId: string): string {
 
 function testClientEventId(ordinal: number): string {
   return `00000000-0000-4000-8000-${ordinal.toString().padStart(12, "0")}`;
+}
+
+function isPersonalMobileSource(source: AttendancePunchSourceChannel): boolean {
+  return source === "mobile" || source === "mobile_foreground" || source === "mobile_offline";
+}
+
+async function insertRegisteredDevice(
+  app: TestApp,
+  input: {
+    companyId: string;
+    userId: string;
+    status?: "registered" | "suspended" | "revoked";
+  },
+): Promise<string> {
+  const installationHash = createHash("sha256")
+    .update(`attendance-source-channel:${randomUUID()}`)
+    .digest("hex");
+  const result = await app.store.pgPool!.query<{ id: string }>(
+    `INSERT INTO platform.registered_devices (
+       company_id, user_id, installation_id_hash, platform, status, status_changed_at
+     )
+     VALUES ($1, $2, $3, 'android', $4, now())
+     RETURNING id`,
+    [input.companyId, input.userId, installationHash, input.status ?? "registered"],
+  );
+  return result.rows[0]!.id;
 }
 
 describe("attendance source channel provenance", () => {
@@ -163,6 +190,12 @@ describe("attendance source channel provenance", () => {
       const employee = await loginAs(app, "E1");
       const companyId = employeeCompanyId(app, employee.user.id);
       const clientEventId = testClientEventId(100 + internalSourceChannels.indexOf(source));
+      const registeredDeviceId = isPersonalMobileSource(source)
+        ? await insertRegisteredDevice(app, {
+            companyId,
+            userId: employee.user.id,
+          })
+        : null;
 
       const response = await new AttendanceCommandService(app.store).execute({
         actor: employee.user,
@@ -172,7 +205,11 @@ describe("attendance source channel provenance", () => {
         clientEnvelope: {
           clientEventId,
           capturedAt: "2026-08-03T09:00:00.000+05:30",
-          device: { platform: "android", app_version: "2026.08.03" },
+          device: {
+            ...(registeredDeviceId ? { registered_device_id: registeredDeviceId } : {}),
+            platform: "android",
+            app_version: "2026.08.03",
+          },
         },
         command: {
           event_type: "check_in",
@@ -239,6 +276,10 @@ describe("attendance source channel provenance", () => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const clientEventId = testClientEventId(300);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
     const service = new AttendanceCommandService(app.store);
     const input = {
       actor: employee.user,
@@ -248,7 +289,11 @@ describe("attendance source channel provenance", () => {
       clientEnvelope: {
         clientEventId,
         capturedAt: "2026-08-03T09:00:00.000+05:30",
-        device: { platform: "android" as const, app_version: "2026.08.03" },
+        device: {
+          registered_device_id: registeredDeviceId,
+          platform: "android" as const,
+          app_version: "2026.08.03",
+        },
       },
       command: {
         event_type: "check_in" as const,

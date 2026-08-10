@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
@@ -362,6 +363,239 @@ describe("platform device registration API", () => {
     );
   });
 
+  it("allows the owner to revoke their own registered or suspended device", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = await activeCompanyId(employee.user.id);
+    const registeredDeviceId = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("owner-registered"),
+      platform: "android",
+      status: "registered",
+    });
+    const suspendedDeviceId = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("owner-suspended"),
+      platform: "ios",
+      status: "suspended",
+    });
+
+    const registeredRevoke = await lifecycleRequest(
+      employee.token,
+      registeredDeviceId,
+      "revoke",
+      { reason: "lost" },
+    );
+    const suspendedRevoke = await lifecycleRequest(
+      employee.token,
+      suspendedDeviceId,
+      "revoke",
+      { reason: "replaced" },
+    );
+
+    expect(registeredRevoke.statusCode).toBe(200);
+    expect(registeredRevoke.json()).toMatchObject({ status: "revoked" });
+    expect(suspendedRevoke.statusCode).toBe(200);
+    expect(suspendedRevoke.json()).toMatchObject({ status: "revoked" });
+    expect(
+      await lifecycleEventCount(registeredDeviceId, "platform.device.revoked"),
+    ).toBe("1");
+    expect(
+      await lifecycleEventCount(suspendedDeviceId, "platform.device.revoked"),
+    ).toBe("1");
+  });
+
+  it("prevents owners and non-owners from using admin lifecycle powers", async () => {
+    const owner = await loginAs(app, "E1");
+    const other = await loginAs(app, "E2");
+    const companyId = await activeCompanyId(owner.user.id);
+    const deviceId = await insertDevice({
+      companyId,
+      userId: owner.user.id,
+      installationHash: uniqueHash("owner-admin-denied"),
+      platform: "android",
+      status: "registered",
+    });
+
+    const suspend = await lifecycleRequest(owner.token, deviceId, "suspend", {
+      reason: "security",
+    });
+    const restore = await lifecycleRequest(owner.token, deviceId, "restore", {
+      reason: "administrative",
+    });
+    const otherRevoke = await lifecycleRequest(
+      other.token,
+      deviceId,
+      "revoke",
+      {
+        reason: "user_requested",
+      },
+    );
+
+    expect(suspend.statusCode).toBe(403);
+    expect(restore.statusCode).toBe(403);
+    expect(otherRevoke.statusCode).toBe(404);
+    expect(
+      await lifecycleEventCount(deviceId, "platform.device.suspended"),
+    ).toBe("0");
+    expect(await lifecycleEventCount(deviceId, "platform.device.revoked")).toBe(
+      "0",
+    );
+  });
+
+  it("allows Admin to revoke, suspend, and restore same-company devices", async () => {
+    const admin = await loginAs(app, "ADM");
+    const employee = await loginAs(app, "E1");
+    const companyId = await activeCompanyId(admin.user.id);
+    const deviceToRevoke = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("admin-revoke"),
+      platform: "android",
+      status: "registered",
+    });
+    const deviceToSuspendRestore = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("admin-suspend"),
+      platform: "ios",
+      status: "registered",
+    });
+
+    const revoke = await lifecycleRequest(
+      admin.token,
+      deviceToRevoke,
+      "revoke",
+      {
+        reason: "security",
+      },
+    );
+    const suspend = await lifecycleRequest(
+      admin.token,
+      deviceToSuspendRestore,
+      "suspend",
+      {
+        reason: "security",
+      },
+    );
+    const restore = await lifecycleRequest(
+      admin.token,
+      deviceToSuspendRestore,
+      "restore",
+      {
+        reason: "administrative",
+      },
+    );
+
+    expect(revoke.statusCode).toBe(200);
+    expect(revoke.json()).toMatchObject({ status: "revoked" });
+    expect(suspend.statusCode).toBe(200);
+    expect(suspend.json()).toMatchObject({ status: "suspended" });
+    expect(restore.statusCode).toBe(200);
+    expect(restore.json()).toMatchObject({ status: "registered" });
+    expect(
+      await lifecycleEventCount(deviceToRevoke, "platform.device.revoked"),
+    ).toBe("1");
+    expect(
+      await lifecycleEventCount(
+        deviceToSuspendRestore,
+        "platform.device.suspended",
+      ),
+    ).toBe("1");
+    expect(
+      await lifecycleEventCount(
+        deviceToSuspendRestore,
+        "platform.device.restored",
+      ),
+    ).toBe("1");
+  });
+
+  it("keeps admin lifecycle mutations scoped to the active company", async () => {
+    const admin = await loginAs(app, "ADM");
+    const otherCompanyId = "10000000-0000-4000-8000-0000000000bb";
+    const otherUserId = "20000000-0000-4000-8000-0000000000bb";
+    await insertOtherCompanyUser(otherCompanyId, otherUserId);
+    const otherDeviceId = await insertDevice({
+      companyId: otherCompanyId,
+      userId: otherUserId,
+      installationHash: uniqueHash("admin-cross-company"),
+      platform: "android",
+      status: "registered",
+    });
+
+    const response = await lifecycleRequest(
+      admin.token,
+      otherDeviceId,
+      "revoke",
+      {
+        reason: "administrative",
+      },
+    );
+
+    expect(response.statusCode).toBe(404);
+    expect(
+      await lifecycleEventCount(otherDeviceId, "platform.device.revoked"),
+    ).toBe("0");
+  });
+
+  it("treats revoked as terminal and same-state retries as idempotent", async () => {
+    const admin = await loginAs(app, "ADM");
+    const employee = await loginAs(app, "E1");
+    const companyId = await activeCompanyId(admin.user.id);
+    const deviceId = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("terminal"),
+      platform: "android",
+      status: "registered",
+    });
+
+    const first = await lifecycleRequest(admin.token, deviceId, "revoke", {
+      reason: "administrative",
+    });
+    const retry = await lifecycleRequest(admin.token, deviceId, "revoke", {
+      reason: "administrative",
+    });
+    const restore = await lifecycleRequest(admin.token, deviceId, "restore", {
+      reason: "administrative",
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual(first.json());
+    expect(restore.statusCode).toBe(409);
+    expect(await lifecycleEventCount(deviceId, "platform.device.revoked")).toBe(
+      "1",
+    );
+    expect(
+      await lifecycleEventCount(deviceId, "platform.device.restored"),
+    ).toBe("0");
+  });
+
+  it("serializes concurrent duplicate lifecycle mutations to one event", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = await activeCompanyId(employee.user.id);
+    const deviceId = await insertDevice({
+      companyId,
+      userId: employee.user.id,
+      installationHash: uniqueHash("concurrent-revoke"),
+      platform: "ios",
+      status: "registered",
+    });
+
+    const [left, right] = await Promise.all([
+      lifecycleRequest(employee.token, deviceId, "revoke", { reason: "lost" }),
+      lifecycleRequest(employee.token, deviceId, "revoke", { reason: "lost" }),
+    ]);
+
+    expect([left.statusCode, right.statusCode]).toEqual([200, 200]);
+    expect(left.json()).toEqual(right.json());
+    expect(await lifecycleEventCount(deviceId, "platform.device.revoked")).toBe(
+      "1",
+    );
+  });
+
   async function registerDevice(
     token: string,
     payload: Record<string, unknown>,
@@ -369,6 +603,20 @@ describe("platform device registration API", () => {
     return app.inject({
       method: "POST",
       url: "/api/v1/platform/devices",
+      headers: authHeader(token),
+      payload,
+    });
+  }
+
+  async function lifecycleRequest(
+    token: string,
+    deviceId: string,
+    action: "revoke" | "suspend" | "restore",
+    payload: Record<string, unknown>,
+  ) {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/platform/devices/${deviceId}/${action}`,
       headers: authHeader(token),
       payload,
     });
@@ -414,20 +662,38 @@ describe("platform device registration API", () => {
     companyId: string,
     userId: string,
   ): Promise<void> {
+    const companySlug = `device-registration-other-company-${companyId}`;
+
     await app.store.pgPool!.query(
-      `INSERT INTO platform.company_profiles (id, company_name, company_slug, status)
-       VALUES ($1, 'Device Registration Other Company', 'device-registration-other-company', 'active')
-       ON CONFLICT (id) DO NOTHING`,
-      [companyId],
+      `INSERT INTO platform.company_profiles (
+       id,
+       company_name,
+       company_slug,
+       status
+     )
+     VALUES (
+       $1,
+       'Device Registration Other Company',
+       $2,
+       'active'
+     )
+     ON CONFLICT (id) DO NOTHING`,
+      [companyId, companySlug],
     );
+
     await app.store.pgPool!.query(
-      `INSERT INTO platform.user_session_preferences (id, user_id, active_role, company_id)
-       VALUES ('30000000-0000-4000-8000-0000000000aa', $1, 'Employee', $2)
-       ON CONFLICT (user_id) DO UPDATE
-       SET active_role = EXCLUDED.active_role,
-           company_id = EXCLUDED.company_id,
-           updated_at = now()`,
-      [userId, companyId],
+      `INSERT INTO platform.user_session_preferences (
+       id,
+       user_id,
+       active_role,
+       company_id
+     )
+     VALUES ($1, $2, 'Employee', $3)
+     ON CONFLICT (user_id) DO UPDATE
+     SET active_role = EXCLUDED.active_role,
+         company_id = EXCLUDED.company_id,
+         updated_at = now()`,
+      [randomUUID(), userId, companyId],
     );
   }
 
@@ -456,10 +722,29 @@ describe("platform device registration API", () => {
     );
     return result.rows;
   }
+
+  async function lifecycleEventCount(
+    registeredDeviceId: string,
+    eventType: string,
+  ): Promise<string> {
+    const result = await app.store.pgPool!.query<{ count: string }>(
+      `SELECT count(*)
+       FROM platform.outbox_events
+       WHERE aggregate_type = 'device'
+         AND aggregate_id = $1
+         AND event_type = $2`,
+      [registeredDeviceId, eventType],
+    );
+    return result.rows[0]?.count ?? "0";
+  }
 });
 
 function hash(prefix: string): string {
   return `${prefix}${"0".repeat(63)}`;
+}
+
+function uniqueHash(label: string): string {
+  return createHash("sha256").update(`${label}:${randomUUID()}`).digest("hex");
 }
 
 function expectNoForbiddenPayloadKeys(
