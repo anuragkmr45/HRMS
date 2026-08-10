@@ -118,8 +118,13 @@ describe("PostgreSQL attendance projection rebuild service", () => {
       evaluatorVersion: "attendance-geo-v999",
     });
 
-    await expect(service().run(baseInput("rebuild"))).rejects.toBeInstanceOf(AttendanceProjectionReplayError);
-    const failed = await app.store.pgPool!.query<{ status: string; failure_code: string }>(
+    await expect(service().run(baseInput("rebuild"))).rejects.toBeInstanceOf(
+      AttendanceProjectionReplayError,
+    );
+    const failed = await app.store.pgPool!.query<{
+      status: string;
+      failure_code: string;
+    }>(
       `SELECT status, failure_code
        FROM attendance.projection_rebuild_runs
        WHERE company_id = $1
@@ -143,8 +148,12 @@ describe("PostgreSQL attendance projection rebuild service", () => {
 
     const reconcile = await service().run(baseInput("reconcile"));
     expect(reconcile.safe_to_rebuild).toBe(false);
-    expect(reconcile.differences.blocked[0]?.code).toBe("missing_shift_instance");
-    await expect(service().run(baseInput("rebuild"))).rejects.toBeInstanceOf(AttendanceProjectionReplayError);
+    expect(reconcile.differences.blocked[0]?.code).toBe(
+      "missing_shift_instance",
+    );
+    await expect(service().run(baseInput("rebuild"))).rejects.toBeInstanceOf(
+      AttendanceProjectionReplayError,
+    );
   });
 
   it("excludes replaced and voided punch facts through regularization applications", async () => {
@@ -195,7 +204,9 @@ describe("PostgreSQL attendance projection rebuild service", () => {
 
     expect(result.safe_to_rebuild).toBe(true);
     expect(result.differences.blocked).toEqual([]);
-    expect(result.differences.missing.daily_records[0]?.expected?.day_classification).toBe("working_day");
+    expect(
+      result.differences.missing.daily_records[0]?.expected?.day_classification,
+    ).toBe("working_day");
   });
 
   it("continues reconciling unaffected dates when another date is blocked", async () => {
@@ -229,13 +240,81 @@ describe("PostgreSQL attendance projection rebuild service", () => {
     );
     const before = await projectionCounts(app, companyId);
 
-    const result = await service().run({ ...baseInput("reconcile"), dateTo: nextDay });
+    const result = await service().run({
+      ...baseInput("reconcile"),
+      dateTo: nextDay,
+    });
 
     expect(result.safe_to_rebuild).toBe(false);
-    expect(result.differences.blocked.map((item) => item.scope)).toContain(`daily_records:${nextDay}`);
-    expect(result.differences.missing.daily_records.some((item) => item.key === day)).toBe(true);
-    expect(result.differences.missing.daily_records.some((item) => item.key === nextDay)).toBe(false);
+    expect(result.differences.blocked.map((item) => item.scope)).toContain(
+      `daily_records:${nextDay}`,
+    );
+    expect(
+      result.differences.missing.daily_records.some((item) => item.key === day),
+    ).toBe(true);
+    expect(
+      result.differences.missing.daily_records.some(
+        (item) => item.key === nextDay,
+      ),
+    ).toBe(false);
     await expect(projectionCounts(app, companyId)).resolves.toEqual(before);
+  });
+
+  it("replays system auto-punchout checkout as closing an open break and session", async () => {
+    await deletePunchOrdinals(app, [3, 4]);
+    await insertSystemAutoPunchOut(app, companyId, {
+      ordinal: 5,
+      occurredAt: "2026-05-18T18:00:00.000Z",
+    });
+
+    const result = await service().run(baseInput("rebuild"));
+    const projection = await app.store.pgPool!.query<{
+      session_closed_at: Date | null;
+      break_ended_at: Date | null;
+      blocked: unknown;
+    }>(
+      `SELECT
+         (SELECT closed_at
+          FROM attendance.sessions
+          WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date) AS session_closed_at,
+         (SELECT ended_at
+          FROM attendance.break_segments
+          WHERE company_id = $1) AS break_ended_at,
+         $4::jsonb AS blocked`,
+      [
+        companyId,
+        seedIds.employee1,
+        day,
+        JSON.stringify(result.differences.blocked),
+      ],
+    );
+
+    expect(
+      result.differences.blocked.filter(
+        (item) => item.code === "ambiguous_transition",
+      ),
+    ).toEqual([]);
+    expect(projection.rows[0]?.session_closed_at?.toISOString()).toBe(
+      "2026-05-18T18:00:00.000Z",
+    );
+    expect(projection.rows[0]?.break_ended_at?.toISOString()).toBe(
+      "2026-05-18T18:00:00.000Z",
+    );
+  });
+
+  it("does not let ordinary checkout close an open replay break implicitly", async () => {
+    await deletePunchOrdinals(app, [3]);
+
+    const result = await service().run(baseInput("reconcile"));
+
+    expect(result.differences.blocked).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "ambiguous_transition",
+          scope: `punch_events:${idsFor(4).punch}`,
+        }),
+      ]),
+    );
   });
 
   function service() {
@@ -255,10 +334,12 @@ describe("PostgreSQL attendance projection rebuild service", () => {
 });
 
 async function seedCompanyId(app: TestApp): Promise<string> {
-  const row = (await app.store.pgPool!.query<{ company_id: string }>(
-    `SELECT company_id FROM platform.user_session_preferences WHERE user_id = $1`,
-    [seedIds.admin],
-  )).rows[0];
+  const row = (
+    await app.store.pgPool!.query<{ company_id: string }>(
+      `SELECT company_id FROM platform.user_session_preferences WHERE user_id = $1`,
+      [seedIds.admin],
+    )
+  ).rows[0];
   if (!row?.company_id) throw new Error("Seed company is missing.");
   return row.company_id;
 }
@@ -322,7 +403,10 @@ async function insertShiftInstance(
   );
 }
 
-async function insertEmployeeCommandState(app: TestApp, companyId: string): Promise<void> {
+async function insertEmployeeCommandState(
+  app: TestApp,
+  companyId: string,
+): Promise<void> {
   await app.store.pgPool!.query(
     `INSERT INTO attendance.employee_command_states (
        company_id, employee_user_id, state, current_session_id, version,
@@ -426,7 +510,10 @@ async function insertAcceptedPunch(
       ids.command,
       input.occurredAt,
       "d".repeat(64),
-      JSON.stringify({ policyVersionId: "22222222-2222-4222-8222-222222222222", policyVersion: "test-v1" }),
+      JSON.stringify({
+        policyVersionId: "22222222-2222-4222-8222-222222222222",
+        policyVersion: "test-v1",
+      }),
       JSON.stringify({
         geo_policy: {
           allowed: true,
@@ -461,6 +548,49 @@ async function insertAcceptedPunch(
   );
 }
 
+async function insertSystemAutoPunchOut(
+  app: TestApp,
+  companyId: string,
+  input: { ordinal: number; occurredAt: string },
+): Promise<void> {
+  const ids = idsFor(input.ordinal);
+  await app.store.pgPool!.query(
+    `INSERT INTO attendance.punch_events (
+       id, company_id, employee_user_id, actor_user_id, event_type,
+       occurred_at, work_mode, source, origin, regularization_request_id,
+       command_execution_id, session_id, decision_id, metadata, created_at,
+       deleted_at
+     )
+     VALUES ($1,$2,$3,$4,'check_out',$5,'office','admin','system',NULL,
+       NULL,$6,NULL,$7::jsonb,$5,NULL)`,
+    [
+      ids.punch,
+      companyId,
+      seedIds.employee1,
+      seedIds.employee1,
+      input.occurredAt,
+      expectedSessionId,
+      JSON.stringify({
+        auto_punch_out: true,
+        auto_punch_out_time: "18:00",
+        auto_punch_out_trigger: "worker",
+      }),
+    ],
+  );
+}
+
+async function deletePunchOrdinals(
+  app: TestApp,
+  ordinals: number[],
+): Promise<void> {
+  const ids = ordinals.map(idsFor);
+
+  await app.store.pgPool!.query(
+    `DELETE FROM attendance.punch_events WHERE id = ANY($1::uuid[])`,
+    [ids.map((item) => item.punch)],
+  );
+}
+
 function testPolicySnapshot(): Record<string, unknown> {
   return {
     policyVersionId: "22222222-2222-4222-8222-222222222222",
@@ -470,7 +600,10 @@ function testPolicySnapshot(): Record<string, unknown> {
   };
 }
 
-async function insertCorruptedProjection(app: TestApp, companyId: string): Promise<void> {
+async function insertCorruptedProjection(
+  app: TestApp,
+  companyId: string,
+): Promise<void> {
   await app.store.pgPool!.query(
     `INSERT INTO attendance.sessions (
        id, company_id, employee_user_id, work_date, status, checked_in_at,
@@ -543,22 +676,33 @@ async function insertRegularizationApplication(
      )
      VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL,$8,
        '2026-05-18T20:00:00.000Z')`,
-    [input.applicationId, companyId, requestId, itemId, actionId, input.operation, target.punch, seedIds.admin],
+    [
+      input.applicationId,
+      companyId,
+      requestId,
+      itemId,
+      actionId,
+      input.operation,
+      target.punch,
+      seedIds.admin,
+    ],
   );
 }
 
 async function projectionCounts(app: TestApp, companyId: string) {
-  const row = (await app.store.pgPool!.query<{
-    sessions: string;
-    breaks: string;
-    daily: string;
-  }>(
-    `SELECT
+  const row = (
+    await app.store.pgPool!.query<{
+      sessions: string;
+      breaks: string;
+      daily: string;
+    }>(
+      `SELECT
        (SELECT count(*) FROM attendance.sessions WHERE company_id = $1 AND employee_user_id = $2 AND deleted_at IS NULL) AS sessions,
        (SELECT count(*) FROM attendance.break_segments WHERE company_id = $1) AS breaks,
        (SELECT count(*) FROM attendance.daily_records WHERE company_id = $1 AND employee_user_id = $2 AND deleted_at IS NULL) AS daily`,
-    [companyId, seedIds.employee1],
-  )).rows[0]!;
+      [companyId, seedIds.employee1],
+    )
+  ).rows[0]!;
   return {
     sessions: Number(row.sessions),
     breaks: Number(row.breaks),
@@ -567,30 +711,34 @@ async function projectionCounts(app: TestApp, companyId: string) {
 }
 
 async function projectionSnapshot(app: TestApp, companyId: string) {
-  return (await app.store.pgPool!.query<{
-    session_count: number;
-    break_count: number;
-    work_seconds: number;
-    break_seconds: number;
-  }>(
-    `SELECT
+  return (
+    await app.store.pgPool!.query<{
+      session_count: number;
+      break_count: number;
+      work_seconds: number;
+      break_seconds: number;
+    }>(
+      `SELECT
        (SELECT count(*)::int FROM attendance.sessions WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date AND deleted_at IS NULL) AS session_count,
        (SELECT count(*)::int FROM attendance.break_segments segment JOIN attendance.sessions session ON session.id = segment.session_id AND session.company_id = segment.company_id WHERE segment.company_id = $1 AND session.employee_user_id = $2 AND session.work_date = $3::date AND session.deleted_at IS NULL) AS break_count,
        (SELECT work_seconds FROM attendance.daily_records WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date) AS work_seconds,
        (SELECT break_seconds FROM attendance.daily_records WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date) AS break_seconds`,
-    [companyId, seedIds.employee1, day],
-  )).rows[0]!;
+      [companyId, seedIds.employee1, day],
+    )
+  ).rows[0]!;
 }
 
 async function immutableCounts(app: TestApp, companyId: string) {
-  return (await app.store.pgPool!.query<Record<string, string>>(
-    `SELECT
+  return (
+    await app.store.pgPool!.query<Record<string, string>>(
+      `SELECT
        (SELECT count(*) FROM attendance.punch_events WHERE company_id = $1) AS punches,
        (SELECT count(*) FROM attendance.command_decisions WHERE company_id = $1) AS command_decisions,
        (SELECT count(*) FROM attendance.attendance_decisions WHERE company_id = $1) AS attendance_decisions,
        (SELECT count(*) FROM attendance.attendance_events WHERE company_id = $1) AS attendance_events`,
-    [companyId],
-  )).rows[0];
+      [companyId],
+    )
+  ).rows[0];
 }
 
 function idsFor(ordinal: number) {

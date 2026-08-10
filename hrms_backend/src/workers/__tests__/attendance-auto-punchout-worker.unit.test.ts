@@ -521,9 +521,9 @@ describe("AttendanceAutoPunchoutWorker", () => {
     const worker = new AttendanceAutoPunchoutWorker(store);
     const internals = worker as unknown as {
       runDueWithPostgresLock: (input: { referenceIso?: string }, companyIds: Set<string>) => Promise<unknown>;
-      runDueUnlocked: () => Promise<unknown>;
+      runDuePostgresDbFirst: () => Promise<unknown>;
     };
-    internals.runDueUnlocked = async () => {
+    internals.runDuePostgresDbFirst = async () => {
       throw new Error("PostgreSQL persistence failed");
     };
 
@@ -532,7 +532,7 @@ describe("AttendanceAutoPunchoutWorker", () => {
       new Set([activeCompanyId(store)]),
     )).rejects.toThrow("PostgreSQL persistence failed");
 
-    expect(reload).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledOnce();
     expect(query).toHaveBeenCalledWith(
       "SELECT pg_advisory_unlock($1, $2)",
       [20_260_606, 1],

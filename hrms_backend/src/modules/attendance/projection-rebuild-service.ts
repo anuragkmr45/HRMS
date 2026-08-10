@@ -820,11 +820,7 @@ function validatePunchFacts(facts: PunchFactRow[]): { blocks: SafeProjectionBloc
   const byPunch = new Map<UUID, number>();
   for (const fact of facts) {
     byPunch.set(fact.id, (byPunch.get(fact.id) ?? 0) + 1);
-    const isSystemAutoPunchOut =
-      fact.origin === "system" &&
-      fact.event_type === AttendancePunchEventTypes.CheckOut &&
-      fact.metadata &&
-      fact.metadata.auto_punch_out === true;
+    const isSystemAutoPunchOut = isSystemAutoPunchOutFact(fact);
     if (!isSystemAutoPunchOut) {
       if (fact.command_outcome !== "allowed" || fact.audit_outcome !== "passed") {
         blocks.push(block("missing_authoritative_decision", `punch_events:${fact.id}`, "Accepted punch fact lacks matching allowed command and passed attendance decisions."));
@@ -856,6 +852,14 @@ function validatePunchFacts(facts: PunchFactRow[]): { blocks: SafeProjectionBloc
     }
   }
   return { blocks, evaluatorVersions: [...evaluatorVersions].sort() };
+}
+
+function isSystemAutoPunchOutFact(fact: PunchFactRow): boolean {
+  return (
+    fact.origin === "system" &&
+    fact.event_type === AttendancePunchEventTypes.CheckOut &&
+    fact.metadata?.auto_punch_out === true
+  );
 }
 
 function replayPunchFacts(
@@ -937,9 +941,14 @@ function replayPunchFacts(
         open.last_transition_at = occurredAt;
         break;
       case AttendancePunchEventTypes.CheckOut:
-        if (!open || openBreak) {
+        if (!open || (openBreak && !isSystemAutoPunchOutFact(fact))) {
           blocks.push(block("ambiguous_transition", `punch_events:${fact.id}`, "Check-out encountered without one closable replay session."));
           continue;
+        }
+        if (openBreak) {
+          openBreak.ended_at = occurredAt;
+          breaks.push(openBreak);
+          openBreak = null;
         }
         open.closed_at = occurredAt;
         open.last_transition_at = occurredAt;

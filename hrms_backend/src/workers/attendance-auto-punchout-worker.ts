@@ -1,7 +1,8 @@
-import type { AttendanceDayRecord, AttendancePunch, UUID } from "#shared";
-import type { PoolClient } from "pg";
+import type { UUID } from "#shared";
+import { AttendanceCommandService } from "../modules/attendance/command-service.js";
 import {
   AttendanceService,
+  type AttendanceAutoPunchOutClosure,
   type AttendanceAutoPunchOutRunResult,
 } from "../modules/attendance/service.js";
 import type { MemoryDataStore } from "../platform/data-store.js";
@@ -32,6 +33,14 @@ interface AttendanceAutoPunchoutSchedule {
   localClock: string;
 }
 
+interface AttendanceAutoCheckoutCandidate {
+  company_id: UUID;
+  employee_user_id: UUID;
+  session_id: UUID;
+  work_date: string;
+  checked_in_at: string;
+}
+
 export class AttendanceAutoPunchoutWorker {
   private readonly completedRunKeys = new Set<string>();
 
@@ -41,6 +50,9 @@ export class AttendanceAutoPunchoutWorker {
     input: { referenceIso?: string; includeCatchUp?: boolean } = {},
   ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
     const referenceIso = input.referenceIso ?? new Date().toISOString();
+    if (this.store.pgPool && this.store.kind === "postgres") {
+      return this.runDue({ referenceIso });
+    }
     const schedules = await this.readSchedules(referenceIso);
     const dueSchedules = schedules
       .flatMap((schedule) =>
@@ -112,6 +124,9 @@ export class AttendanceAutoPunchoutWorker {
     input: AttendanceAutoPunchoutWorkerRunInput = {},
   ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
     const referenceIso = input.referenceIso ?? new Date().toISOString();
+    if (this.store.pgPool && this.store.kind === "postgres") {
+      return this.runDueForCompanies({ ...input, referenceIso });
+    }
     const companyIds = new Set(
       (await this.readSchedules(referenceIso))
         .filter((schedule) => schedule.enabled)
@@ -203,17 +218,17 @@ export class AttendanceAutoPunchoutWorker {
 
   private async runDueForCompanies(
     input: AttendanceAutoPunchoutWorkerRunInput,
-    companyIds: Set<UUID>,
+    companyIds?: Set<UUID>,
   ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
     if (this.store.pgPool && this.store.kind === "postgres") {
       return this.runDueWithPostgresLock(input, companyIds);
     }
-    return this.runDueUnlocked(input, { companyIds });
+    return this.runDueUnlocked(input, { companyIds: companyIds ?? new Set() });
   }
 
   private async runDueWithPostgresLock(
     input: AttendanceAutoPunchoutWorkerRunInput,
-    companyIds: Set<UUID>,
+    companyIds?: Set<UUID>,
   ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
     const client = await this.store.pgPool!.connect();
     let locked = false;
@@ -233,12 +248,8 @@ export class AttendanceAutoPunchoutWorker {
         );
       }
 
-      await this.store.persistence?.reload();
       try {
-        return await this.runDueUnlocked(input, {
-          persistPostgresDirectly: true,
-          companyIds,
-        });
+        return await this.runDuePostgresDbFirst(input, companyIds);
       } finally {
         await this.store.persistence?.reload();
       }
@@ -258,7 +269,6 @@ export class AttendanceAutoPunchoutWorker {
   private async runDueUnlocked(
     input: AttendanceAutoPunchoutWorkerRunInput,
     options: {
-      persistPostgresDirectly?: boolean;
       companyIds?: ReadonlySet<UUID>;
     } = {},
   ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
@@ -267,12 +277,7 @@ export class AttendanceAutoPunchoutWorker {
       ...input,
       companyIds: options.companyIds,
     });
-    if (options.persistPostgresDirectly && result.punches_created > 0) {
-      await this.persistPostgresAttendanceChanges(result);
-    } else if (
-      !options.persistPostgresDirectly &&
-      (result.punches_created > 0 || result.day_records_recomputed > 0)
-    ) {
+    if (result.punches_created > 0 || result.day_records_recomputed > 0) {
       await this.store.persistence?.flush();
     }
     return {
@@ -283,58 +288,122 @@ export class AttendanceAutoPunchoutWorker {
     };
   }
 
-  private async persistPostgresAttendanceChanges(
-    result: AttendanceAutoPunchOutRunResult,
-  ): Promise<void> {
-    if (!this.store.pgPool) {
-      return;
-    }
-    const client = await this.store.pgPool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(
-        "LOCK TABLE attendance.punch_events IN SHARE ROW EXCLUSIVE MODE",
-      );
-      await client.query(
-        "LOCK TABLE attendance.daily_records IN SHARE ROW EXCLUSIVE MODE",
-      );
-      for (const closure of result.closures) {
-        const duplicateCheckout = await client.query(
-          `SELECT id
-           FROM attendance.punch_events
-           WHERE company_id = $1
-             AND employee_user_id = $2
-             AND event_type = 'check_out'
-             AND deleted_at IS NULL
-             AND occurred_at >= $3
-             AND occurred_at <= $4
-           LIMIT 1`,
-          [
-            closure.company_id,
-            closure.employee_user_id,
-            closure.first_check_in_at,
-            closure.closed_at,
-          ],
-        );
-        if (duplicateCheckout.rowCount && duplicateCheckout.rowCount > 0) {
-          continue;
-        }
-        for (const punch of closure.created_punches) {
-          await insertPunch(client, punch);
-        }
-        if (closure.day_record) {
-          await upsertDayRecord(client, closure.day_record);
-        }
-        await persistOutboxEvents(
-          client,
-          this.store,
-          new Set(closure.created_punches.map((punch) => punch.id)),
-        );
+  private async runDuePostgresDbFirst(
+    input: AttendanceAutoPunchoutWorkerRunInput,
+    companyIds?: ReadonlySet<UUID>,
+  ): Promise<AttendanceAutoPunchoutWorkerRunResult> {
+    const referenceIso = input.referenceIso ?? new Date().toISOString();
+    let cursor: { checkedInAt: string; sessionId: UUID } | null = null;
+    let scannedCandidates = 0;
+    const closures: AttendanceAutoPunchOutClosure[] = [];
+    const service = new AttendanceCommandService(this.store);
+    for (;;) {
+      const candidates = await this.readOpenSessionCandidates({
+        referenceIso,
+        batchSize: input.batchSize,
+        companyIds,
+        cursor,
+      });
+      if (candidates.length === 0) break;
+      scannedCandidates += candidates.length;
+      for (const candidate of candidates) {
+        const closure = await service.autoCheckoutOpenSession({
+          companyId: candidate.company_id,
+          employeeUserId: candidate.employee_user_id,
+          sessionId: candidate.session_id,
+          referenceIso,
+        });
+        if (closure) closures.push(closure);
       }
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
+      const last = candidates.at(-1)!;
+      cursor = {
+        checkedInAt: last.checked_in_at,
+        sessionId: last.session_id,
+      };
+    }
+    if (scannedCandidates === 0) {
+      return skippedResult(
+        referenceIso,
+        "attendance auto punch-out has no open sessions to scan",
+      );
+    }
+    if (closures.length === 0) {
+      return skippedResult(
+        referenceIso,
+        "attendance auto punch-out is not due yet",
+      );
+    }
+    const result: AttendanceAutoPunchOutRunResult = {
+      reference_iso: referenceIso,
+      scanned_users: scannedCandidates,
+      closed_sessions: closures.length,
+      punches_created: closures.reduce(
+        (total, closure) => total + closure.created_punches.length,
+        0,
+      ),
+      day_records_recomputed: new Set(
+        closures.map(
+          (closure) =>
+            `${closure.company_id}:${closure.employee_user_id}:${closure.work_date}`,
+        ),
+      ).size,
+      closures,
+    };
+    return {
+      ...result,
+      skipped: false,
+      skip_reason: null,
+      run_keys: closures.map(
+        (closure) =>
+          `attendance:auto-punchout:${closure.company_id}:${closure.work_date}`,
+      ),
+    };
+  }
+
+  private async readOpenSessionCandidates(input: {
+    referenceIso: string;
+    batchSize?: number;
+    companyIds?: ReadonlySet<UUID>;
+    cursor?: { checkedInAt: string; sessionId: UUID } | null;
+  }): Promise<AttendanceAutoCheckoutCandidate[]> {
+    const client = await this.store.pgPool!.connect();
+    const batchSize = Math.max(1, Math.floor(input.batchSize ?? 10_000));
+    const companyIds = input.companyIds ? [...input.companyIds] : null;
+    try {
+      const result = await client.query<AttendanceAutoCheckoutCandidate>(
+        `SELECT
+           session.company_id,
+           session.employee_user_id,
+           session.id AS session_id,
+           session.work_date::text AS work_date,
+           session.checked_in_at::text AS checked_in_at
+         FROM attendance.sessions session
+         JOIN platform.company_profiles company
+           ON company.id = session.company_id
+          AND company.status = 'active'
+         JOIN core.users employee
+           ON employee.id = session.employee_user_id
+          AND employee.deleted_at IS NULL
+          AND employee.employment_status = 'active'
+         WHERE session.closed_at IS NULL
+           AND session.deleted_at IS NULL
+           AND session.checked_in_at <= $1::timestamptz
+           AND ($2::uuid[] IS NULL OR session.company_id = ANY($2::uuid[]))
+           AND (
+             $4::timestamptz IS NULL
+             OR (session.checked_in_at, session.id) > ($4::timestamptz, $5::uuid)
+           )
+         ORDER BY session.checked_in_at ASC, session.id ASC
+         LIMIT $3`,
+        [
+          input.referenceIso,
+          companyIds,
+          batchSize,
+          input.cursor?.checkedInAt ?? null,
+          input.cursor?.sessionId ?? null,
+        ],
+      );
+      return result.rows;
     } finally {
       client.release();
     }
@@ -470,147 +539,4 @@ function addDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00.000Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
-}
-
-async function insertPunch(
-  client: PoolClient,
-  punch: AttendancePunch,
-): Promise<void> {
-  await client.query(
-    `INSERT INTO attendance.punch_events (
-      id, company_id, employee_user_id, actor_user_id, event_type, occurred_at,
-      work_mode, source, origin, metadata, created_at, deleted_at
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
-    ON CONFLICT (id) DO NOTHING`,
-    [
-      punch.id,
-      punch.company_id,
-      punch.employee_user_id,
-      punch.actor_user_id,
-      punch.event_type,
-      punch.occurred_at,
-      punch.work_mode,
-      punch.source,
-      punch.origin,
-      JSON.stringify(punch.metadata),
-      punch.created_at,
-      punch.deleted_at,
-    ],
-  );
-}
-
-async function upsertDayRecord(
-  client: PoolClient,
-  day: AttendanceDayRecord,
-): Promise<void> {
-  await client.query(
-    `INSERT INTO attendance.daily_records (
-      id, company_id, employee_user_id, work_date, status, day_classification,
-      presence_state, punctuality_state, evidence_state, approval_kind, approval_state,
-      payroll_state, first_check_in, last_check_out, work_minutes, break_minutes,
-      late_minutes, early_out_minutes, work_seconds, break_seconds, scheduled_seconds,
-      late_seconds, early_departure_seconds, work_mode, note, exception_type,
-      regularization_status, version, created_at, updated_at, deleted_at
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
-    ON CONFLICT (company_id, employee_user_id, work_date) DO UPDATE
-    SET status = EXCLUDED.status,
-        day_classification = EXCLUDED.day_classification,
-        presence_state = EXCLUDED.presence_state,
-        punctuality_state = EXCLUDED.punctuality_state,
-        evidence_state = EXCLUDED.evidence_state,
-        approval_kind = EXCLUDED.approval_kind,
-        approval_state = EXCLUDED.approval_state,
-        payroll_state = EXCLUDED.payroll_state,
-        first_check_in = EXCLUDED.first_check_in,
-        last_check_out = EXCLUDED.last_check_out,
-        work_minutes = EXCLUDED.work_minutes,
-        break_minutes = EXCLUDED.break_minutes,
-        late_minutes = EXCLUDED.late_minutes,
-        early_out_minutes = EXCLUDED.early_out_minutes,
-        work_seconds = EXCLUDED.work_seconds,
-        break_seconds = EXCLUDED.break_seconds,
-        scheduled_seconds = EXCLUDED.scheduled_seconds,
-        late_seconds = EXCLUDED.late_seconds,
-        early_departure_seconds = EXCLUDED.early_departure_seconds,
-        work_mode = EXCLUDED.work_mode,
-        note = EXCLUDED.note,
-        exception_type = EXCLUDED.exception_type,
-        regularization_status = EXCLUDED.regularization_status,
-        version = EXCLUDED.version,
-        updated_at = EXCLUDED.updated_at,
-        deleted_at = EXCLUDED.deleted_at`,
-    [
-      day.id,
-      day.company_id,
-      day.employee_user_id,
-      day.work_date,
-      day.status,
-      day.day_classification,
-      day.presence_state,
-      day.punctuality_state,
-      day.evidence_state,
-      day.approval_kind,
-      day.approval_state,
-      day.payroll_state,
-      day.first_check_in,
-      day.last_check_out,
-      day.work_minutes,
-      day.break_minutes,
-      day.late_minutes,
-      day.early_out_minutes,
-      day.work_seconds,
-      day.break_seconds,
-      day.scheduled_seconds,
-      day.late_seconds,
-      day.early_departure_seconds,
-      day.work_mode,
-      day.note,
-      day.exception_type,
-      day.regularization_status,
-      day.version,
-      day.created_at,
-      day.updated_at,
-      day.deleted_at,
-    ],
-  );
-}
-
-async function persistOutboxEvents(
-  client: PoolClient,
-  store: MemoryDataStore,
-  aggregateIds: ReadonlySet<string>,
-): Promise<void> {
-  for (const event of store.outbox) {
-    if (!aggregateIds.has(event.aggregate_id)) continue;
-    await client.query(
-      `INSERT INTO platform.outbox_events (
-        id, event_id, aggregate_type, aggregate_id, event_type, payload, idempotency_key,
-        status, retry_count, available_at, created_at, published_at, failed_at, last_error
-      )
-      OVERRIDING SYSTEM VALUE
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14)
-      ON CONFLICT (id) DO UPDATE
-      SET status = EXCLUDED.status, retry_count = EXCLUDED.retry_count,
-          available_at = EXCLUDED.available_at, published_at = EXCLUDED.published_at,
-          failed_at = EXCLUDED.failed_at, last_error = EXCLUDED.last_error`,
-      [
-        event.id,
-        event.event_id,
-        event.aggregate_type,
-        event.aggregate_id,
-        event.event_type,
-        JSON.stringify(event.payload),
-        event.idempotency_key,
-        event.status,
-        event.retry_count,
-        event.available_at,
-        event.created_at,
-        event.published_at,
-        event.failed_at,
-        event.last_error,
-      ],
-    );
-  }
 }

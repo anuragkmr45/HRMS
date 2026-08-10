@@ -1542,9 +1542,9 @@ export class AttendanceCommandTransactionRepository {
     sessionId: UUID;
   }): Promise<AttendanceSessionRecord | null> {
     const result = await this.client.query<AttendanceSessionRecord>(
-      `SELECT id, company_id, employee_user_id, work_date, status, checked_in_at,
-          closed_at, active_break_started_at, last_transition_at, work_mode,
-          source, metadata, version, created_at, updated_at, deleted_at
+      `SELECT id, company_id, employee_user_id, work_date::text AS work_date, status, checked_in_at,
+    closed_at, active_break_started_at, last_transition_at, work_mode,
+    source, metadata, version, created_at, updated_at, deleted_at
         FROM attendance.sessions
         WHERE id = $1 AND company_id = $2 AND employee_user_id = $3
           AND deleted_at IS NULL
@@ -1850,9 +1850,9 @@ export class AttendanceCommandTransactionRepository {
     origin: string;
     regularizationRequestId?: UUID | null;
     metadata: Record<string, unknown>;
-    commandExecutionId: UUID;
+    commandExecutionId: UUID | null;
     sessionId?: UUID | null;
-    decisionId: UUID;
+    decisionId: UUID | null;
   }) {
     return this.query<
       { id: UUID; created_at: string } & Record<string, unknown>
@@ -1870,9 +1870,9 @@ export class AttendanceCommandTransactionRepository {
         input.origin,
         input.regularizationRequestId ?? null,
         JSON.stringify(input.metadata),
-        input.commandExecutionId,
+        input.commandExecutionId ?? null,
         input.sessionId ?? null,
-        input.decisionId,
+        input.decisionId ?? null,
       ],
     );
   }
