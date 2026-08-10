@@ -37,6 +37,7 @@ type JsonObject = Record<string, unknown>;
 
 const allowedTags = new Set([
   "Platform / Health",
+  "Platform / Devices",
   "Auth & Sessions",
   "Core / Employees & Hierarchy",
   "Dashboard",

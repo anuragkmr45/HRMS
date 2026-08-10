@@ -150,6 +150,7 @@ const expectedOperations = [
   "GET /api/v1/notifications",
   "GET /api/v1/notifications/unread-count",
   "GET /api/v1/openapi.json",
+  "GET /api/v1/platform/devices",
   "GET /api/v1/platform/finance-governance",
   "GET /api/v1/projects",
   "GET /api/v1/projects/{id}",
@@ -285,6 +286,7 @@ const expectedOperations = [
   "POST /api/v1/notifications/read-all",
   "POST /api/v1/notifications/{id}/read",
   "POST /api/v1/onboarding/company-bootstrap",
+  "POST /api/v1/platform/devices",
   "PATCH /api/v1/projects/{id}",
   "POST /api/v1/projects",
   "POST /api/v1/projects/{id}/allocations",
@@ -337,6 +339,7 @@ const bodyRequiredOperations = [
   "PUT /api/v1/admin/rbac/roles/{id}/permissions",
   "PUT /api/v1/admin/workflows/{workflow_key}",
   "POST /api/v1/auth/login",
+  "POST /api/v1/platform/devices",
   "POST /api/v1/core/users",
   "POST /api/v1/core/users/exports",
   "POST /api/v1/core/users/imports",
@@ -1207,7 +1210,7 @@ describe("API contracts", () => {
     expect(rows.map((row) => row.key).sort()).toEqual(
       [...expectedOperations].sort(),
     );
-    expect(rows.length).toBe(249);
+    expect(rows.length).toBe(251);
 
     const attendancePunch =
       spec.paths?.["/api/v1/attendance/punches"]?.post as

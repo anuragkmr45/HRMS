@@ -527,6 +527,64 @@ const authSessionContextSchema = {
   additionalProperties: false
 };
 
+const platformRegisteredDeviceSchema = {
+  type: "object",
+  required: [
+    "registered_device_id",
+    "platform",
+    "status",
+    "status_changed_at",
+    "created_at",
+    "updated_at"
+  ],
+  properties: {
+    registered_device_id: uuid("Registered device UUID"),
+    platform: { type: "string", enum: ["ios", "android"], example: "android" },
+    status: { type: "string", enum: ["registered", "suspended", "revoked"], example: "registered" },
+    status_changed_at: dateTime("Device lifecycle status timestamp"),
+    created_at: dateTime("Registration creation timestamp"),
+    updated_at: dateTime("Registration update timestamp")
+  },
+  additionalProperties: false,
+  example: {
+    registered_device_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+    platform: "android",
+    status: "registered",
+    status_changed_at: "2026-08-09T03:40:00.000Z",
+    created_at: "2026-08-09T03:40:00.000Z",
+    updated_at: "2026-08-09T03:40:00.000Z"
+  }
+};
+
+const platformDeviceRegistrationBodySchema = {
+  type: "object",
+  required: ["installation_id_hash", "platform"],
+  properties: {
+    installation_id_hash: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      minLength: 64,
+      maxLength: 64,
+      description: "Lowercase SHA-256 hash of the app-generated installation identifier. Raw installation identifiers and device secrets are never accepted.",
+      example: lowerHex64Example
+    },
+    platform: { type: "string", enum: ["ios", "android"], example: "android" }
+  },
+  additionalProperties: false
+};
+
+const platformRegisteredDeviceListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: platformRegisteredDeviceSchema
+    }
+  },
+  additionalProperties: false
+};
+
 const adminCompanyProfileSchema = {
   type: "object",
   required: [
@@ -5003,6 +5061,9 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/auth/logout": operation("Auth & Sessions", "Logout", "Revokes the current Valkey-backed session when a valid cookie is present and always clears the browser session cookie. Safe to call when no session is present.", { response200: statusResponseSchema }, false),
   "GET /api/v1/auth/me": operation("Auth & Sessions", "Current session", "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults.", { response200: authSessionContextSchema }),
 
+  "POST /api/v1/platform/devices": operation("Platform / Devices", "Register mobile device", "Registers the authenticated user's mobile app installation in the active company using a tenant-scoped lowercase SHA-256 installation hash. The server derives company and owner from the authenticated active-company context. First registration creates the device and emits platform.device.registered transactionally with HTTP 201; same-owner retries for an already registered device return the existing device with HTTP 200 and do not emit another event. Cross-owner claims and suspended or revoked devices return 409.", { body: platformDeviceRegistrationBodySchema, response200: platformRegisteredDeviceSchema, response: { 201: success(platformRegisteredDeviceSchema, "Device registered.") } }),
+  "GET /api/v1/platform/devices": operation("Platform / Devices", "List my mobile devices", "Lists registered, suspended, and revoked mobile devices owned by the authenticated actor in the active company. The backend scopes by both company_id and user_id derived from server context.", { response200: platformRegisteredDeviceListSchema }),
+
   "GET /api/v1/core/master-data/org-selectors": operation("Core / Employees & Hierarchy", "Org selectors", "Returns active departments, designations, manager candidates, and backend role labels used by employee create/edit forms. The list is scoped by the authenticated actor where manager visibility is restricted.", { response200: orgSelectorsResponseSchema }),
   "GET /api/v1/core/users": operation("Core / Employees & Hierarchy", "List users", "Paginated employee/user search for authorized modules and admins. Supports frontend table filters, manager scoping, login-state filters, sorting, compact org references, and summary counts.", { querystring: { ...paginationQuerySchema, properties: { ...paginationQuerySchema.properties, q: { type: "string", description: "Optional employee code/name/email search.", example: "E1" }, department_id: uuid("Filter by department UUID"), designation_id: uuid("Filter by designation UUID"), role: { type: "string", description: "Filter by assigned role label.", example: "Employee" }, employment_status: { type: "string", enum: ["active", "inactive", "terminated", "suspended"], example: "active" }, manager_user_id: uuid("Filter by direct manager UUID"), login_state: { type: "string", enum: ["enabled", "disabled", "setup_pending"], example: "enabled" } } }, response200: coreUserListResponseSchema }),
   "POST /api/v1/core/users": operation("Core / Employees & Hierarchy", "Create user", "Creates a Core employee profile with department, designation, reporting manager, roles, lifecycle status, and optional password setup action. The API never creates a shared/default production password; login enablement queues password setup.", { body: coreUserCreateBodySchema, response200: coreUserMutationResponseSchema }),
@@ -5981,6 +6042,7 @@ const routeDocs: Record<string, RouteSchema> = {
 
 export const openApiTags = [
   { name: "Platform / Health", description: "Liveness, readiness, and OpenAPI contract endpoints." },
+  { name: "Platform / Devices", description: "Authenticated mobile device registration and owner-scoped listing." },
   { name: "Auth & Sessions", description: "Login, logout, and current session context." },
   { name: "Core / Employees & Hierarchy", description: "Core employee identity and ltree hierarchy lookup." },
   { name: "Dashboard", description: "Role-scoped dashboard summaries derived from implemented backend modules." },

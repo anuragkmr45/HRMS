@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 249
+Documented operations: 251
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2274,6 +2274,105 @@ Success body highlights:
 | `workload` | object | required | - |
 | `attention` | array of object | required | - |
 | `unavailable_features` | array of object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+## Platform / Devices
+
+Device APIs register and list the authenticated user's mobile app installations in the active company.
+
+### GET /api/v1/platform/devices
+
+| Field | Contract |
+|---|---|
+| Purpose | List my mobile devices |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `items` | array of object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices
+
+| Field | Contract |
+|---|---|
+| Purpose | Register mobile device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `installation_id_hash` | string | required | Lowercase SHA-256 hash of the app-generated installation identifier. Raw installation identifiers and device secrets are never accepted.; minLength 64; pattern ^[0-9a-f]{64}$ |
+| `platform` | string enum("ios", "android") | required | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `201` | Device registered. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
 
 **Frontend behavior notes**
 
