@@ -254,6 +254,7 @@ export const registeredDevices = platform.table(
     installationIdHash: text("installation_id_hash").notNull(),
     platform: text("platform").notNull(),
     status: text("status").notNull().default("registered"),
+    offlineSequenceCursor: bigint("offline_sequence_cursor", { mode: "number" }).notNull().default(0),
     statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt,
     updatedAt
@@ -273,6 +274,7 @@ export const registeredDevices = platform.table(
     check("platform_registered_devices_platform_check", sql`${table.platform} IN ('ios', 'android')`),
     check("platform_registered_devices_status_check", sql`${table.status} IN ('registered', 'suspended', 'revoked')`),
     check("platform_registered_devices_installation_hash_check", sql`${table.installationIdHash} ~ '^[0-9a-f]{64}$'`),
+    check("platform_registered_devices_offline_sequence_cursor_check", sql`${table.offlineSequenceCursor} >= 0`),
     check("platform_registered_devices_status_changed_at_check", sql`${table.statusChangedAt} >= ${table.createdAt}`),
     check("platform_registered_devices_updated_at_check", sql`${table.updatedAt} >= ${table.createdAt}`),
     unique("platform_registered_devices_company_installation_uq").on(table.companyId, table.installationIdHash),
@@ -797,6 +799,37 @@ export const attendanceOfflineEventInbox = attendance.table(
     check("attendance_offline_event_inbox_device_snapshot_object_check", sql`jsonb_typeof(${table.deviceSnapshot}) = 'object'`),
     check("attendance_offline_event_inbox_event_payload_object_check", sql`jsonb_typeof(${table.eventPayload}) = 'object'`),
     check("attendance_offline_event_inbox_response_snapshot_object_check", sql`jsonb_typeof(${table.responseSnapshot}) = 'object'`)
+  ]
+);
+
+export const attendanceOfflineSyncSecurityAuditLogs = attendance.table(
+  "offline_sync_security_audit_logs",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    registeredDeviceId: uuid("registered_device_id").notNull(),
+    clientEventId: uuid("client_event_id").notNull(),
+    observedSequence: bigint("observed_sequence", { mode: "number" }).notNull(),
+    expectedSequence: bigint("expected_sequence", { mode: "number" }),
+    signalType: text("signal_type").notNull(),
+    conflictingClientEventId: uuid("conflicting_client_event_id"),
+    observedEventHash: text("observed_event_hash"),
+    existingEventHash: text("existing_event_hash"),
+    createdAt
+  },
+  (table) => [
+    index("attendance_offline_sync_security_device_created_idx")
+      .on(table.companyId, table.registeredDeviceId, table.createdAt.desc()),
+    index("attendance_offline_sync_security_signal_created_idx")
+      .on(table.companyId, table.signalType, table.createdAt.desc()),
+    index("attendance_offline_sync_security_client_event_idx")
+      .on(table.companyId, table.actorUserId, table.clientEventId, table.createdAt.desc()),
+    check("attendance_offline_sync_security_observed_sequence_check", sql`${table.observedSequence} > 0`),
+    check("attendance_offline_sync_security_expected_sequence_check", sql`${table.expectedSequence} IS NULL OR ${table.expectedSequence} > 0`),
+    check("attendance_offline_sync_security_signal_type_check", sql`${table.signalType} IN ('changed_body_conflict', 'duplicate_sequence', 'sequence_gap', 'sequence_out_of_order')`),
+    check("attendance_offline_sync_security_observed_hash_check", sql`${table.observedEventHash} IS NULL OR ${table.observedEventHash} ~ '^[0-9a-f]{64}$'`),
+    check("attendance_offline_sync_security_existing_hash_check", sql`${table.existingEventHash} IS NULL OR ${table.existingEventHash} ~ '^[0-9a-f]{64}$'`)
   ]
 );
 

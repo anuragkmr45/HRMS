@@ -30,6 +30,7 @@ import {
   PostgresAttendanceCommandRepository,
   type AttendanceCommandTransactionRepository,
   type AttendanceOfflineInboxRecord,
+  type OfflineSyncSecuritySignalType,
 } from "./command-repository.js";
 
 type IndexedOfflineEvent = {
@@ -114,14 +115,8 @@ export class AttendanceOfflineSyncService {
           : left.event.sequence - right.event.sequence,
       );
       const results: AttendanceOfflineSyncResult[] = new Array(input.events.length);
-      const maxExistingSequence =
-        await tx.findMaxOfflineDeviceSequence({
-          companyId: context.companyId,
-          actorUserId: context.userId,
-          registeredDeviceId,
-        });
-      let expectedNextSequence =
-        maxExistingSequence === null ? null : maxExistingSequence + 1;
+      let sequenceCursor = Number(device.offline_sequence_cursor);
+      let expectedNextSequence = sequenceCursor + 1;
 
       const policy = await resolveEffectiveAttendancePolicy(tx, {
         companyId: context.companyId,
@@ -143,12 +138,14 @@ export class AttendanceOfflineSyncService {
           policy,
         });
         results[indexed.index] = result.result;
-        if (
-          result.sequenceStored &&
-          (expectedNextSequence === null ||
-            indexed.event.sequence >= expectedNextSequence)
-        ) {
-          expectedNextSequence = indexed.event.sequence + 1;
+        if (result.cursorAdvanceEligible) {
+          sequenceCursor = await advanceContiguousSequenceCursor(tx, {
+            companyId: context.companyId,
+            actorUserId: context.userId,
+            registeredDeviceId,
+            sequenceCursor,
+          });
+          expectedNextSequence = sequenceCursor + 1;
         }
       }
 
@@ -171,11 +168,15 @@ export class AttendanceOfflineSyncService {
       registeredDeviceId: UUID;
       deviceSnapshot: Record<string, unknown>;
       serverReceivedAt: string;
-      expectedNextSequence: number | null;
+      expectedNextSequence: number;
       indexed: IndexedOfflineEvent;
       policy: EffectiveAttendancePolicy;
     },
-  ): Promise<{ result: AttendanceOfflineSyncResult; sequenceStored: boolean }> {
+  ): Promise<{
+    result: AttendanceOfflineSyncResult;
+    sequenceStored: boolean;
+    cursorAdvanceEligible: boolean;
+  }> {
     const { event, eventHash, eventPayload } = input.indexed;
     const existing = await tx.findOfflineInboxByClientEventId({
       companyId: input.companyId,
@@ -184,11 +185,27 @@ export class AttendanceOfflineSyncService {
     });
     if (existing) {
       if (existing.event_hash === eventHash) {
-        return { result: replayResult(existing), sequenceStored: false };
+        return {
+          result: replayResult(existing),
+          sequenceStored: false,
+          cursorAdvanceEligible: false,
+        };
       }
+      await auditOfflineSyncSignal(tx, {
+        companyId: input.companyId,
+        actorUserId: input.actor.id,
+        registeredDeviceId: input.registeredDeviceId,
+        clientEventId: event.client_event_id,
+        observedSequence: event.sequence,
+        expectedSequence: input.expectedNextSequence,
+        signalType: "changed_body_conflict",
+        observedEventHash: eventHash,
+        existingEventHash: existing.event_hash,
+      });
       return {
         result: conflictResult(event, input.serverReceivedAt),
         sequenceStored: false,
+        cursorAdvanceEligible: false,
       };
     }
 
@@ -199,20 +216,43 @@ export class AttendanceOfflineSyncService {
       sequence: event.sequence,
     });
     if (sequenceOwner && sequenceOwner.client_event_id !== event.client_event_id) {
+      await auditOfflineSyncSignal(tx, {
+        companyId: input.companyId,
+        actorUserId: input.actor.id,
+        registeredDeviceId: input.registeredDeviceId,
+        clientEventId: event.client_event_id,
+        observedSequence: event.sequence,
+        expectedSequence: input.expectedNextSequence,
+        signalType: "duplicate_sequence",
+        conflictingClientEventId: sequenceOwner.client_event_id,
+        observedEventHash: eventHash,
+        existingEventHash: sequenceOwner.event_hash,
+      });
       return {
         result: duplicateSequenceResult(event, input.serverReceivedAt),
         sequenceStored: false,
+        cursorAdvanceEligible: false,
       };
     }
 
     const sequenceReason =
-      input.expectedNextSequence !== null &&
       event.sequence > input.expectedNextSequence
         ? "offline_sync.sequence_gap"
-        : input.expectedNextSequence !== null &&
-            event.sequence < input.expectedNextSequence
+        : event.sequence < input.expectedNextSequence
           ? "offline_sync.sequence_out_of_order"
           : null;
+    if (sequenceReason) {
+      await auditOfflineSyncSignal(tx, {
+        companyId: input.companyId,
+        actorUserId: input.actor.id,
+        registeredDeviceId: input.registeredDeviceId,
+        clientEventId: event.client_event_id,
+        observedSequence: event.sequence,
+        expectedSequence: input.expectedNextSequence,
+        signalType: signalTypeForSequenceReason(sequenceReason),
+        observedEventHash: eventHash,
+      });
+    }
     const evidenceReason = sequenceReason ?? evidenceReasonCode(event);
     const result = attendanceOfflineSyncResultSchema.parse({
       client_event_id: event.client_event_id,
@@ -255,11 +295,29 @@ export class AttendanceOfflineSyncService {
         clientEventId: event.client_event_id,
       });
       if (stored && stored.event_hash === eventHash) {
-        return { result: replayResult(stored), sequenceStored: false };
+        return {
+          result: replayResult(stored),
+          sequenceStored: false,
+          cursorAdvanceEligible: false,
+        };
+      }
+      if (!sequenceReason) {
+        await auditOfflineSyncSignal(tx, {
+          companyId: input.companyId,
+          actorUserId: input.actor.id,
+          registeredDeviceId: input.registeredDeviceId,
+          clientEventId: event.client_event_id,
+          observedSequence: event.sequence,
+          expectedSequence: input.expectedNextSequence,
+          signalType: stored ? "changed_body_conflict" : "duplicate_sequence",
+          observedEventHash: eventHash,
+          existingEventHash: stored?.event_hash ?? null,
+        });
       }
       return {
         result: stored ? conflictResult(event, input.serverReceivedAt) : duplicateSequenceResult(event, input.serverReceivedAt),
         sequenceStored: false,
+        cursorAdvanceEligible: false,
       };
     }
 
@@ -320,8 +378,83 @@ export class AttendanceOfflineSyncService {
       }));
     }
 
-    return { result, sequenceStored: true };
+    return {
+      result,
+      sequenceStored: true,
+      cursorAdvanceEligible: sequenceReason === null,
+    };
   }
+}
+
+async function advanceContiguousSequenceCursor(
+  tx: AttendanceCommandTransactionRepository,
+  input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequenceCursor: number;
+  },
+): Promise<number> {
+  let contiguousCursor = input.sequenceCursor;
+  const storedSequences = await tx.findOfflineDeviceSequencesAfter({
+    companyId: input.companyId,
+    actorUserId: input.actorUserId,
+    registeredDeviceId: input.registeredDeviceId,
+    sequence: input.sequenceCursor,
+  });
+  for (const sequence of storedSequences) {
+    if (sequence === contiguousCursor + 1) {
+      contiguousCursor = sequence;
+      continue;
+    }
+    if (sequence > contiguousCursor + 1) break;
+  }
+  if (contiguousCursor > input.sequenceCursor) {
+    await tx.updateOfflineSequenceCursor({
+      companyId: input.companyId,
+      actorUserId: input.actorUserId,
+      registeredDeviceId: input.registeredDeviceId,
+      sequenceCursor: contiguousCursor,
+    });
+  }
+  return contiguousCursor;
+}
+
+async function auditOfflineSyncSignal(
+  tx: AttendanceCommandTransactionRepository,
+  input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    clientEventId: UUID;
+    observedSequence: number;
+    expectedSequence: number;
+    signalType: OfflineSyncSecuritySignalType;
+    conflictingClientEventId?: UUID | null;
+    observedEventHash?: string | null;
+    existingEventHash?: string | null;
+  },
+): Promise<void> {
+  await tx.createOfflineSyncSecurityAudit({
+    companyId: input.companyId,
+    actorUserId: input.actorUserId,
+    registeredDeviceId: input.registeredDeviceId,
+    clientEventId: input.clientEventId,
+    observedSequence: input.observedSequence,
+    expectedSequence: input.expectedSequence,
+    signalType: input.signalType,
+    conflictingClientEventId: input.conflictingClientEventId ?? null,
+    observedEventHash: input.observedEventHash ?? null,
+    existingEventHash: input.existingEventHash ?? null,
+  });
+}
+
+function signalTypeForSequenceReason(
+  reason: "offline_sync.sequence_gap" | "offline_sync.sequence_out_of_order",
+): OfflineSyncSecuritySignalType {
+  return reason === "offline_sync.sequence_gap"
+    ? "sequence_gap"
+    : "sequence_out_of_order";
 }
 
 function evidenceReasonCode(

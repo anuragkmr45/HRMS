@@ -94,6 +94,7 @@ export interface AttendanceRegisteredDeviceRecord {
   company_id: UUID;
   user_id: UUID;
   status: "registered" | "suspended" | "revoked";
+  offline_sequence_cursor: string;
 }
 
 export interface AttendanceOfflineInboxRecord {
@@ -118,6 +119,25 @@ export interface AttendanceOfflineInboxRecord {
   payroll_eligible: false;
   created_at: Date;
   updated_at: Date;
+}
+
+export type OfflineSyncSecuritySignalType =
+  | "changed_body_conflict"
+  | "duplicate_sequence"
+  | "sequence_gap"
+  | "sequence_out_of_order";
+
+export interface CreateOfflineSyncSecurityAuditInput {
+  companyId: UUID;
+  actorUserId: UUID;
+  registeredDeviceId: UUID;
+  clientEventId: UUID;
+  observedSequence: number;
+  expectedSequence: number | null;
+  signalType: OfflineSyncSecuritySignalType;
+  conflictingClientEventId?: UUID | null;
+  observedEventHash?: string | null;
+  existingEventHash?: string | null;
 }
 
 export interface CreateAttendanceOfflineInboxInput {
@@ -425,7 +445,8 @@ export class AttendanceCommandTransactionRepository {
     registeredDeviceId: UUID;
   }): Promise<AttendanceRegisteredDeviceRecord | null> {
     const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
-      `SELECT id, company_id, user_id, status
+      `SELECT id, company_id, user_id, status,
+          offline_sequence_cursor::text AS offline_sequence_cursor
        FROM platform.registered_devices
        WHERE company_id = $1
          AND id = $2
@@ -440,7 +461,8 @@ export class AttendanceCommandTransactionRepository {
     registeredDeviceId: UUID;
   }): Promise<AttendanceRegisteredDeviceRecord | null> {
     const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
-      `SELECT id, company_id, user_id, status
+      `SELECT id, company_id, user_id, status,
+          offline_sequence_cursor::text AS offline_sequence_cursor
        FROM platform.registered_devices
        WHERE company_id = $1
          AND id = $2
@@ -465,6 +487,81 @@ export class AttendanceCommandTransactionRepository {
         [`${input.companyId}:${input.actorUserId}:${clientEventId}`],
       );
     }
+  }
+
+  async findOfflineDeviceSequencesAfter(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequence: number;
+  }): Promise<number[]> {
+    const result = await this.client.query<{ sequence: string }>(
+      `SELECT sequence::text AS sequence
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3
+         AND sequence > $4
+       ORDER BY sequence ASC`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequence,
+      ],
+    );
+    return result.rows.map((row) => Number(row.sequence));
+  }
+
+  async updateOfflineSequenceCursor(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequenceCursor: number;
+  }): Promise<void> {
+    const result = await this.client.query(
+      `UPDATE platform.registered_devices
+       SET offline_sequence_cursor = $4,
+           updated_at = now()
+       WHERE company_id = $1
+         AND user_id = $2
+         AND id = $3
+         AND offline_sequence_cursor < $4`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequenceCursor,
+      ],
+    );
+    if ((result.rowCount ?? 0) > 1) {
+      throw new Error("Offline sequence cursor update matched multiple devices.");
+    }
+  }
+
+  async createOfflineSyncSecurityAudit(
+    input: CreateOfflineSyncSecurityAuditInput,
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO attendance.offline_sync_security_audit_logs (
+          company_id, actor_user_id, registered_device_id, client_event_id,
+          observed_sequence, expected_sequence, signal_type,
+          conflicting_client_event_id, observed_event_hash, existing_event_hash
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.clientEventId,
+        input.observedSequence,
+        input.expectedSequence,
+        input.signalType,
+        input.conflictingClientEventId ?? null,
+        input.observedEventHash ?? null,
+        input.existingEventHash ?? null,
+      ],
+    );
   }
 
   async findOfflineInboxByClientEventId(input: {

@@ -17,6 +17,7 @@ const hashB = "b".repeat(64);
 const hashC = "c".repeat(64);
 const hashD = "d".repeat(64);
 const hashE = "e".repeat(64);
+const hashF = "f".repeat(64);
 const invalidHash = "A".repeat(64);
 
 describe("registered devices schema", () => {
@@ -113,6 +114,12 @@ describe("registered devices schema", () => {
       expect.objectContaining({ column_name: "status_changed_at", is_nullable: "NO", data_type: "timestamp with time zone" }),
       expect.objectContaining({ column_name: "created_at", is_nullable: "NO", data_type: "timestamp with time zone" }),
       expect.objectContaining({ column_name: "updated_at", is_nullable: "NO", data_type: "timestamp with time zone" }),
+      expect.objectContaining({
+        column_name: "offline_sequence_cursor",
+        is_nullable: "NO",
+        column_default: "0",
+        data_type: "bigint",
+      }),
     ]);
 
     const lookupIndex = await pool.query<{ indexdef: string }>(
@@ -131,6 +138,7 @@ describe("registered devices schema", () => {
 
     const inserted = await pool.query<{
       status: string;
+      offline_sequence_cursor: string;
       status_changed_at: Date;
       created_at: Date;
       updated_at: Date;
@@ -140,10 +148,12 @@ describe("registered devices schema", () => {
        ) VALUES (
          '40000000-0000-4000-8000-000000000001', $1, $2, $3, 'ios'
        )
-       RETURNING status, status_changed_at, created_at, updated_at`,
+       RETURNING status, offline_sequence_cursor::text AS offline_sequence_cursor,
+         status_changed_at, created_at, updated_at`,
       [companyAId, userAId, hashA],
     );
     expect(inserted.rows[0]).toMatchObject({ status: "registered" });
+    expect(inserted.rows[0]?.offline_sequence_cursor).toBe("0");
     expect(inserted.rows[0]?.created_at).toBeInstanceOf(Date);
     expect(inserted.rows[0]?.updated_at).toBeInstanceOf(Date);
     expect(inserted.rows[0]?.status_changed_at).toBeInstanceOf(Date);
@@ -201,6 +211,20 @@ describe("registered devices schema", () => {
     ).rejects.toMatchObject({
       code: "23514",
       constraint: "platform_registered_devices_status_check",
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO platform.registered_devices (
+           id, company_id, user_id, installation_id_hash, platform, offline_sequence_cursor
+         ) VALUES (
+           '40000000-0000-4000-8000-000000000012', $1, $2, $3, 'android', -1
+         )`,
+        [companyAId, userAId, hashF],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "platform_registered_devices_offline_sequence_cursor_check",
     });
 
     await expect(

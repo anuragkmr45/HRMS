@@ -162,6 +162,8 @@ const resetTables = [
   "attendance.attestation_evidence",
   "attendance.command_decisions",
   "attendance.command_executions",
+  "attendance.offline_sync_security_audit_logs",
+  "attendance.offline_event_inbox",
   "attendance.location_access_audit_logs",
   "attendance.decision_reasons",
   "attendance.attendance_decisions",

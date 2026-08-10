@@ -33,7 +33,7 @@ describe("attendance offline sync ingestion", () => {
     }
   });
 
-  it("accepts an unverified provisional event without live attendance mutation", async () => {
+  it("accepts sequence 1 and advances the registered-device cursor", async () => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -42,12 +42,12 @@ describe("attendance offline sync ingestion", () => {
     });
 
     const response = await sync(app, employee.token, batch(registeredDeviceId, [
-      event({ sequence: 42 }),
+      event({ sequence: 1 }),
     ]));
 
     expect(response.statusCode).toBe(200);
     expect(response.json().results[0]).toMatchObject({
-      sequence: 42,
+      sequence: 1,
       sync_status: "accepted",
       verification_status: "unverified",
       replayed: false,
@@ -63,6 +63,8 @@ describe("attendance offline sync ingestion", () => {
       dailyRecords: "0",
       provisionalOutbox: "1",
     });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, []);
   });
 
   it("replays the same event without duplicating durable rows or outbox", async () => {
@@ -72,7 +74,7 @@ describe("attendance offline sync ingestion", () => {
       companyId,
       userId: employee.user.id,
     });
-    const payload = batch(registeredDeviceId, [event({ sequence: 7 })]);
+    const payload = batch(registeredDeviceId, [event({ sequence: 1 })]);
 
     const first = await sync(app, employee.token, payload);
     const replay = await sync(app, employee.token, payload);
@@ -81,7 +83,7 @@ describe("attendance offline sync ingestion", () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json().results[0]).toMatchObject({
       client_event_id: first.json().results[0].client_event_id,
-      sequence: 7,
+      sequence: 1,
       sync_status: "replayed",
       verification_status: "unverified",
       replayed: true,
@@ -97,6 +99,8 @@ describe("attendance offline sync ingestion", () => {
       dailyRecords: "0",
       provisionalOutbox: "1",
     });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, []);
   });
 
   it("returns changed-body conflict for reused client_event_id", async () => {
@@ -131,6 +135,8 @@ describe("attendance offline sync ingestion", () => {
       dailyRecords: "0",
       provisionalOutbox: "1",
     });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, ["changed_body_conflict"]);
   });
 
   it("rejects a different event that reuses a device sequence", async () => {
@@ -141,9 +147,9 @@ describe("attendance offline sync ingestion", () => {
       userId: employee.user.id,
     });
 
-    await sync(app, employee.token, batch(registeredDeviceId, [event({ sequence: 5 })]));
+    await sync(app, employee.token, batch(registeredDeviceId, [event({ sequence: 1 })]));
     const duplicate = await sync(app, employee.token, batch(registeredDeviceId, [
-      event({ sequence: 5, client_event_id: randomUUID() }),
+      event({ sequence: 1, client_event_id: randomUUID() }),
     ]));
 
     expect(duplicate.statusCode).toBe(200);
@@ -161,9 +167,11 @@ describe("attendance offline sync ingestion", () => {
       dailyRecords: "0",
       provisionalOutbox: "1",
     });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, ["duplicate_sequence"]);
   });
 
-  it("classifies sequence gap and out-of-order arrivals", async () => {
+  it("treats a first sequence greater than 1 as a suspicious gap without advancing cursor", async () => {
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -171,12 +179,8 @@ describe("attendance offline sync ingestion", () => {
       userId: employee.user.id,
     });
 
-    await sync(app, employee.token, batch(registeredDeviceId, [event({ sequence: 1 })]));
     const gap = await sync(app, employee.token, batch(registeredDeviceId, [
-      event({ sequence: 3 }),
-    ]));
-    const outOfOrder = await sync(app, employee.token, batch(registeredDeviceId, [
-      event({ sequence: 2 }),
+      event({ sequence: 42 }),
     ]));
 
     expect(gap.json().results[0]).toMatchObject({
@@ -184,19 +188,85 @@ describe("attendance offline sync ingestion", () => {
       verification_status: "review_required",
       reason_code: "offline_sync.sequence_gap",
     });
-    expect(outOfOrder.json().results[0]).toMatchObject({
-      sync_status: "deferred",
-      verification_status: "review_required",
-      reason_code: "offline_sync.sequence_out_of_order",
-    });
     await expectCounts(app, {
-      inbox: "3",
-      events: "3",
-      locationEvidence: "3",
+      inbox: "1",
+      events: "1",
+      locationEvidence: "1",
       sessions: "0",
       punches: "0",
       dailyRecords: "0",
-      provisionalOutbox: "1",
+      provisionalOutbox: "0",
+    });
+    await expectDeviceCursor(app, registeredDeviceId, "0");
+    await expectSecurityAuditSignals(app, ["sequence_gap"]);
+  });
+
+  it("keeps multiple gap arrivals deferred until the missing sequence appears", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
+    await setDeviceCursor(app, registeredDeviceId, 10);
+
+    const response = await sync(app, employee.token, batch(registeredDeviceId, [
+      event({ sequence: 12 }),
+      event({ sequence: 13 }),
+    ]));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().results.map((result: { reason_code: string }) => result.reason_code)).toEqual([
+      "offline_sync.sequence_gap",
+      "offline_sync.sequence_gap",
+    ]);
+    expect(response.json().results.map((result: { sync_status: string }) => result.sync_status)).toEqual([
+      "deferred",
+      "deferred",
+    ]);
+    await expectDeviceCursor(app, registeredDeviceId, "10");
+    await expectSecurityAuditSignals(app, ["sequence_gap", "sequence_gap"]);
+  });
+
+  it("advances through previously stored gap rows when continuity is recovered", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
+    await setDeviceCursor(app, registeredDeviceId, 10);
+    const gap12 = event({ sequence: 12 });
+    const gap13 = event({ sequence: 13 });
+    await sync(app, employee.token, batch(registeredDeviceId, [gap12, gap13]));
+
+    const recovered = await sync(app, employee.token, batch(registeredDeviceId, [
+      event({ sequence: 11 }),
+    ]));
+    const next = await sync(app, employee.token, batch(registeredDeviceId, [
+      event({ sequence: 14 }),
+    ]));
+
+    expect(recovered.json().results[0]).toMatchObject({
+      sequence: 11,
+      sync_status: "accepted",
+      reason_code: "offline_sync.accepted_unverified",
+    });
+    expect(next.json().results[0]).toMatchObject({
+      sequence: 14,
+      sync_status: "accepted",
+      reason_code: "offline_sync.accepted_unverified",
+    });
+    await expectDeviceCursor(app, registeredDeviceId, "14");
+    await expectStoredOfflineResult(app, gap12.client_event_id, {
+      sync_status: "deferred",
+      verification_status: "review_required",
+      reason_code: "offline_sync.sequence_gap",
+    });
+    await expectStoredOfflineResult(app, gap13.client_event_id, {
+      sync_status: "deferred",
+      verification_status: "review_required",
+      reason_code: "offline_sync.sequence_gap",
     });
   });
 
@@ -207,17 +277,17 @@ describe("attendance offline sync ingestion", () => {
       companyId,
       userId: employee.user.id,
     });
-    const replayedEvent = event({ sequence: 10 });
+    const replayedEvent = event({ sequence: 1 });
     await sync(app, employee.token, batch(registeredDeviceId, [replayedEvent]));
 
     const response = await sync(app, employee.token, batch(registeredDeviceId, [
       replayedEvent,
-      event({ sequence: 12 }),
-      event({ sequence: 11 }),
+      event({ sequence: 3 }),
+      event({ sequence: 2 }),
     ]));
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().results.map((result: { sequence: number }) => result.sequence)).toEqual([10, 12, 11]);
+    expect(response.json().results.map((result: { sequence: number }) => result.sequence)).toEqual([1, 3, 2]);
     expect(response.json().results.map((result: { sync_status: string }) => result.sync_status)).toEqual([
       "replayed",
       "accepted",
@@ -311,6 +381,65 @@ describe("attendance offline sync ingestion", () => {
       dailyRecords: "0",
       provisionalOutbox: "1",
     });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, []);
+  });
+
+  it("audits an out-of-order anomaly without advancing the cursor", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
+    await setDeviceCursor(app, registeredDeviceId, 10);
+
+    const response = await sync(app, employee.token, batch(registeredDeviceId, [
+      event({ sequence: 9 }),
+    ]));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().results[0]).toMatchObject({
+      sync_status: "deferred",
+      verification_status: "review_required",
+      reason_code: "offline_sync.sequence_out_of_order",
+    });
+    await expectDeviceCursor(app, registeredDeviceId, "10");
+    await expectSecurityAuditSignals(app, ["sequence_out_of_order"]);
+  });
+
+  it("handles concurrent different client_event_id submissions for the same sequence safely", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
+
+    const [first, second] = await Promise.all([
+      sync(app, employee.token, batch(registeredDeviceId, [event({ client_event_id: randomUUID(), sequence: 1 })])),
+      sync(app, employee.token, batch(registeredDeviceId, [event({ client_event_id: randomUUID(), sequence: 1 })])),
+    ]);
+
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+    expect([first.json().results[0].sync_status, second.json().results[0].sync_status].sort()).toEqual([
+      "accepted",
+      "rejected",
+    ]);
+    expect([first.json().results[0].reason_code, second.json().results[0].reason_code]).toContain(
+      "offline_sync.duplicate_sequence",
+    );
+    await expectCounts(app, {
+      inbox: "1",
+      events: "1",
+      locationEvidence: "1",
+      sessions: "0",
+      punches: "0",
+      dailyRecords: "0",
+      provisionalOutbox: "1",
+    });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, ["duplicate_sequence"]);
   });
 
   it("keeps existing batch schema limits and duplicate validation", async () => {
@@ -421,9 +550,71 @@ function employeeCompanyId(app: TestApp, employeeUserId: string): string {
   return companyId;
 }
 
+async function setDeviceCursor(
+  app: TestApp,
+  registeredDeviceId: string,
+  cursor: number,
+): Promise<void> {
+  await app.store.pgPool!.query(
+    `UPDATE platform.registered_devices
+     SET offline_sequence_cursor = $2
+     WHERE id = $1`,
+    [registeredDeviceId, cursor],
+  );
+}
+
+async function expectDeviceCursor(
+  app: TestApp,
+  registeredDeviceId: string,
+  expected: string,
+): Promise<void> {
+  const result = await app.store.pgPool!.query<{ offline_sequence_cursor: string }>(
+    `SELECT offline_sequence_cursor::text AS offline_sequence_cursor
+     FROM platform.registered_devices
+     WHERE id = $1`,
+    [registeredDeviceId],
+  );
+  expect(result.rows[0]?.offline_sequence_cursor).toBe(expected);
+}
+
+async function expectSecurityAuditSignals(
+  app: TestApp,
+  expectedSignals: string[],
+): Promise<void> {
+  const result = await app.store.pgPool!.query<{ signal_type: string }>(
+    `SELECT signal_type
+     FROM attendance.offline_sync_security_audit_logs
+     ORDER BY created_at, id`,
+  );
+  expect(result.rows.map((row) => row.signal_type)).toEqual(expectedSignals);
+}
+
+async function expectStoredOfflineResult(
+  app: TestApp,
+  clientEventId: string,
+  expected: {
+    sync_status: string;
+    verification_status: string;
+    reason_code: string;
+  },
+): Promise<void> {
+  const result = await app.store.pgPool!.query<{
+    sync_status: string;
+    verification_status: string;
+    reason_code: string | null;
+  }>(
+    `SELECT sync_status, verification_status, reason_code
+     FROM attendance.offline_event_inbox
+     WHERE client_event_id = $1`,
+    [clientEventId],
+  );
+  expect(result.rows[0]).toMatchObject(expected);
+}
+
 async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
   await app.store.pgPool!.query(`
     TRUNCATE TABLE
+      attendance.offline_sync_security_audit_logs,
       attendance.offline_event_inbox,
       attendance.decision_reasons,
       attendance.attendance_decisions,
@@ -445,6 +636,10 @@ async function clearAttendanceRuntimeFixtures(app: TestApp): Promise<void> {
   await app.store.pgPool!.query(`
     DELETE FROM platform.idempotency_keys
     WHERE scope LIKE 'attendance.punch:%'
+  `);
+  await app.store.pgPool!.query(`
+    UPDATE platform.registered_devices
+    SET offline_sequence_cursor = 0
   `);
 }
 
