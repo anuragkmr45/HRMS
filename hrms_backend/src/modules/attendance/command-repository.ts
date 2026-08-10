@@ -3,6 +3,9 @@ import type {
   AttendanceLocationEvidenceInput,
   AttendanceAdditionalCommandReasonCode,
   AttendanceEvidenceSourceChannel,
+  AttendanceOfflineSyncReasonCode,
+  AttendanceOfflineSyncStatus,
+  AttendanceOfflineVerificationStatus,
   AttendancePunchEventType,
   AttendancePunchSourceChannel,
   UUID,
@@ -91,6 +94,49 @@ export interface AttendanceRegisteredDeviceRecord {
   company_id: UUID;
   user_id: UUID;
   status: "registered" | "suspended" | "revoked";
+}
+
+export interface AttendanceOfflineInboxRecord {
+  id: UUID;
+  company_id: UUID;
+  actor_user_id: UUID;
+  employee_user_id: UUID;
+  batch_id: UUID;
+  registered_device_id: UUID;
+  device_snapshot: Record<string, unknown>;
+  client_event_id: UUID;
+  sequence: string;
+  event_hash: string;
+  event_payload: Record<string, unknown>;
+  attendance_event_id: UUID | null;
+  sync_status: AttendanceOfflineSyncStatus;
+  verification_status: AttendanceOfflineVerificationStatus;
+  reason_code: AttendanceOfflineSyncReasonCode | null;
+  server_received_at: Date;
+  processed_at: Date | null;
+  response_snapshot: Record<string, unknown>;
+  payroll_eligible: false;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateAttendanceOfflineInboxInput {
+  companyId: UUID;
+  actorUserId: UUID;
+  employeeUserId: UUID;
+  batchId: UUID;
+  registeredDeviceId: UUID;
+  deviceSnapshot: Record<string, unknown>;
+  clientEventId: UUID;
+  sequence: number;
+  eventHash: string;
+  eventPayload: Record<string, unknown>;
+  syncStatus: AttendanceOfflineSyncStatus;
+  verificationStatus: AttendanceOfflineVerificationStatus;
+  reasonCode: AttendanceOfflineSyncReasonCode | null;
+  serverReceivedAt: string;
+  processedAt: string | null;
+  responseSnapshot: Record<string, unknown>;
 }
 
 export interface ClaimPlatformIdempotencyKeyInput {
@@ -387,6 +433,174 @@ export class AttendanceCommandTransactionRepository {
       [input.companyId, input.registeredDeviceId],
     );
     return result.rows[0] ?? null;
+  }
+
+  async lockRegisteredDeviceForOfflineSync(input: {
+    companyId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
+      `SELECT id, company_id, user_id, status
+       FROM platform.registered_devices
+       WHERE company_id = $1
+         AND id = $2
+       FOR UPDATE`,
+      [input.companyId, input.registeredDeviceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async lockOfflineClientEventIds(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventIds: readonly UUID[];
+  }): Promise<void> {
+    const uniqueClientEventIds = [...new Set(input.clientEventIds)].sort();
+    for (const clientEventId of uniqueClientEventIds) {
+      await this.client.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtext('attendance.offline_event'),
+           hashtext($1)
+         )`,
+        [`${input.companyId}:${input.actorUserId}:${clientEventId}`],
+      );
+    }
+  }
+
+  async findOfflineInboxByClientEventId(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventId: UUID;
+  }): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `SELECT
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND client_event_id = $3
+       FOR UPDATE`,
+      [input.companyId, input.actorUserId, input.clientEventId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findOfflineInboxByDeviceSequence(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequence: number;
+  }): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `SELECT
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3
+         AND sequence = $4`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequence,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findMaxOfflineDeviceSequence(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<number | null> {
+    const result = await this.client.query<{ max_sequence: string | null }>(
+      `SELECT max(sequence)::text AS max_sequence
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3`,
+      [input.companyId, input.actorUserId, input.registeredDeviceId],
+    );
+    const value = result.rows[0]?.max_sequence;
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  async createOfflineInboxEvent(
+    input: CreateAttendanceOfflineInboxInput,
+  ): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `INSERT INTO attendance.offline_event_inbox (
+          company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id, sequence,
+          event_hash, event_payload, attendance_event_id, sync_status,
+          verification_status, reason_code, server_received_at, processed_at,
+          response_snapshot
+        )
+        VALUES (
+          $1, $2, $3, $4,
+          $5, $6::jsonb, $7, $8,
+          $9, $10::jsonb, NULL, $11,
+          $12, $13, $14, $15,
+          $16::jsonb
+        )
+        ON CONFLICT (company_id, actor_user_id, client_event_id) DO NOTHING
+        RETURNING
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.employeeUserId,
+        input.batchId,
+        input.registeredDeviceId,
+        JSON.stringify(input.deviceSnapshot),
+        input.clientEventId,
+        input.sequence,
+        input.eventHash,
+        JSON.stringify(input.eventPayload),
+        input.syncStatus,
+        input.verificationStatus,
+        input.reasonCode,
+        input.serverReceivedAt,
+        input.processedAt,
+        JSON.stringify(input.responseSnapshot),
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async attachAttendanceEventToOfflineInbox(input: {
+    offlineInboxId: UUID;
+    companyId: UUID;
+    attendanceEventId: UUID;
+  }): Promise<void> {
+    const result = await this.client.query(
+      `UPDATE attendance.offline_event_inbox
+       SET attendance_event_id = $3,
+           updated_at = now()
+       WHERE id = $1
+         AND company_id = $2
+         AND attendance_event_id IS NULL`,
+      [input.offlineInboxId, input.companyId, input.attendanceEventId],
+    );
+    if (result.rowCount !== 1) {
+      throw new Error("Offline inbox attendance event link could not be persisted.");
+    }
   }
 
   async claimPlatformIdempotencyKey(
@@ -752,7 +966,7 @@ export class AttendanceCommandTransactionRepository {
     companyId: UUID;
     employeeUserId: UUID;
     actorUserId: UUID;
-    commandExecutionId: UUID;
+    commandExecutionId: UUID | null;
     eventType: AttendancePunchEventType;
     source: AttendanceEvidenceSourceChannel;
     occurredAt: string;

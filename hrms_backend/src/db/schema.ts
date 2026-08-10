@@ -752,6 +752,54 @@ export const attendanceEvents = attendance.table(
   ]
 );
 
+export const attendanceOfflineEventInbox = attendance.table(
+  "offline_event_inbox",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    batchId: uuid("batch_id").notNull(),
+    registeredDeviceId: uuid("registered_device_id").notNull(),
+    deviceSnapshot: jsonb("device_snapshot").notNull().default({}),
+    clientEventId: uuid("client_event_id").notNull(),
+    sequence: bigint("sequence", { mode: "number" }).notNull(),
+    eventHash: text("event_hash").notNull(),
+    eventPayload: jsonb("event_payload").notNull().default({}),
+    attendanceEventId: uuid("attendance_event_id"),
+    syncStatus: text("sync_status").notNull(),
+    verificationStatus: text("verification_status").notNull(),
+    reasonCode: text("reason_code"),
+    serverReceivedAt: timestamp("server_received_at", { withTimezone: true }).notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    responseSnapshot: jsonb("response_snapshot").notNull().default({}),
+    payrollEligible: boolean("payroll_eligible").notNull().default(false),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_offline_event_client_uq").on(table.companyId, table.actorUserId, table.clientEventId),
+    uniqueIndex("attendance_offline_event_device_sequence_uq")
+      .on(table.companyId, table.actorUserId, table.registeredDeviceId, table.sequence),
+    index("attendance_offline_event_device_sequence_idx")
+      .on(table.companyId, table.actorUserId, table.registeredDeviceId, table.sequence.desc()),
+    index("attendance_offline_event_status_received_idx")
+      .on(table.companyId, table.syncStatus, table.verificationStatus, table.serverReceivedAt.desc()),
+    index("attendance_offline_event_attendance_event_idx")
+      .on(table.companyId, table.attendanceEventId)
+      .where(sql`${table.attendanceEventId} IS NOT NULL`),
+    check("attendance_offline_event_inbox_sequence_positive_check", sql`${table.sequence} > 0`),
+    check("attendance_offline_event_inbox_event_hash_check", sql`${table.eventHash} ~ '^[0-9a-f]{64}$'`),
+    check("attendance_offline_event_inbox_sync_status_check", sql`${table.syncStatus} IN ('accepted', 'replayed', 'conflict', 'rejected', 'deferred')`),
+    check("attendance_offline_event_inbox_verification_status_check", sql`${table.verificationStatus} IN ('unverified', 'review_required', 'rejected')`),
+    check("attendance_offline_event_inbox_reason_code_check", sql`${table.reasonCode} IS NULL OR ${table.reasonCode} IN ('offline_sync.accepted_unverified', 'offline_sync.replayed', 'offline_sync.changed_body_conflict', 'offline_sync.validation_failed', 'offline_sync.processing_deferred', 'offline_sync.sequence_gap', 'offline_sync.sequence_out_of_order', 'offline_sync.duplicate_sequence', 'offline_sync.review_required')`),
+    check("attendance_offline_event_inbox_payroll_ineligible_check", sql`${table.payrollEligible} = false`),
+    check("attendance_offline_event_inbox_device_snapshot_object_check", sql`jsonb_typeof(${table.deviceSnapshot}) = 'object'`),
+    check("attendance_offline_event_inbox_event_payload_object_check", sql`jsonb_typeof(${table.eventPayload}) = 'object'`),
+    check("attendance_offline_event_inbox_response_snapshot_object_check", sql`jsonb_typeof(${table.responseSnapshot}) = 'object'`)
+  ]
+);
+
 export const attendanceLocationEvidence = attendance.table(
   "location_evidence",
   {

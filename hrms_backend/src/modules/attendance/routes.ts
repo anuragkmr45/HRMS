@@ -12,10 +12,12 @@ import {
 } from "#shared";
 import { badRequest, unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
+import { AttendanceOfflineSyncService } from "./offline-sync-service.js";
 import {
   ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER,
   isAttendanceReplayResponse,
 } from "./command-service.js";
+import { attendanceOfflineBatchRequestSchema } from "./offline-sync-contract.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
 const geofencePublishParamSchema = z.object({
@@ -129,6 +131,18 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
         : service.recordEmployeeManualNow(request.actor, input.command);
 
     return withReplayHeader(reply, response);
+  });
+
+  fastify.post("/offline-sync", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+
+    const input = attendanceOfflineBatchRequestSchema.parse(request.body);
+    return new AttendanceOfflineSyncService(fastify.store).syncBatch(
+      request.actor,
+      input,
+    );
   });
 
   function isPunchCommandEnvelope(

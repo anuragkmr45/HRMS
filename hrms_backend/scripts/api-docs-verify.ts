@@ -107,6 +107,7 @@ const bodyRequiredOperations = new Set([
   "POST /api/v1/timesheets/submissions/{id}/approve",
   "POST /api/v1/timesheets/workflow-definitions",
   "POST /api/v1/attendance/punches",
+  "POST /api/v1/attendance/offline-sync",
   "POST /api/v1/attendance/regularizations",
   "POST /api/v1/attendance/regularizations/{id}/decision",
   "POST /api/v1/leave/requests",
@@ -386,10 +387,6 @@ function verifyFinanceGrouping(spec: OpenApiDocument): void {
 }
 
 function verifyAttendanceContract(spec: OpenApiDocument): void {
-  if (spec.paths?.["/api/v1/attendance/offline-sync"]) {
-    failures.push("Attendance OpenAPI must not document an unimplemented offline-sync route.");
-  }
-
   const punch = spec.paths?.["/api/v1/attendance/punches"]?.post;
   const punchRequest = jsonBodySchema(punch);
   const location = getObject(punchRequest, "properties", "command", "properties", "location");
@@ -433,6 +430,15 @@ function verifyAttendanceContract(spec: OpenApiDocument): void {
   );
 
   const offlineResult = spec.components?.schemas?.AttendanceOfflineSyncResult;
+  const offlineSync = spec.paths?.["/api/v1/attendance/offline-sync"]?.post;
+  const offlineRequest = jsonBodySchema(offlineSync);
+  if (!offlineRequest || getObject(offlineRequest, "properties", "events", "maxItems") !== 50) {
+    failures.push("Attendance offline-sync request must document the existing max batch size of 50.");
+  }
+  const offlineResponse = responseJsonSchema(offlineSync, "200");
+  if (!getObject(offlineResponse, "properties", "results")) {
+    failures.push("Attendance offline-sync response must document per-event results.");
+  }
   expectEnum(
     getObject(offlineResult, "properties", "sync_status", "enum"),
     [...AttendanceOfflineSyncStatusValues],
