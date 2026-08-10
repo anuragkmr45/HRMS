@@ -648,7 +648,6 @@ describe("ResendWebhookService", () => {
       event_type: "email.sent",
     });
 
-    
     expect(delivery.status).toBe("bounced");
     expect(store.emailEvents).toHaveLength(1);
     expect(store.emailEvents[0]!.event_type).toBe("email.sent");

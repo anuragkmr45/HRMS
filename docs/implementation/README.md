@@ -11,6 +11,7 @@ This folder tracks implementation status, coverage, and documentation completene
 | `HRMS_PRODUCTION_TASK_SHEET.md` | Large historical/current implementation task sheet and module completion log. |
 | `implementation-status-index.md` | Short current implementation summary with source-of-truth pointers. |
 | `documentation-coverage-audit.md` | Required documentation set, current coverage, gaps, and maintenance ownership. |
+| `GEO-S10-010-backend-implementation-sequencing-checklist.md` | Attendance implementation sequencing, compatibility gates, and geo/mobile rollout prerequisites. |
 
 ## Current Source Evidence
 

@@ -15,3 +15,14 @@ export function assertCanWriteFinanceGovernance(actor: AuthUser): void {
   }
   throw forbidden("Only Admin can update finance governance configuration");
 }
+
+export function canManageDeviceLifecycle(actor: AuthUser): boolean {
+  return actor.roles.includes(Roles.Admin);
+}
+
+export function assertCanManageDeviceLifecycle(actor: AuthUser): void {
+  if (canManageDeviceLifecycle(actor)) {
+    return;
+  }
+  throw forbidden("Only Admin can manage device lifecycle");
+}

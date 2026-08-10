@@ -32,6 +32,7 @@ import {
   nowIso,
   seedIds,
 } from "../../platform/data-store.js";
+import { resolveActiveCompanyMembershipContext } from "../../platform/company-membership-context.js";
 import type { EmailDeliveryService } from "../../platform/email/email-delivery-service.js";
 import type {
   EmailDeliveryMode,
@@ -625,43 +626,93 @@ export class AuthService {
   }
 
   updateSessionPreference(actor: AuthUser, input: SessionPreferenceInput) {
-    const user = this.store.users.find(
-      (candidate) => candidate.id === actor.id && !candidate.deleted_at,
-    );
-    if (!user) {
-      throw unauthorized("User no longer exists");
-    }
-    const currentPreference = this.repository.sessionPreferenceFor(user.id);
-    const nextCompanyId =
-      input.company_id === undefined
-        ? (currentPreference?.company_id ?? null)
-        : input.company_id;
-    if (nextCompanyId !== (currentPreference?.company_id ?? null)) {
-      this.requireOrgAdminRecoveryPathAfterCompanyChange(
-        user,
-        currentPreference?.company_id ?? null,
-        nextCompanyId,
+    const membership = resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      operation: "auth.update_session_preference",
+      requireActiveEmployment: true,
+    });
+    if (
+      input.company_id !== undefined &&
+      input.company_id !== membership.companyId
+    ) {
+      throw forbidden(
+        "Company assignment cannot be changed through session preferences.",
+        {
+          user_id: membership.userId,
+          company_id: membership.companyId,
+          requested_company_id: input.company_id,
+          operation: "auth.update_session_preference",
+        },
       );
     }
-    this.savePreference(user, input);
-    return this.sessionContext(user);
+    this.savePreference(membership.user, {
+      ...input,
+      company_id: membership.companyId,
+    });
+    return this.sessionContext(membership.user);
   }
 
   sessionContext(user: AuthUser): SessionContext {
-    const bootstrap = this.createResumeBootstrapToken(user);
+    const storedUser = this.store.users.find(
+      (candidate) => candidate.id === user.id && !candidate.deleted_at,
+    );
+    if (!storedUser) {
+      throw unauthorized("User no longer exists");
+    }
+    const bootstrap = this.createResumeBootstrapToken(storedUser);
+    if (bootstrap) {
+      const bootstrapCompanyId = bootstrap.record.company_id;
+      if (!bootstrapCompanyId) {
+        throw notFound("Company bootstrap context not found");
+      }
+      const company = this.repository.findCompanyById(bootstrapCompanyId);
+      if (!company) {
+        throw notFound("Company bootstrap context not found");
+      }
+      return this.buildSessionContext({
+        user: storedUser,
+        company,
+        preference: null,
+        activeRole: storedUser.roles[0] ?? Roles.Employee,
+        bootstrap,
+      });
+    }
+    const membership = resolveActiveCompanyMembershipContext(this.store, {
+      userId: storedUser.id,
+      operation: "auth.session_context",
+      requireActiveEmployment: true,
+    });
+    return this.buildSessionContext({
+      user: membership.user,
+      company: membership.company,
+      preference: membership.preference,
+      activeRole: membership.activeRole,
+      bootstrap: null,
+    });
+  }
+
+  private buildSessionContext(input: {
+    user: AuthUser;
+    company: CompanyProfileRecord;
+    preference: UserSessionPreferenceRecord | null;
+    activeRole: RoleKey;
+    bootstrap: GeneratedToken | null;
+  }): SessionContext {
+    const {
+      user,
+      company,
+      preference,
+      activeRole: activeRoleKey,
+      bootstrap,
+    } = input;
     const availableRoles = user.roles.map((role) => ({
       key: role,
       label: role,
       is_active: true,
       permissions: permissionsForRole(role),
     }));
-    const preference = this.repository.sessionPreferenceFor(user.id);
-    const preferredRole =
-      preference && user.roles.includes(preference.active_role as RoleKey)
-        ? preference.active_role
-        : null;
     const activeRole = availableRoles.find(
-      (role) => role.key === preferredRole,
+      (role) => role.key === activeRoleKey,
     ) ??
       availableRoles[0] ?? {
         key: Roles.Employee,
@@ -670,12 +721,6 @@ export class AuthService {
         permissions: permissionsForRole(Roles.Employee),
       };
     const permissions = unique(permissionsForRole(activeRole.key));
-    const company = preference?.company_id
-      ? (this.repository.findCompanyById(preference.company_id) ??
-        defaultCompany(user))
-      : (this.store.companyProfiles.find(
-          (candidate) => candidate.status === "active",
-        ) ?? defaultCompany(user));
     const timezone =
       preference?.timezone ?? readTimezone(user) ?? company.timezone;
     const locale = preference?.locale ?? company.locale;
@@ -909,7 +954,14 @@ export class AuthService {
     user: AuthUser,
   ): CompanyProfileRecord | null {
     const companyIds = this.store.authTokens
-      .filter((token) => token.user_id === user.id && token.company_id)
+      .filter(
+        (token) =>
+          token.user_id === user.id &&
+          token.token_type === "company_bootstrap" &&
+          token.status === "active" &&
+          Date.parse(token.expires_at) > Date.now() &&
+          token.company_id,
+      )
       .map((token) => token.company_id as UUID);
     for (const companyId of [...new Set(companyIds)].reverse()) {
       const company = this.repository.findCompanyById(companyId);
@@ -1047,7 +1099,6 @@ export class AuthService {
   private async sendVerificationEmail(
     input: VerificationEmailSendInput,
   ): Promise<VerificationEmailSendResult> {
-    
     if (input.enforceResendLimits) {
       console.log("sendVerificationEmail called");
       const rateLimit = this.checkEmailSendLimit(
@@ -1180,11 +1231,16 @@ export class AuthService {
         active_role: activeRole,
       });
     }
-    if (
-      input.company_id &&
-      !this.repository.findCompanyById(input.company_id)
-    ) {
-      throw notFound("Company not found", { company_id: input.company_id });
+    if (input.company_id) {
+      const company = this.repository.findCompanyById(input.company_id);
+      if (!company) {
+        throw notFound("Company not found", { company_id: input.company_id });
+      }
+      if (company.status !== "active") {
+        throw forbidden("Selected company is inactive.", {
+          company_id: input.company_id,
+        });
+      }
     }
     const now = nowIso();
     const preference: UserSessionPreferenceRecord = {
@@ -1207,66 +1263,6 @@ export class AuthService {
       version: (current?.version ?? 0) + 1,
     };
     return this.repository.upsertSessionPreference(preference);
-  }
-
-  private requireOrgAdminRecoveryPathAfterCompanyChange(
-    user: CoreUser,
-    currentCompanyId: UUID | null,
-    nextCompanyId: UUID | null,
-  ): void {
-    if (!user.roles.includes(Roles.Admin)) {
-      return;
-    }
-    if (
-      this.companyRecoveryAdminCountAfterPreferenceChange(
-        user.id,
-        currentCompanyId,
-        nextCompanyId,
-      ) > 0
-    ) {
-      return;
-    }
-    throw conflict(
-      "At least one active Admin with login access must remain in this organization.",
-    );
-  }
-
-  private companyRecoveryAdminCountAfterPreferenceChange(
-    userId: UUID,
-    currentCompanyId: UUID | null,
-    nextCompanyId: UUID | null,
-  ): number {
-    return this.store.users.filter((candidate) => {
-      if (
-        candidate.deleted_at ||
-        !candidate.roles.includes(Roles.Admin) ||
-        candidate.employment_status !== EmploymentStatuses.Active
-      ) {
-        return false;
-      }
-      const candidateCompanyId =
-        candidate.id === userId
-          ? nextCompanyId
-          : (this.repository.sessionPreferenceFor(candidate.id)?.company_id ??
-            null);
-      if (candidateCompanyId !== currentCompanyId) {
-        return false;
-      }
-      return this.hasLoginRecoveryAccess(candidate.id);
-    }).length;
-  }
-
-  private hasLoginRecoveryAccess(userId: UUID): boolean {
-    if (this.repository.findActiveCredential(userId)) {
-      return true;
-    }
-    return this.store.authTokens.some(
-      (token) =>
-        token.user_id === userId &&
-        token.token_type === "password_setup" &&
-        token.status === "active" &&
-        Date.parse(token.expires_at) > Date.now(),
-    );
   }
 }
 
