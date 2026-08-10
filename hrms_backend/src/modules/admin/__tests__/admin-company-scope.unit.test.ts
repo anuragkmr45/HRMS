@@ -51,18 +51,21 @@ const companyA = "11111111-1111-4111-8111-111111111111";
 const companyB = "22222222-2222-4222-8222-222222222222";
 
 function assignCompany(store: ReturnType<typeof createMemoryDataStore>, userId: string, companyId: string) {
-  store.userSessionPreferences.push({
-    id: `pref-${companyId}`,
-    user_id: userId,
-    active_role: Roles.Admin,
-    company_id: companyId,
-    landing_page: "/dashboard",
-    locale: "en-IN",
-    timezone: "Asia/Kolkata",
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: "2026-01-01T00:00:00.000Z",
-    version: 1
-  });
+  if (!store.companyProfiles.some((company) => company.id === companyId)) {
+    store.companyProfiles.push({
+      ...store.companyProfiles[0]!,
+      id: companyId,
+      company_name: `Company ${companyId}`,
+      company_slug: `company-${companyId.slice(0, 8)}`,
+      status: "active",
+      version: 1
+    });
+  }
+  const preference = store.userSessionPreferences.find((candidate) => candidate.user_id === userId);
+  if (!preference) throw new Error("Session preference fixture is unavailable.");
+  preference.active_role = Roles.Admin;
+  preference.company_id = companyId;
+  preference.version += 1;
 }
 
 function addCompanyMasterData(store: ReturnType<typeof createMemoryDataStore>, companyId: string, suffix: string) {
