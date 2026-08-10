@@ -3,6 +3,27 @@ import type { ApiRecord, ExpectedVersionBody, PageQuery, PaginatedResponse } fro
 
 export type AttendancePunchEventType = "check_in" | "break_start" | "break_end" | "check_out";
 
+export type AttendanceLocationEvidence =
+  | {
+      latitude: number;
+      longitude: number;
+      accuracy_meters: number;
+      captured_at: string;
+      age_ms?: number;
+      provider?: "browser" | "gps" | "network" | "manual" | "unknown";
+      permission_state?: "granted" | "unknown";
+      altitude_meters?: number;
+      is_mocked?: boolean;
+      integrity_status?: string;
+    }
+  | {
+      captured_at?: string;
+      age_ms?: number;
+      provider?: "browser" | "gps" | "network" | "manual" | "unknown";
+      permission_state: "denied" | "unavailable";
+      integrity_status?: string;
+    };
+
 export interface AttendanceQuery extends PageQuery {
   date?: string;
   date_from?: string;
@@ -18,8 +39,9 @@ export interface AttendancePunchBody extends ApiRecord {
   event_type: AttendancePunchEventType;
   occurred_at?: string;
   work_mode?: "office" | "remote" | "wfh" | "field";
-  source?: "web" | "mobile" | "kiosk" | "admin";
+  source?: "web" | "web_geo" | "mobile" | "kiosk" | "admin";
   metadata?: ApiRecord;
+  location?: AttendanceLocationEvidence;
 }
 
 export interface AttendanceRegularizationBody extends ApiRecord {

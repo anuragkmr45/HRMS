@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 245
+Documented operations: 254
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2200,6 +2200,34 @@ Success body highlights:
 - Paginated list: send `page` and `page_size`; do not fetch unbounded lists.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
+### GET /api/v1/locations/india
+
+| Field | Contract |
+|---|---|
+| Purpose | Search India location reference data |
+| Frontend use | Employee directory, hierarchy, selectors, and audit context. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Admin/HR/Auditor broad read; other users scoped to self or own hierarchy. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Default Response |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
 ## Dashboard
 
 Backend-owned API group.
@@ -2246,6 +2274,264 @@ Success body highlights:
 | `workload` | object | required | - |
 | `attention` | array of object | required | - |
 | `unavailable_features` | array of object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+## Platform / Devices
+
+Device APIs register and list the authenticated user's mobile app installations in the active company.
+
+### GET /api/v1/platform/devices
+
+| Field | Contract |
+|---|---|
+| Purpose | List my mobile devices |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+No request body.
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `items` | array of object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices
+
+| Field | Contract |
+|---|---|
+| Purpose | Register mobile device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `installation_id_hash` | string | required | Lowercase SHA-256 hash of the app-generated installation identifier. Raw installation identifiers and device secrets are never accepted.; minLength 64; pattern ^[0-9a-f]{64}$ |
+| `platform` | string enum("ios", "android") | required | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `201` | Device registered. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/revoke
+
+| Field | Contract |
+|---|---|
+| Purpose | Revoke registered device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/suspend
+
+| Field | Contract |
+|---|---|
+| Purpose | Suspend registered device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/platform/devices/{deviceId}/restore
+
+| Field | Contract |
+|---|---|
+| Purpose | Restore suspended device |
+| Frontend use | Mobile app device registration, retry handling, and owner-scoped device management views. |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Authenticated current user's active-company mobile devices only; company and owner are derived server-side. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `id` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `reason` | string enum("lost", "replaced", "user_requested", "security", "administrative") | optional | - |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `registered_device_id` | string<uuid> | required | Registered device UUID |
+| `platform` | string enum("ios", "android") | required | - |
+| `status` | string enum("registered", "suspended", "revoked") | required | - |
+| `status_changed_at` | string<date-time> | required | Device lifecycle status timestamp |
+| `created_at` | string<date-time> | required | Registration creation timestamp |
+| `updated_at` | string<date-time> | required | Registration update timestamp |
 
 **Frontend behavior notes**
 
@@ -9118,14 +9404,112 @@ Backend-owned API group.
 
 | Field | Contract |
 |---|---|
-| Purpose | Record punch |
-| Frontend use | Record punch |
+| Purpose | Record employee manual-now punch |
+| Frontend use | Record employee manual-now punch |
 | Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
 | Roles/scope | Backend RBAC/ABAC decides access. |
 
 **Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `idempotency-key` | header | yes | string<uuid> | - |
 
-No path or query parameters.
+**Request body**
+
+Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `client_event_id` | string<uuid> | required | Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization. |
+| `captured_at` | string<date-time> | required | Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at. |
+| `device` | object | required, nullable | Bounded device envelope. registered_device_id is the canonical platform registry reference required for personal-mobile attendance sources; other device fields are untrusted audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
+| `command` | object | required | Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted. |
+
+
+
+Example:
+
+```json
+{
+  "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+  "captured_at": "2026-05-04T09:10:00.000+05:30",
+  "device": {
+    "device_id": "browser-session-device",
+    "platform": "web",
+    "app_version": "2026.08.03",
+    "os_version": "Windows 11"
+  },
+  "command": {
+    "event_type": "check_in",
+    "work_mode": "office",
+    "source": "web_geo",
+    "metadata": {
+      "client_timezone": "Asia/Kolkata"
+    },
+    "location": {
+      "latitude": 12.971599,
+      "longitude": 77.594566,
+      "accuracy_meters": 12.5,
+      "captured_at": "2026-05-04T03:40:00.000Z",
+      "provider": "browser",
+      "permission_state": "granted"
+    }
+  }
+}
+```
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `allowed` | boolean | required | - |
+| `command_id` | string<uuid> | required | Attendance command execution UUID |
+| `decision_id` | string<uuid> | required | Attendance command decision UUID |
+| `session_id` | string<uuid> | optional, nullable | Attendance session UUID |
+| `punch_id` | string<uuid> | required | Attendance punch UUID |
+| `punch` | object | required | - |
+| `day_status` | object | required | - |
+| `next_allowed_actions` | array of string enum("check_in", "break_start", "break_end", "check_out") | required | - |
+| `next_allowed_action` | string enum("check_in", "break_start", "break_end", "check_out") | optional, nullable | - |
+| `punch_policy` | object | optional | - |
+| `geo_policy` | object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches
+
+| Field | Contract |
+|---|---|
+| Purpose | Record manager-assisted current punch |
+| Frontend use | Record manager-assisted current punch |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `employeeUserId` | path | yes | string<uuid> | - |
+| `idempotency-key` | header | yes | string | minLength 8 |
 
 **Request body**
 
@@ -9136,10 +9520,83 @@ Required: yes
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `event_type` | string enum("check_in", "break_start", "break_end", "check_out") | required | - |
-| `occurred_at` | string<date-time> | optional | Punch timestamp |
 | `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
-| `source` | string enum("web", "mobile", "kiosk", "admin") | optional | default "web" |
 | `metadata` | object | optional | - |
+| `location` | unknown | optional | One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates. |
+| `reason` | string | optional | minLength 3 |
+
+
+
+Example:
+
+```json
+{
+  "event_type": "check_in",
+  "work_mode": "office",
+  "metadata": {
+    "manager_note": "Front desk assisted punch"
+  },
+  "location": {
+    "captured_at": "2026-05-04T03:40:00.000Z",
+    "provider": "browser",
+    "permission_state": "unavailable",
+    "integrity_status": "location_unavailable"
+  },
+  "reason": "Employee device unavailable at shift start."
+}
+```
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+Schema: `object`.
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections
+
+| Field | Contract |
+|---|---|
+| Purpose | Record historical attendance correction |
+| Frontend use | Record historical attendance correction |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `employeeUserId` | path | yes | string<uuid> | - |
+| `idempotency-key` | header | yes | string | minLength 8 |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `event_type` | string enum("check_in", "check_out") | required | - |
+| `occurred_at` | string<date-time> | required | Past effective occurrence time |
+| `reason` | string | required | minLength 3 |
+| `work_mode` | string enum("office", "remote", "wfh", "field") | optional | default "office" |
+| `metadata` | object | optional | - |
+| `linked_regularization_request_id` | string<uuid> | optional | Linked regularization request UUID |
 
 **Responses**
 | Status | Meaning |
@@ -9475,7 +9932,26 @@ Required: yes
 |---|---|---|---|
 | `work_date` | string<date> | required | Regularization work date |
 | `reason` | string | required | minLength 3 |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | optional | Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.; minItems 1 |
+| `items` | array of unknown | optional | minItems 1 |
+
+
+
+Example:
+
+```json
+{
+  "work_date": "2026-05-04",
+  "reason": "Forgot to punch out after shift handoff.",
+  "items": [
+    {
+      "operation": "add",
+      "event_type": "check_out",
+      "occurred_at": "2026-05-04T18:20:00.000+05:30"
+    }
+  ]
+}
+```
 
 **Responses**
 | Status | Meaning |
@@ -9495,9 +9971,11 @@ Success body highlights:
 |---|---|---|---|
 | `id` | string<uuid> | required | Regularization request UUID |
 | `employee_user_id` | string<uuid> | required | Employee user UUID |
+| `submitted_by_user_id` | string<uuid> | required | Submitting actor user UUID |
 | `work_date` | string<date> | required | Work date |
 | `reason` | string | required | - |
-| `requested_punches` | array of object | optional | - |
+| `requested_punches` | array of object | required | Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations. |
+| `items` | array of object | required | - |
 | `status` | string enum("pending", "approved", "returned", "rejected") | required | - |
 | `current_approver_user_id` | string<uuid> | optional, nullable | Current approver user UUID |
 | `decision_remarks` | string | optional, nullable | - |
@@ -9647,6 +10125,18 @@ Required: yes
 | `remarks` | string | optional | Required for reject/return decisions. |
 | `expected_version` | integer | required | minimum 1 |
 
+
+
+Example:
+
+```json
+{
+  "decision": "approve",
+  "remarks": "Access log confirms the requested punch.",
+  "expected_version": 1
+}
+```
+
 **Responses**
 | Status | Meaning |
 |---|---|
@@ -9668,6 +10158,56 @@ Schema: `object`.
 - Display backend `message` and retain `request_id` for support.
 - Treat `401` as authentication failure and `403` as real permission denial.
 - OCC mutation: send `expected_version`; on `409`, refetch latest object/version and ask the user to retry.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish
+
+| Field | Contract |
+|---|---|
+| Purpose | Publish geofence version |
+| Frontend use | Publish geofence version |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+| Name | In | Required | Type | Notes |
+|---|---|---:|---|---|
+| `geofenceId` | path | yes | string<uuid> | - |
+| `versionId` | path | yes | string<uuid> | - |
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `effectiveFrom` | string<date-time> | required | Inclusive effective start timestamp |
+| `effectiveUntil` | string<date-time> | optional, nullable | Exclusive effective end timestamp |
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `version` | object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
 - Respect `429` and `Retry-After`; never build tight retry loops.
 
 ### GET /api/v1/attendance/exceptions
