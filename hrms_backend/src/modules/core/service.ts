@@ -5,6 +5,7 @@ import { badRequest, conflict, forbidden, notFound } from "../../platform/errors
 import type { AuthTokenRecord, MemoryDataStore } from "../../platform/data-store.js";
 import { nowIso } from "../../platform/data-store.js";
 import { createGeneratedExportDocument, type GeneratedExportFormat } from "../../platform/generated-exports.js";
+import { resolveActiveCompanyMembershipContext } from "../../platform/company-membership-context.js";
 import { DocumentService } from "../documents/service.js";
 import { appendCoreOutboxEvent } from "./events.js";
 import { CoreRepository } from "./repository.js";
@@ -243,7 +244,9 @@ export class CoreService {
   }
 
   listUsers(actor: AuthUser, params: UserDirectoryQuery): UserDirectoryResult {
-    const visibleUsers = this.visibleUsersFor(actor);
+    const companyId = this.activeCompanyIdForActor(actor, "core.users.list");
+    this.validateDirectoryFilters(companyId, params);
+    const visibleUsers = this.visibleUsersFor(actor, companyId);
     const filtered = this.sortUsers(visibleUsers.filter((user) => this.matchesDirectoryFilters(user, params)), params.sort);
     const start = (params.page - 1) * params.page_size;
     const items = filtered.slice(start, start + params.page_size).map((user) => this.toListItem(user));
@@ -265,8 +268,8 @@ export class CoreService {
   }
 
   orgSelectors(actor: AuthUser): OrgSelectorsResult {
-    const actorCompanyId = this.companyIdForUser(actor.id);
-    const managerCandidates = this.visibleUsersFor(actor)
+    const actorCompanyId = this.activeCompanyIdForActor(actor, "core.users.org_selectors");
+    const managerCandidates = this.visibleUsersFor(actor, actorCompanyId)
       .filter((user) => user.employment_status === EmploymentStatuses.Active)
       .map((user) => toUserReference(user));
     return {
@@ -291,7 +294,7 @@ export class CoreService {
     if (this.store.users.some((user) => normalizeEmail(user.email) === email && !user.deleted_at)) {
       throw conflict("Email already exists.", { email });
     }
-    const actorCompanyId = this.companyIdForUser(actor.id);
+    const actorCompanyId = this.activeCompanyIdForActor(actor, "core.users.create");
     this.requireDepartment(actorCompanyId, input.department_id);
     this.requireDesignation(actorCompanyId, input.designation_id);
     const manager = input.manager_user_id ? this.requireActiveManager(actor, input.manager_user_id) : null;
@@ -668,6 +671,7 @@ export class CoreService {
   }
 
   createImportJob(actor: AuthUser, input: UserImportInput) {
+    const companyId = this.activeCompanyIdForActor(actor, "core.users.import.create");
     requirePeopleManager(actor);
     const jobId = randomUUID();
     const event = appendCoreOutboxEvent(this.store, {
@@ -675,6 +679,7 @@ export class CoreService {
       aggregateId: jobId,
       eventType: "core.users.import_requested",
       payload: {
+        company_id: companyId,
         actor_user_id: actor.id,
         document_id: input.document_id ?? null,
         file_name: normalizeOptional(input.file_name),
@@ -692,8 +697,13 @@ export class CoreService {
   }
 
   getImportJob(actor: AuthUser, jobId: UUID) {
+    const companyId = this.activeCompanyIdForActor(actor, "core.users.import.get");
     requirePeopleManager(actor);
-    const event = this.store.outbox.find((candidate) => candidate.aggregate_type === "core.user_import" && candidate.aggregate_id === jobId);
+    const event = this.store.outbox.find((candidate) =>
+      candidate.aggregate_type === "core.user_import" &&
+      candidate.aggregate_id === jobId &&
+      stringOrNull(candidate.payload.company_id) === companyId
+    );
     if (!event) {
       throw notFound("Employee import job not found.", { job_id: jobId });
     }
@@ -701,10 +711,12 @@ export class CoreService {
   }
 
   async createExportJob(actor: AuthUser, input: UserExportInput) {
+    const companyId = this.activeCompanyIdForActor(actor, "core.users.export");
     requireEmployeeExportAccess(actor);
     const jobId = randomUUID();
     const columns = input.columns ?? defaultEmployeeExportColumns;
-    const rows = this.exportUserRows(input.filters, columns);
+    const filters = this.validateExportFilters(actor, companyId, input.filters);
+    const rows = this.exportUserRows(actor, companyId, filters, columns);
     const generated = await createGeneratedExportDocument(this.store, {
       actor,
       businessObjectType: "core_user_export",
@@ -713,7 +725,7 @@ export class CoreService {
       format: input.format as GeneratedExportFormat,
       rows,
       columns,
-      filters: input.filters,
+      filters,
       filePrefix: "employee-export"
     });
     const event = appendCoreOutboxEvent(this.store, {
@@ -722,8 +734,9 @@ export class CoreService {
       eventType: "core.users.export_requested",
       payload: {
         actor_user_id: actor.id,
+        company_id: companyId,
         format: input.format,
-        filters: input.filters,
+        filters,
         columns,
         status: generated.status,
         adapter: generated.adapter,
@@ -847,8 +860,16 @@ export class CoreService {
     );
   }
 
-  private visibleUsersFor(actor: AuthUser): CoreUser[] {
-    const users = this.repository.listUsers().filter((user) => this.isInActorCompany(actor, user));
+  private activeCompanyIdForActor(actor: AuthUser, operation: string): UUID {
+    return resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      operation,
+      requireActiveEmployment: true,
+    }).companyId;
+  }
+
+  private visibleUsersFor(actor: AuthUser, companyId = this.activeCompanyIdForActor(actor, "core.users.visible")): CoreUser[] {
+    const users = this.repository.listUsers().filter((user) => this.isUserInCompany(user.id, companyId));
     if (hasPrivilegedProfileRead(actor)) {
       return users;
     }
@@ -864,15 +885,15 @@ export class CoreService {
   }
 
   private isInActorCompany(actor: AuthUser, user: CoreUser): boolean {
-    const actorCompanyId = this.companyIdForUser(actor.id);
-    if (!actorCompanyId) {
-      return true;
-    }
-    return user.id === actor.id || this.companyIdForUser(user.id) === actorCompanyId;
+    return this.isUserInCompany(user.id, this.activeCompanyIdForActor(actor, "core.users.company_scope"));
+  }
+
+  private isUserInCompany(userId: UUID, companyId: UUID): boolean {
+    return this.companyIdForUser(userId) === companyId;
   }
 
   private isMasterDataInCompany(recordCompanyId: UUID | null, actorCompanyId: UUID | null): boolean {
-    return actorCompanyId ? recordCompanyId === actorCompanyId : recordCompanyId === null;
+    return actorCompanyId ? recordCompanyId === null || recordCompanyId === actorCompanyId : recordCompanyId === null;
   }
 
   private assignUserToActorCompany(actor: AuthUser, user: CoreUser, now: string): void {
@@ -929,6 +950,45 @@ export class CoreService {
       return false;
     }
     return true;
+  }
+
+  private validateDirectoryFilters(companyId: UUID, params: Pick<UserDirectoryQuery, "department_id" | "designation_id" | "manager_user_id">): void {
+    if (params.department_id) {
+      this.requireDepartment(companyId, params.department_id);
+    }
+    if (params.designation_id) {
+      this.requireDesignation(companyId, params.designation_id);
+    }
+    if (params.manager_user_id) {
+      this.requireActiveUserInCompany(companyId, params.manager_user_id, "Active manager not found");
+    }
+  }
+
+  private validateExportFilters(
+    actor: AuthUser,
+    companyId: UUID,
+    filters: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const departmentId = textFilter(filters.department_id);
+    const designationId = textFilter(filters.designation_id);
+    const managerUserId = textFilter(filters.manager_user_id);
+    const userId = textFilter(filters.user_id) ?? textFilter(filters.employee_user_id);
+    if (departmentId) {
+      this.requireDepartment(companyId, departmentId);
+    }
+    if (designationId) {
+      this.requireDesignation(companyId, designationId);
+    }
+    if (managerUserId) {
+      this.requireActiveUserInCompany(companyId, managerUserId, "Active manager not found");
+    }
+    if (userId) {
+      const user = this.requireUserInCompany(companyId, userId);
+      if (!this.visibleUsersFor(actor, companyId).some((candidate) => candidate.id === user.id)) {
+        throw forbidden("You do not have access to this employee profile");
+      }
+    }
+    return { ...filters };
   }
 
   private sortUsers(users: CoreUser[], sort = "employee_code"): CoreUser[] {
@@ -1143,6 +1203,22 @@ export class CoreService {
     }
     if (!this.isInActorCompany(actor, user)) {
       throw forbidden("You do not have access to this employee profile");
+    }
+    return user;
+  }
+
+  private requireUserInCompany(companyId: UUID, id: UUID): CoreUser {
+    const user = this.repository.findUser(id);
+    if (!user || !this.isUserInCompany(user.id, companyId)) {
+      throw notFound("User not found", { id });
+    }
+    return user;
+  }
+
+  private requireActiveUserInCompany(companyId: UUID, id: UUID, message: string): CoreUser {
+    const user = this.requireUserInCompany(companyId, id);
+    if (user.employment_status !== EmploymentStatuses.Active) {
+      throw notFound(message, { id });
     }
     return user;
   }
@@ -1367,13 +1443,20 @@ export class CoreService {
     };
   }
 
-  private exportUserRows(filters: Record<string, unknown>, columns: readonly string[]): Array<Record<string, unknown>> {
+  private exportUserRows(
+    actor: AuthUser,
+    companyId: UUID,
+    filters: Record<string, unknown>,
+    columns: readonly string[],
+  ): Array<Record<string, unknown>> {
     const include = new Set(columns);
     const wants = (key: string) => include.size === 0 || include.has(key);
-    return this.store.users
-      .filter((user) => !user.deleted_at)
+    return this.visibleUsersFor(actor, companyId)
+      .filter((user) => !textFilter(filters.user_id) || user.id === textFilter(filters.user_id))
+      .filter((user) => !textFilter(filters.employee_user_id) || user.id === textFilter(filters.employee_user_id))
       .filter((user) => !textFilter(filters.department_id) || user.department_id === textFilter(filters.department_id))
       .filter((user) => !textFilter(filters.designation_id) || user.designation_id === textFilter(filters.designation_id))
+      .filter((user) => !textFilter(filters.manager_user_id) || user.manager_user_id === textFilter(filters.manager_user_id))
       .filter((user) => {
         const departmentName = textFilter(filters.department);
         if (!departmentName) return true;

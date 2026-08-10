@@ -1,8 +1,26 @@
 import type { FastifyDynamicSwaggerOptions } from "@fastify/swagger";
+import {
+  AttendanceCommandReasonCodeValues,
+  AttendanceGeoDecisionReasonCodeValues,
+  AttendanceGeoFactualOutcomeValues,
+  AttendanceGeoPolicyActionValues,
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+  AttendanceOfflineSyncContractVersion,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+  AttendancePunchEventTypes,
+  AttendancePublicPunchSourceChannels,
+  AttendanceRegularizationOperations,
+  AttendanceRegularizationStatuses,
+} from "#shared";
 
 type JsonSchema = Record<string, unknown>;
 type RouteSchema = Record<string, unknown>;
 type SwaggerTransformObjectInput = Parameters<NonNullable<FastifyDynamicSwaggerOptions["transformObject"]>>[0];
+const enumValues = (values: readonly string[]): string[] => [...values];
+const lowerHex64Example = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const uuid = (description: string, example = "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"): JsonSchema => ({
   type: "string",
@@ -130,6 +148,34 @@ const expectedVersionBodySchema = {
 };
 
 const authSecurity = [{ sessionCookie: [] }, { bearerAuth: [] }];
+const attendanceClientEventIdSchema = uuid(
+  "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+  "019fc5b7-0811-7a33-ae47-46a559f9e797"
+);
+const idempotencyKeyHeaderObject = {
+  type: "object",
+  required: ["idempotency-key"],
+  properties: {
+    "idempotency-key": {
+      ...attendanceClientEventIdSchema,
+      description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
+    }
+  }
+};
+const idempotencyReplayResponseHeader = {
+  description: "Present with value `true` only when the business response is replayed from a stored idempotency result or durable client_event_id command. The current HTTP response keeps the current x-request-id; replay is semantic business-response replay, not byte-for-byte transport-envelope replay.",
+  schema: { type: "string", enum: ["true"] }
+};
+const replayResponseHeaders = {
+  "Idempotency-Replayed": idempotencyReplayResponseHeader
+};
+const idempotencyKeyParameter = {
+  name: "idempotency-key",
+  in: "header",
+  required: true,
+  schema: attendanceClientEventIdSchema,
+  description: "Required client_event_id UUID. Reuse only to retry the same validated attendance punch request; a new logical action requires a new UUID."
+};
 
 const errorResponseSchema = {
   type: "object",
@@ -476,6 +522,64 @@ const authSessionContextSchema = {
         }
       },
       additionalProperties: false
+    }
+  },
+  additionalProperties: false
+};
+
+const platformRegisteredDeviceSchema = {
+  type: "object",
+  required: [
+    "registered_device_id",
+    "platform",
+    "status",
+    "status_changed_at",
+    "created_at",
+    "updated_at"
+  ],
+  properties: {
+    registered_device_id: uuid("Registered device UUID"),
+    platform: { type: "string", enum: ["ios", "android"], example: "android" },
+    status: { type: "string", enum: ["registered", "suspended", "revoked"], example: "registered" },
+    status_changed_at: dateTime("Device lifecycle status timestamp"),
+    created_at: dateTime("Registration creation timestamp"),
+    updated_at: dateTime("Registration update timestamp")
+  },
+  additionalProperties: false,
+  example: {
+    registered_device_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+    platform: "android",
+    status: "registered",
+    status_changed_at: "2026-08-09T03:40:00.000Z",
+    created_at: "2026-08-09T03:40:00.000Z",
+    updated_at: "2026-08-09T03:40:00.000Z"
+  }
+};
+
+const platformDeviceRegistrationBodySchema = {
+  type: "object",
+  required: ["installation_id_hash", "platform"],
+  properties: {
+    installation_id_hash: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      minLength: 64,
+      maxLength: 64,
+      description: "Lowercase SHA-256 hash of the app-generated installation identifier. Raw installation identifiers and device secrets are never accepted.",
+      example: lowerHex64Example
+    },
+    platform: { type: "string", enum: ["ios", "android"], example: "android" }
+  },
+  additionalProperties: false
+};
+
+const platformRegisteredDeviceListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: platformRegisteredDeviceSchema
     }
   },
   additionalProperties: false
@@ -2102,54 +2206,501 @@ const attendanceQuerySchema = {
   }
 };
 
-const attendancePunchBody = {
+const attendanceLocationCoordinateEvidenceSchema = {
   type: "object",
-  required: ["event_type"],
+  required: ["latitude", "longitude", "accuracy_meters", "captured_at"],
   properties: {
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
-    occurred_at: dateTime("Punch timestamp"),
-    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
-    source: { type: "string", enum: ["web", "mobile", "kiosk", "admin"], default: "web", example: "web" },
-    metadata: { type: "object", additionalProperties: true }
+    latitude: { type: "number", minimum: -90, maximum: 90, example: 12.971599 },
+    longitude: { type: "number", minimum: -180, maximum: 180, example: 77.594566 },
+    accuracy_meters: { type: "number", minimum: 0, example: 12.5 },
+    captured_at: dateTime("One-shot browser capture timestamp from the employee action."),
+    age_ms: { type: "integer", minimum: 0, example: 30000 },
+    provider: { type: "string", enum: enumValues(AttendanceLocationProviderValues), example: "browser" },
+    permission_state: { type: "string", enum: ["granted", "unknown"], default: "unknown", example: "granted" },
+    altitude_meters: { type: "number", example: 920.4 },
+    is_mocked: { type: "boolean", example: false },
+    integrity_status: { type: "string", minLength: 1, maxLength: 80, example: "browser_reported" }
   },
   additionalProperties: false
 };
 
+const attendanceLocationFailureEvidenceSchema = {
+  type: "object",
+  required: ["permission_state"],
+  properties: {
+    captured_at: dateTime("Optional one-shot browser failure timestamp."),
+    age_ms: { type: "integer", minimum: 0, example: 30000 },
+    provider: { type: "string", enum: enumValues(AttendanceLocationProviderValues), example: "browser" },
+    permission_state: { type: "string", enum: ["denied", "unavailable"], example: "denied" },
+    integrity_status: { type: "string", minLength: 1, maxLength: 80, example: "permission_denied" }
+  },
+  additionalProperties: false
+};
+
+const attendanceLocationEvidenceSchema = {
+  oneOf: [
+    attendanceLocationCoordinateEvidenceSchema,
+    attendanceLocationFailureEvidenceSchema
+  ],
+  description: "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+  examples: [
+    {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "granted"
+    },
+    {
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "denied",
+      integrity_status: "permission_denied"
+    }
+  ]
+};
+
+const attendanceGeoPolicySnapshotSchema = {
+  type: "object",
+  required: ["factual_outcome", "selected_action", "fallback_used", "allowed", "reason_code"],
+  properties: {
+    factual_outcome: {
+      type: "string",
+      enum: enumValues(AttendanceGeoFactualOutcomeValues),
+      example: "inside_confident"
+    },
+    category: { type: "string", example: "inside_confident" },
+    selected_action: { type: "string", enum: enumValues(AttendanceGeoPolicyActionValues), example: "allow" },
+    fallback_used: { type: "boolean", example: false },
+    allowed: { type: "boolean", example: true },
+    reason_code: { type: "string", enum: enumValues(AttendanceGeoDecisionReasonCodeValues), nullable: true, example: "geo_inside_fence" },
+    evaluator_version: { type: "string", example: "attendance-geo-v2" },
+    geofence_id: { ...uuid("Effective geofence UUID"), nullable: true },
+    geofence_version_id: { ...uuid("Effective geofence version UUID"), nullable: true },
+    work_site_id: { ...uuid("Selected work site UUID"), nullable: true },
+    geofence_version_number: { type: "integer", nullable: true, example: 1 },
+    geofence_shape_type: { type: "string", enum: ["circle", "polygon"], nullable: true, example: "polygon" },
+    geofence_canonical_hash: { type: "string", pattern: "^[0-9a-f]{64}$", nullable: true, example: lowerHex64Example },
+    evaluation: {
+      type: "object",
+      nullable: true,
+      additionalProperties: true,
+      description: "Privacy-safe geofence explanation. Coordinates and raw payloads are not returned."
+    }
+  },
+  additionalProperties: true,
+  example: {
+    factual_outcome: "inside_confident",
+    category: "inside_confident",
+    selected_action: "allow",
+    fallback_used: false,
+    allowed: true,
+    reason_code: "geo_inside_fence",
+    evaluator_version: "attendance-geo-v2",
+    geofence_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9101",
+    geofence_version_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9102",
+    work_site_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9103",
+    geofence_version_number: 2,
+    geofence_shape_type: "polygon",
+    geofence_canonical_hash: lowerHex64Example,
+    evaluation: {
+      category: "inside_confident",
+      evaluator_version: "attendance-geo-v2",
+      candidate_count: 1,
+      valid_candidate_count: 1,
+      inside_match_count: 1,
+      multiple_inside_matches: false,
+      selected_candidate_ordinal: 1,
+      selection_reason: "nearest_effective_geofence",
+      reported_accuracy_meters: 12.5,
+      grace_meters: 25
+    }
+  }
+};
+
+const attendanceBusinessErrorDetailsSchema = {
+  type: "object",
+  properties: {
+    reason_code: {
+      type: "string",
+      enum: enumValues(AttendanceCommandReasonCodeValues),
+      nullable: true,
+      description: "Stable attendance command or geo-policy reason code when the failure is a persisted business denial."
+    },
+    reason_detail: { type: "string", nullable: true },
+    next_allowed_actions: {
+      type: "array",
+      items: { type: "string", enum: Object.values(AttendancePunchEventTypes) }
+    },
+    geo_policy: attendanceGeoPolicySnapshotSchema
+  },
+  additionalProperties: true,
+  example: {
+    reason_code: "geo_outside_fence",
+    reason_detail: "The submitted location is outside the effective geofence.",
+    next_allowed_actions: ["check_in"],
+    geo_policy: {
+      factual_outcome: "outside_confident",
+      category: "outside_confident",
+      selected_action: "deny",
+      fallback_used: false,
+      allowed: false,
+      reason_code: "geo_outside_fence",
+      evaluator_version: "attendance-geo-v2",
+      evaluation: {
+        category: "outside_confident",
+        evaluator_version: "attendance-geo-v2",
+        candidate_count: 1,
+        valid_candidate_count: 1,
+        inside_match_count: 0,
+        multiple_inside_matches: false,
+        selected_candidate_ordinal: 1,
+        selection_reason: "nearest_effective_geofence",
+        reported_accuracy_meters: 18,
+        grace_meters: 25
+      }
+    }
+  }
+};
+
+const attendanceBusinessErrorResponseSchema = {
+  ...errorResponseSchema,
+  properties: {
+    ...errorResponseSchema.properties,
+    details: attendanceBusinessErrorDetailsSchema
+  }
+};
+
+const attendancePunchCommandBody = {
+  type: "object",
+  required: ["event_type"],
+  description: "Employee manual-now punch command. Use source=web_geo only for a single browser geolocation result collected at click time; continuous tracking, polling and client-submitted geo decisions are not accepted.",
+  properties: {
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
+    source: { type: "string", enum: enumValues(AttendancePublicPunchSourceChannels), default: "web", example: "web_geo" },
+    metadata: {
+      type: "object",
+      additionalProperties: true,
+      description: "Client metadata. Browser geo clients must not submit trusted geo-policy or geofence outcomes here."
+    },
+    location: attendanceLocationEvidenceSchema
+  },
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    work_mode: "office",
+    source: "web_geo",
+    metadata: {
+      client_timezone: "Asia/Kolkata"
+    },
+    location: {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "granted"
+    }
+  }
+};
+
+const attendanceCommandDeviceBody = {
+  type: "object",
+  properties: {
+    device_id: { type: "string", minLength: 1, maxLength: 128, example: "browser-session-device" },
+    platform: { type: "string", enum: ["web", "ios", "android"], example: "web" },
+    app_version: { type: "string", minLength: 1, maxLength: 64, example: "2026.08.03" },
+    os_version: { type: "string", minLength: 1, maxLength: 64, example: "Windows 11" }
+  },
+  additionalProperties: false,
+  description: "Bounded, untrusted device metadata placeholder. Device fields are audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
+};
+
+const attendancePunchBody = {
+  type: "object",
+  required: ["client_event_id", "captured_at", "device", "command"],
+  description: "Mobile-ready self-service attendance command envelope. client_event_id must equal the Idempotency-Key header. captured_at is client capture metadata only; attendance occurred_at remains server-authoritative.",
+  properties: {
+    client_event_id: attendanceClientEventIdSchema,
+    captured_at: dateTime("Client capture timestamp for audit/transport metadata. Does not control attendance occurred_at."),
+    device: { ...attendanceCommandDeviceBody, nullable: true },
+    command: attendancePunchCommandBody
+  },
+  additionalProperties: false,
+  example: {
+    client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+    captured_at: "2026-05-04T09:10:00.000+05:30",
+    device: {
+      device_id: "browser-session-device",
+      platform: "web",
+      app_version: "2026.08.03",
+      os_version: "Windows 11"
+    },
+    command: {
+      event_type: "check_in",
+      work_mode: "office",
+      source: "web_geo",
+      metadata: {
+        client_timezone: "Asia/Kolkata"
+      },
+      location: {
+        latitude: 12.971599,
+        longitude: 77.594566,
+        accuracy_meters: 12.5,
+        captured_at: "2026-05-04T03:40:00.000Z",
+        provider: "browser",
+        permission_state: "granted"
+      }
+    }
+  }
+};
+
+const attendanceAssistedCurrentPunchBody = {
+  type: "object",
+  required: ["event_type"],
+  properties: {
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
+    metadata: { type: "object", additionalProperties: true },
+    location: attendanceLocationEvidenceSchema,
+    reason: { type: "string", minLength: 3, maxLength: 1000 }
+  },
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    work_mode: "office",
+    metadata: {
+      manager_note: "Front desk assisted punch"
+    },
+    location: {
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "browser",
+      permission_state: "unavailable",
+      integrity_status: "location_unavailable"
+    },
+    reason: "Employee device unavailable at shift start."
+  }
+};
+
+const attendanceHistoricalCorrectionBody = {
+  type: "object",
+  required: ["event_type", "occurred_at", "reason"],
+  properties: {
+    event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), example: "check_in" },
+    occurred_at: dateTime("Past effective occurrence time"),
+    reason: { type: "string", minLength: 3, maxLength: 1000 },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office" },
+    metadata: { type: "object", additionalProperties: true },
+    linked_regularization_request_id: uuid("Linked regularization request UUID")
+  },
+  additionalProperties: false
+};
+
+const attendanceEmployeeParamSchema = {
+  type: "object",
+  required: ["employeeUserId"],
+  properties: { employeeUserId: uuid("Employee user UUID") },
+  additionalProperties: false,
+  example: {
+    event_type: "check_in",
+    occurred_at: "2026-05-04T09:10:00.000+05:30",
+    reason: "Manager verified missed punch from access log.",
+    work_mode: "office",
+    metadata: {
+      correction_source: "manager_review"
+    },
+    linked_regularization_request_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9401"
+  }
+};
+
+const attendanceGeofencePublishParamSchema = {
+  type: "object",
+  required: ["geofenceId", "versionId"],
+  properties: {
+    geofenceId: uuid("Geofence UUID"),
+    versionId: uuid("Geofence version UUID")
+  },
+  additionalProperties: false
+};
+
+const attendanceGeofencePublishBody = {
+  type: "object",
+  required: ["effectiveFrom"],
+  properties: {
+    effectiveFrom: dateTime("Inclusive effective start timestamp"),
+    effectiveUntil: { ...dateTime("Exclusive effective end timestamp"), nullable: true }
+  },
+  additionalProperties: false
+};
+
+const attendanceGeofencePublishedVersionSchema = {
+  type: "object",
+  required: [
+    "id",
+    "company_id",
+    "geofence_id",
+    "version_number",
+    "version_status",
+    "shape_type",
+    "effective_from",
+    "canonical_hash",
+    "published_at",
+    "published_by_user_id"
+  ],
+  properties: {
+    id: uuid("Geofence version UUID"),
+    company_id: uuid("Company UUID"),
+    geofence_id: uuid("Geofence UUID"),
+    version_number: { type: "integer", minimum: 1, example: 2 },
+    version_status: { type: "string", enum: ["published"], example: "published" },
+    shape_type: { type: "string", enum: ["circle", "polygon"], example: "polygon" },
+    circle_radius_meters: { type: "string", nullable: true, example: "100.00" },
+    effective_from: dateTime("Inclusive effective start timestamp"),
+    effective_until: { ...dateTime("Exclusive effective end timestamp"), nullable: true },
+    canonical_hash: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      example: lowerHex64Example
+    },
+    published_at: dateTime("Publication timestamp"),
+    published_by_user_id: uuid("Publishing actor UUID"),
+    geometry_diagnostics: { type: "object", additionalProperties: true }
+  },
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9302",
+    company_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9001",
+    geofence_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9301",
+    version_number: 2,
+    version_status: "published",
+    shape_type: "polygon",
+    circle_radius_meters: null,
+    effective_from: "2026-05-04T00:00:00.000Z",
+    effective_until: null,
+    canonical_hash: lowerHex64Example,
+    published_at: "2026-05-04T03:35:00.000Z",
+    published_by_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9002",
+    geometry_diagnostics: {
+      vertex_count: 5,
+      self_intersections: 0
+    }
+  }
+};
+
 const attendancePunchSchema = {
   type: "object",
-  required: ["id", "employee_user_id", "event_type", "occurred_at", "work_date", "time"],
+  required: ["id", "employee_user_id", "event_type", "occurred_at"],
   properties: {
     id: uuid("Attendance punch UUID"),
     employee_user_id: uuid("Employee user UUID"),
-    event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_in" },
+    actor_user_id: uuid("Authenticated actor UUID"),
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
     occurred_at: dateTime("Punch timestamp"),
     work_date: date("Work date"),
     time: { type: "string", nullable: true, example: "09:10" },
     work_mode: { type: "string", example: "office" },
-    source: { type: "string", example: "web" }
+    source: { type: "string", enum: ["web", "web_geo", "mobile", "mobile_foreground", "mobile_offline", "kiosk", "admin", "auto_geofence"], example: "web_geo" },
+    origin: { type: "string", enum: ["employee_manual_now", "manager_assisted_now", "historical_correction", "approved_regularization", "system"] }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+    employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    actor_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    event_type: "check_in",
+    occurred_at: "2026-05-04T03:40:12.123Z",
+    work_mode: "office",
+    source: "web_geo",
+    origin: "employee_manual_now"
+  }
+};
+
+const attendancePunchCommandResponseSchema = {
+  type: "object",
+  required: ["allowed", "command_id", "decision_id", "punch_id", "punch", "day_status", "next_allowed_actions", "geo_policy"],
+  properties: {
+    allowed: { type: "boolean", example: true },
+    command_id: uuid("Attendance command execution UUID"),
+    decision_id: uuid("Attendance command decision UUID"),
+    session_id: { ...uuid("Attendance session UUID"), nullable: true },
+    punch_id: uuid("Attendance punch UUID"),
+    punch: attendancePunchSchema,
+    day_status: { type: "object", additionalProperties: true },
+    next_allowed_actions: {
+      type: "array",
+      items: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"] },
+      example: ["break_start", "check_out"]
+    },
+    next_allowed_action: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], nullable: true, example: "break_start" },
+    punch_policy: { type: "object", additionalProperties: true },
+    geo_policy: attendanceGeoPolicySnapshotSchema
+  },
+  additionalProperties: true,
+  example: {
+    allowed: true,
+    command_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9200",
+    decision_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9202",
+    session_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9203",
+    punch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+    punch: {
+      id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9201",
+      employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+      actor_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+      event_type: "check_in",
+      occurred_at: "2026-05-04T03:40:12.123Z",
+      work_mode: "office",
+      source: "web_geo",
+      origin: "employee_manual_now"
+    },
+    day_status: {
+      work_date: "2026-05-04",
+      presence_state: "present"
+    },
+    next_allowed_actions: ["break_start", "check_out"],
+    next_allowed_action: "break_start",
+    geo_policy: attendanceGeoPolicySnapshotSchema.example
+  }
 };
 
 const attendanceDaySchema = {
   type: "object",
-  required: ["id", "employee_user_id", "work_date", "status", "work_minutes", "version"],
+  required: [
+    "id", "employee_user_id", "work_date", "status", "day_classification",
+    "presence_state", "punctuality_state", "evidence_state", "approval_kind",
+    "approval_state", "payroll_state", "work_seconds", "break_seconds",
+    "scheduled_seconds", "late_seconds", "early_departure_seconds",
+    "work_minutes", "version"
+  ],
   properties: {
     id: uuid("Attendance day UUID"),
     employee_user_id: uuid("Employee user UUID"),
     work_date: date("Work date"),
-    status: { type: "string", enum: ["present", "late", "absent", "wfh", "leave", "weekend", "holiday", "future"], example: "present" },
+    status: { type: "string", enum: ["present", "late", "absent", "wfh", "leave", "weekend", "holiday", "future"], description: "Legacy compatibility status derived from the canonical attendance dimensions.", example: "present" },
+    day_classification: { type: "string", enum: ["working_day", "weekend", "holiday", "leave", "wfh", "future", "unknown"], example: "working_day" },
+    presence_state: { type: "string", enum: ["not_started", "present", "partial", "incomplete", "absent", "not_applicable", "unknown"], example: "present" },
+    punctuality_state: { type: "string", enum: ["on_time", "late", "early_departure", "late_and_early_departure", "not_applicable", "unknown"], example: "on_time" },
+    evidence_state: { type: "string", enum: ["complete", "partial", "missing", "disputed", "not_applicable", "unknown"], example: "complete" },
+    approval_kind: { type: "string", enum: ["none", "regularization", "leave", "wfh", "multiple"], example: "none" },
+    approval_state: { type: "string", enum: ["not_required", "pending", "approved", "returned", "rejected", "mixed", "unknown"], example: "not_required" },
+    payroll_state: { type: "string", enum: ["unprocessed", "not_applicable", "unknown"], description: "Neutral attendance-to-payroll projection state; no payability decision is implied.", example: "unprocessed" },
     first_check_in: { ...dateTime("First check-in"), nullable: true },
     last_check_out: { ...dateTime("Last check-out"), nullable: true },
     in_time: { type: "string", nullable: true, example: "09:10" },
     out_time: { type: "string", nullable: true, example: "18:20" },
     hours: { type: "string", example: "9h 10m" },
     target_hours: { type: "string", example: "8h 00m" },
-    work_minutes: { type: "integer", minimum: 0, example: 550 },
+    work_seconds: { type: "integer", minimum: 0, description: "Canonical worked duration in whole seconds.", example: 33000 },
+    break_seconds: { type: "integer", minimum: 0, description: "Canonical break duration in whole seconds.", example: 1800 },
+    scheduled_seconds: { type: "integer", minimum: 0, description: "Effective shift duration in whole seconds.", example: 28800 },
+    late_seconds: { type: "integer", minimum: 0, description: "Late-arrival duration in whole seconds.", example: 0 },
+    early_departure_seconds: { type: "integer", minimum: 0, description: "Early-departure duration in whole seconds.", example: 0 },
+    work_minutes: { type: "integer", minimum: 0, description: "Legacy compatibility duration in whole minutes, derived by flooring work_seconds / 60.", example: 550 },
     target_work_minutes: { type: "integer", minimum: 0, example: 480 },
-    break_minutes: { type: "integer", minimum: 0, example: 30 },
-    late_minutes: { type: "integer", minimum: 0, example: 0 },
-    early_out_minutes: { type: "integer", minimum: 0, example: 0 },
+    break_minutes: { type: "integer", minimum: 0, description: "Legacy compatibility duration in whole minutes.", example: 30 },
+    late_minutes: { type: "integer", minimum: 0, description: "Legacy compatibility duration in whole minutes.", example: 0 },
+    early_out_minutes: { type: "integer", minimum: 0, description: "Legacy compatibility duration in whole minutes.", example: 0 },
     exception_type: { type: "string", nullable: true, example: "late" },
     regularization_status: { type: "string", nullable: true, example: "pending" },
     detail: { type: "string", example: "9h 10m" },
@@ -2214,22 +2765,81 @@ const attendanceDailyCalendarSchema = {
 const attendanceRegularizationCreateBody = {
   type: "object",
   required: ["work_date", "reason"],
+  oneOf: [
+    { required: ["items"], not: { required: ["requested_punches"] } },
+    { required: ["requested_punches"], not: { required: ["items"] } }
+  ],
   properties: {
     work_date: date("Regularization work date"),
     reason: { type: "string", minLength: 3, maxLength: 1000, example: "Forgot to punch out." },
     requested_punches: {
       type: "array",
+      deprecated: true,
+      description: "Deprecated compatibility input. Each entry is normalized to an ADD item; use items for new clients.",
+      minItems: 1,
+      maxItems: 20,
       items: {
         type: "object",
         required: ["event_type", "occurred_at"],
         properties: {
-          event_type: { type: "string", enum: ["check_in", "break_start", "break_end", "check_out"], example: "check_out" },
+          event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), example: "check_out" },
           occurred_at: dateTime("Requested punch timestamp")
-        }
+        },
+        additionalProperties: false
+      }
+    },
+    items: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: {
+        oneOf: [
+          {
+            type: "object",
+            required: ["operation", "event_type", "occurred_at"],
+            properties: {
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Add] },
+              event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues) },
+              occurred_at: dateTime("Requested punch timestamp")
+            },
+            additionalProperties: false
+          },
+          {
+            type: "object",
+            required: ["operation", "target_punch_event_id", "event_type", "occurred_at"],
+            properties: {
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Replace] },
+              target_punch_event_id: uuid("Target punch event UUID"),
+              event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues) },
+              occurred_at: dateTime("Replacement punch timestamp")
+            },
+            additionalProperties: false
+          },
+          {
+            type: "object",
+            required: ["operation", "target_punch_event_id"],
+            properties: {
+              operation: { type: "string", enum: [AttendanceRegularizationOperations.Void] },
+              target_punch_event_id: uuid("Target punch event UUID")
+            },
+            additionalProperties: false
+          }
+        ]
       }
     }
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    work_date: "2026-05-04",
+    reason: "Forgot to punch out after shift handoff.",
+    items: [
+      {
+        operation: "add",
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ]
+  }
 };
 
 const attendanceRegularizationDecisionBody = {
@@ -2240,24 +2850,318 @@ const attendanceRegularizationDecisionBody = {
     remarks: { type: "string", description: "Required for reject/return decisions.", example: "Approved." },
     expected_version: { type: "integer", minimum: 1, example: 1 }
   },
-  additionalProperties: false
+  additionalProperties: false,
+  example: {
+    decision: "approve",
+    remarks: "Access log confirms the requested punch.",
+    expected_version: 1
+  }
 };
 
 const attendanceRegularizationSchema = {
   type: "object",
-  required: ["id", "employee_user_id", "work_date", "reason", "status", "version"],
+  required: ["id", "employee_user_id", "submitted_by_user_id", "work_date", "reason", "items", "requested_punches", "status", "version"],
   properties: {
     id: uuid("Regularization request UUID"),
     employee_user_id: uuid("Employee user UUID"),
+    submitted_by_user_id: uuid("Submitting actor user UUID"),
     work_date: date("Work date"),
     reason: { type: "string", example: "Forgot to punch out." },
-    requested_punches: { type: "array", items: { type: "object", additionalProperties: true } },
-    status: { type: "string", enum: ["pending", "approved", "returned", "rejected"], example: "pending" },
+    requested_punches: {
+      type: "array",
+      deprecated: true,
+      description: "Deprecated compatibility representation derived from normalized items. Includes ADD and REPLACE values and cannot represent VOID operations.",
+      items: { type: "object", additionalProperties: true }
+    },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "ordinal", "operation", "target_punch_event_id", "event_type", "occurred_at"],
+        properties: {
+          id: uuid("Regularization request item UUID"),
+          ordinal: { type: "integer", minimum: 0 },
+          operation: { type: "string", enum: Object.values(AttendanceRegularizationOperations) },
+          target_punch_event_id: { ...uuid("Target punch event UUID"), nullable: true },
+          event_type: { type: "string", enum: enumValues(AttendanceHistoricalCorrectionEventTypeValues), nullable: true },
+          occurred_at: { ...dateTime("Requested punch timestamp"), nullable: true }
+        },
+        additionalProperties: true
+      }
+    },
+    status: { type: "string", enum: Object.values(AttendanceRegularizationStatuses), example: "pending" },
     current_approver_user_id: { ...uuid("Current approver user UUID"), nullable: true },
     decision_remarks: { type: "string", nullable: true },
     version: { type: "integer", minimum: 1, example: 1 }
   },
-  additionalProperties: true
+  additionalProperties: true,
+  example: {
+    id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9401",
+    employee_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    submitted_by_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9003",
+    work_date: "2026-05-04",
+    reason: "Forgot to punch out after shift handoff.",
+    requested_punches: [
+      {
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ],
+    items: [
+      {
+        id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9402",
+        ordinal: 0,
+        operation: "add",
+        target_punch_event_id: null,
+        event_type: "check_out",
+        occurred_at: "2026-05-04T18:20:00.000+05:30"
+      }
+    ],
+    status: "pending",
+    current_approver_user_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9004",
+    decision_remarks: null,
+    version: 1
+  }
+};
+
+const attendanceGeofenceCircleShapeSchema = {
+  type: "object",
+  required: ["shape_type", "center", "radius_meters"],
+  properties: {
+    shape_type: { type: "string", enum: ["circle"], example: "circle" },
+    center: {
+      type: "object",
+      required: ["latitude", "longitude"],
+      properties: {
+        latitude: { type: "number", minimum: -90, maximum: 90, example: 12.971599 },
+        longitude: { type: "number", minimum: -180, maximum: 180, example: 77.594566 }
+      },
+      additionalProperties: false
+    },
+    radius_meters: { type: "number", minimum: 0, exclusiveMinimum: true, example: 100 }
+  },
+  additionalProperties: false,
+  example: {
+    shape_type: "circle",
+    center: {
+      latitude: 12.971599,
+      longitude: 77.594566
+    },
+    radius_meters: 100
+  }
+};
+
+const attendanceGeofencePolygonShapeSchema = {
+  type: "object",
+  required: ["shape_type", "rings"],
+  properties: {
+    shape_type: { type: "string", enum: ["polygon"], example: "polygon" },
+    rings: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "array",
+        minItems: 4,
+        items: {
+          type: "object",
+          required: ["latitude", "longitude"],
+          properties: {
+            latitude: { type: "number", minimum: -90, maximum: 90 },
+            longitude: { type: "number", minimum: -180, maximum: 180 }
+          },
+          additionalProperties: false
+        }
+      }
+    }
+  },
+  additionalProperties: false,
+  example: {
+    shape_type: "polygon",
+    rings: [
+      [
+        { latitude: 12.9711, longitude: 77.5939 },
+        { latitude: 12.9721, longitude: 77.5939 },
+        { latitude: 12.9721, longitude: 77.5952 },
+        { latitude: 12.9711, longitude: 77.5952 },
+        { latitude: 12.9711, longitude: 77.5939 }
+      ]
+    ]
+  }
+};
+
+const attendanceOfflineEventEnvelopeSchema = {
+  type: "object",
+  required: ["client_event_id", "sequence", "command_kind", "captured_at", "source", "event_type"],
+  properties: {
+    client_event_id: attendanceClientEventIdSchema,
+    sequence: { type: "integer", minimum: 1, example: 7 },
+    command_kind: { type: "string", enum: ["employee_manual_now"], example: "employee_manual_now" },
+    captured_at: dateTime("Client capture timestamp with offset. Server time remains authoritative for command execution."),
+    source: { type: "string", enum: ["mobile_offline"], default: "mobile_offline", example: "mobile_offline" },
+    event_type: { type: "string", enum: Object.values(AttendancePunchEventTypes), example: "check_in" },
+    work_mode: { type: "string", enum: ["office", "remote", "wfh", "field"], default: "office", example: "office" },
+    metadata: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        app_session_id: { type: "string", minLength: 1, maxLength: 128 },
+        app_state: { type: "string", enum: ["foreground", "background", "terminated", "unknown"] },
+        capture_method: { type: "string", enum: ["user_action", "system_retry"] },
+        client_timezone: { type: "string", minLength: 1, maxLength: 80, example: "Asia/Kolkata" },
+        network_state: { type: "string", enum: ["offline", "online", "unknown"] },
+        offline_reason: { type: "string", enum: ["network_unavailable", "app_backgrounded", "manual_retry", "unknown"] },
+        note: { type: "string", maxLength: 280 }
+      }
+    },
+    location: attendanceLocationEvidenceSchema
+  },
+  additionalProperties: false,
+  example: {
+    client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+    sequence: 7,
+    command_kind: "employee_manual_now",
+    captured_at: "2026-05-04T09:10:00.000+05:30",
+    source: "mobile_offline",
+    event_type: "check_in",
+    work_mode: "office",
+    metadata: {
+      app_state: "foreground",
+      capture_method: "user_action",
+      client_timezone: "Asia/Kolkata",
+      network_state: "offline",
+      offline_reason: "network_unavailable"
+    },
+    location: {
+      latitude: 12.971599,
+      longitude: 77.594566,
+      accuracy_meters: 12.5,
+      captured_at: "2026-05-04T03:40:00.000Z",
+      provider: "device",
+      permission_state: "granted"
+    }
+  }
+};
+
+const attendanceOfflineBatchEnvelopeSchema = {
+  type: "object",
+  required: ["contract_version", "batch_id", "device", "events"],
+  properties: {
+    contract_version: { type: "string", enum: [AttendanceOfflineSyncContractVersion], example: AttendanceOfflineSyncContractVersion },
+    batch_id: uuid("Offline sync batch UUID"),
+    device: attendanceCommandDeviceBody,
+    events: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: attendanceOfflineEventEnvelopeSchema
+    }
+  },
+  additionalProperties: false,
+  example: {
+    contract_version: AttendanceOfflineSyncContractVersion,
+    batch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+    device: {
+      device_id: "ios-device-001",
+      platform: "ios",
+      app_version: "2026.08.03",
+      os_version: "iOS 18.5"
+    },
+    events: [attendanceOfflineEventEnvelopeSchema.example]
+  }
+};
+
+const attendanceOfflineSyncResultSchema = {
+  type: "object",
+  required: [
+    "client_event_id",
+    "sequence",
+    "sync_status",
+    "verification_status",
+    "replayed",
+    "server_received_at",
+    "payroll_eligible"
+  ],
+  properties: {
+    client_event_id: attendanceClientEventIdSchema,
+    sequence: { type: "integer", minimum: 1, example: 7 },
+    sync_status: { type: "string", enum: enumValues(AttendanceOfflineSyncStatusValues), example: "accepted" },
+    verification_status: { type: "string", enum: enumValues(AttendanceOfflineVerificationStatusValues), example: "unverified" },
+    replayed: { type: "boolean", example: false },
+    reason_code: { type: "string", enum: enumValues(AttendanceOfflineSyncReasonCodeValues), nullable: true },
+    server_received_at: dateTime("Server receipt timestamp"),
+    processed_at: { ...dateTime("Server processing timestamp"), nullable: true },
+    payroll_eligible: { type: "boolean", enum: [false], description: "Offline results do not imply payroll eligibility.", example: false }
+  },
+  additionalProperties: false,
+  examples: [
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+      sequence: 7,
+      sync_status: "accepted",
+      verification_status: "unverified",
+      replayed: false,
+      reason_code: "offline_sync.accepted_unverified",
+      server_received_at: "2026-05-04T03:45:00.000Z",
+      processed_at: "2026-05-04T03:45:01.000Z",
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e797",
+      sequence: 7,
+      sync_status: "replayed",
+      verification_status: "unverified",
+      replayed: true,
+      reason_code: "offline_sync.replayed",
+      server_received_at: "2026-05-04T03:46:00.000Z",
+      processed_at: "2026-05-04T03:46:00.000Z",
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e798",
+      sequence: 8,
+      sync_status: "deferred",
+      verification_status: "review_required",
+      replayed: false,
+      reason_code: "offline_sync.processing_deferred",
+      server_received_at: "2026-05-04T03:47:00.000Z",
+      processed_at: null,
+      payroll_eligible: false
+    },
+    {
+      client_event_id: "019fc5b7-0811-7a33-ae47-46a559f9e799",
+      sequence: 9,
+      sync_status: "rejected",
+      verification_status: "rejected",
+      replayed: false,
+      reason_code: "offline_sync.validation_failed",
+      server_received_at: "2026-05-04T03:48:00.000Z",
+      processed_at: "2026-05-04T03:48:00.000Z",
+      payroll_eligible: false
+    }
+  ]
+};
+
+const attendanceOfflineSyncResponseSchema = {
+  type: "object",
+  required: ["contract_version", "batch_id", "server_received_at", "results"],
+  properties: {
+    contract_version: { type: "string", enum: [AttendanceOfflineSyncContractVersion], example: AttendanceOfflineSyncContractVersion },
+    batch_id: uuid("Offline sync batch UUID"),
+    server_received_at: dateTime("Server receipt timestamp"),
+    results: {
+      type: "array",
+      minItems: 1,
+      maxItems: 50,
+      items: attendanceOfflineSyncResultSchema
+    }
+  },
+  additionalProperties: false,
+  example: {
+    contract_version: AttendanceOfflineSyncContractVersion,
+    batch_id: "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+    server_received_at: "2026-05-04T03:45:00.000Z",
+    results: attendanceOfflineSyncResultSchema.examples
+  }
 };
 const attendanceExportBody = {
   type: "object",
@@ -4157,6 +5061,9 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/auth/logout": operation("Auth & Sessions", "Logout", "Revokes the current Valkey-backed session when a valid cookie is present and always clears the browser session cookie. Safe to call when no session is present.", { response200: statusResponseSchema }, false),
   "GET /api/v1/auth/me": operation("Auth & Sessions", "Current session", "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults.", { response200: authSessionContextSchema }),
 
+  "POST /api/v1/platform/devices": operation("Platform / Devices", "Register mobile device", "Registers the authenticated user's mobile app installation in the active company using a tenant-scoped lowercase SHA-256 installation hash. The server derives company and owner from the authenticated active-company context. First registration creates the device and emits platform.device.registered transactionally with HTTP 201; same-owner retries for an already registered device return the existing device with HTTP 200 and do not emit another event. Cross-owner claims and suspended or revoked devices return 409.", { body: platformDeviceRegistrationBodySchema, response200: platformRegisteredDeviceSchema, response: { 201: success(platformRegisteredDeviceSchema, "Device registered.") } }),
+  "GET /api/v1/platform/devices": operation("Platform / Devices", "List my mobile devices", "Lists registered, suspended, and revoked mobile devices owned by the authenticated actor in the active company. The backend scopes by both company_id and user_id derived from server context.", { response200: platformRegisteredDeviceListSchema }),
+
   "GET /api/v1/core/master-data/org-selectors": operation("Core / Employees & Hierarchy", "Org selectors", "Returns active departments, designations, manager candidates, and backend role labels used by employee create/edit forms. The list is scoped by the authenticated actor where manager visibility is restricted.", { response200: orgSelectorsResponseSchema }),
   "GET /api/v1/core/users": operation("Core / Employees & Hierarchy", "List users", "Paginated employee/user search for authorized modules and admins. Supports frontend table filters, manager scoping, login-state filters, sorting, compact org references, and summary counts.", { querystring: { ...paginationQuerySchema, properties: { ...paginationQuerySchema.properties, q: { type: "string", description: "Optional employee code/name/email search.", example: "E1" }, department_id: uuid("Filter by department UUID"), designation_id: uuid("Filter by designation UUID"), role: { type: "string", description: "Filter by assigned role label.", example: "Employee" }, employment_status: { type: "string", enum: ["active", "inactive", "terminated", "suspended"], example: "active" }, manager_user_id: uuid("Filter by direct manager UUID"), login_state: { type: "string", enum: ["enabled", "disabled", "setup_pending"], example: "enabled" } } }, response200: coreUserListResponseSchema }),
   "POST /api/v1/core/users": operation("Core / Employees & Hierarchy", "Create user", "Creates a Core employee profile with department, designation, reporting manager, roles, lifecycle status, and optional password setup action. The API never creates a shared/default production password; login enablement queues password setup.", { body: coreUserCreateBodySchema, response200: coreUserMutationResponseSchema }),
@@ -4225,9 +5132,56 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/notifications/read-all": operation("Notifications", "Mark all notifications read", "Marks all visible unread notifications as read, optionally scoped by type/category or timestamp.", { body: notificationReadAllBody, response200: notificationReadAllResponse }),
   "POST /api/v1/attendance/punches": operation(
     "Attendance",
-    "Record punch",
-    "Records a check-in, break, resume, or check-out punch for the authenticated employee. Duplicate or out-of-sequence punches return 409 with next allowed actions.",
-    { body: attendancePunchBody, response200: { type: "object", additionalProperties: true } }
+    "Record employee manual-now punch",
+    "Records a current punch for the authenticated employee only using the mobile-ready attendance command envelope. The server controls occurrence time; actor, subject, employee ID, company ID, and historical timestamps are not accepted. The body client_event_id must equal the Idempotency-Key header. source=web_geo accepts exactly one browser location result captured at employee action time: coordinates, permission denied, or location unavailable. The server applies geo policy and geofence evaluation; clients must not submit trusted geo decisions, and no continuous or background browser tracking is part of this API. Same-key/same-body retries replay the original business result and emit Idempotency-Replayed: true. Offline retries after the 24-hour platform idempotency window use durable client_event_id command replay and do not create another command, attendance event, location evidence, decision, session mutation, punch, or outbox event. Same UUID with a different command payload returns 409 WORKFLOW_CONFLICT and is a terminal synchronization conflict. Clients must retry network interruptions, timeouts, HTTP 408, HTTP 429 respecting Retry-After, and temporary 5xx with the same UUID and canonical payload; successful responses, replayed responses, persisted business denials, validation failures, workflow/idempotency conflicts, and client-event reuse conflicts are terminal. Replayed responses use the current x-request-id, not the original request ID. Examples: first execution sends a new Idempotency-Key matching client_event_id and receives no Idempotency-Replayed header; immediate identical retry sends the same UUID/payload and receives Idempotency-Replayed: true; offline retry after 24 hours sends the same UUID/payload and receives durable command replay with Idempotency-Replayed: true; different payload for the same UUID receives 409 WORKFLOW_CONFLICT; persisted business-denial replay preserves the denial status and reason with current x-request-id plus Idempotency-Replayed: true.",
+    {
+      headers: idempotencyKeyHeaderObject,
+      body: attendancePunchBody,
+      response200: attendancePunchCommandResponseSchema,
+      response: {
+        200: {
+          ...success(attendancePunchCommandResponseSchema),
+          headers: replayResponseHeaders
+        },
+        409: {
+          description: "Attendance command denied, conflicted, or idempotency-key/body mismatch. Geo denials include details.reason_code, details.geo_policy, and details.next_allowed_actions when applicable.",
+          headers: replayResponseHeaders,
+          content: { "application/json": { schema: attendanceBusinessErrorResponseSchema } }
+        }
+      }
+    }
+  ),
+  "POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches": operation(
+    "Attendance",
+    "Record manager-assisted current punch",
+    "Records a current punch for the explicit employee subject. The authenticated manager, HR, or Admin is the actor; the server controls occurrence time and no historical timestamp is accepted.",
+    {
+      params: attendanceEmployeeParamSchema,
+      headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
+      body: attendanceAssistedCurrentPunchBody,
+      response: {
+        200: {
+          ...success({ type: "object", additionalProperties: true }),
+          headers: replayResponseHeaders
+        }
+      }
+    }
+  ),
+  "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections": operation(
+    "Attendance",
+    "Record historical attendance correction",
+    "Creates an append-only, privileged historical attendance fact for the explicit employee subject. HR or Admin is the actor. A past occurrence time, reason, and idempotency key are required; this endpoint cannot create a current punch or mutate the current open-session state.",
+    {
+      params: attendanceEmployeeParamSchema,
+      headers: { type: "object", required: ["idempotency-key"], properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 200 } } },
+      body: attendanceHistoricalCorrectionBody,
+      response: {
+        200: {
+          ...success({ type: "object", additionalProperties: true }),
+          headers: replayResponseHeaders
+        }
+      }
+    }
   ),
   "GET /api/v1/attendance/punches/my": operation(
     "Attendance",
@@ -4282,6 +5236,21 @@ const routeDocs: Record<string, RouteSchema> = {
     "Decide attendance regularization",
     "Approves, returns, or rejects an attendance regularization request with optimistic concurrency. Reject/return require remarks and self-processing is blocked.",
     { params: idParamSchema, body: attendanceRegularizationDecisionBody, response200: { type: "object", additionalProperties: true } }
+  ),
+  "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish": operation(
+    "Attendance",
+    "Publish geofence version",
+    "Publishes an existing draft geofence version for the active company. The server validates the persisted PostGIS shape, computes the geometry-only canonical hash, enforces half-open effective periods, and updates the latest published pointer in one transaction.",
+    {
+      params: attendanceGeofencePublishParamSchema,
+      body: attendanceGeofencePublishBody,
+      response200: {
+        type: "object",
+        required: ["version"],
+        properties: { version: attendanceGeofencePublishedVersionSchema },
+        additionalProperties: true
+      }
+    }
   ),
   "GET /api/v1/attendance/exceptions": operation(
     "Attendance",
@@ -5073,6 +6042,7 @@ const routeDocs: Record<string, RouteSchema> = {
 
 export const openApiTags = [
   { name: "Platform / Health", description: "Liveness, readiness, and OpenAPI contract endpoints." },
+  { name: "Platform / Devices", description: "Authenticated mobile device registration and owner-scoped listing." },
   { name: "Auth & Sessions", description: "Login, logout, and current session context." },
   { name: "Core / Employees & Hierarchy", description: "Core employee identity and ltree hierarchy lookup." },
   { name: "Dashboard", description: "Role-scoped dashboard summaries derived from implemented backend modules." },
@@ -5111,6 +6081,35 @@ export const openApiComponents = {
   schemas: {
     ErrorResponse: errorResponseSchema,
     ConflictResponse: conflictResponseSchema,
+    AttendanceClientEventId: attendanceClientEventIdSchema,
+    AttendanceCommandReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceCommandReasonCodeValues),
+      example: "geo_outside_fence"
+    },
+    AttendanceGeoReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceGeoDecisionReasonCodeValues),
+      example: "geo_inside_fence"
+    },
+    AttendanceOfflineSyncReasonCode: {
+      type: "string",
+      enum: enumValues(AttendanceOfflineSyncReasonCodeValues),
+      example: "offline_sync.accepted_unverified"
+    },
+    AttendanceLocationEvidenceInput: attendanceLocationEvidenceSchema,
+    AttendanceGeoEvaluation: attendanceGeoPolicySnapshotSchema.properties.evaluation,
+    AttendanceDecision: attendancePunchCommandResponseSchema,
+    AttendanceBusinessErrorDetails: attendanceBusinessErrorDetailsSchema,
+    AttendancePunchCommandResponse: attendancePunchCommandResponseSchema,
+    AttendanceRegularizationItem: (attendanceRegularizationCreateBody.properties.items as RouteSchema).items,
+    AttendanceGeofenceCircleShape: attendanceGeofenceCircleShapeSchema,
+    AttendanceGeofencePolygonShape: attendanceGeofencePolygonShapeSchema,
+    AttendanceGeofencePublishedVersion: attendanceGeofencePublishedVersionSchema,
+    AttendanceOfflineEventEnvelope: attendanceOfflineEventEnvelopeSchema,
+    AttendanceOfflineBatchEnvelope: attendanceOfflineBatchEnvelopeSchema,
+    AttendanceOfflineSyncResult: attendanceOfflineSyncResultSchema,
+    AttendanceOfflineSyncResponse: attendanceOfflineSyncResponseSchema,
     RateLimitResponse: rateLimitResponseSchema,
     EmsProfile: emsProfileResponseSchema,
     EmsProfileChangeRequest: emsProfileChangeSchema,
@@ -5119,6 +6118,12 @@ export const openApiComponents = {
     EmsPolicy: emsPolicySchema,
     Project: projectSchema,
     HelpdeskTicket: helpdeskTicketSchema
+  },
+  headers: {
+    IdempotencyReplayed: idempotencyReplayResponseHeader
+  },
+  parameters: {
+    IdempotencyKey: idempotencyKeyParameter
   }
 };
 
@@ -5156,7 +6161,15 @@ export const swaggerTransformObject = ((documentObject: SwaggerTransformObjectIn
         ...openApiComponents.schemas,
         ...openapiObject.components?.schemas
       },
-      securitySchemes: openApiComponents.securitySchemes
+      securitySchemes: openApiComponents.securitySchemes,
+      headers: {
+        ...openApiComponents.headers,
+        ...openapiObject.components?.headers
+      },
+      parameters: {
+        ...openApiComponents.parameters,
+        ...openapiObject.components?.parameters
+      }
     }
   } as never;
 }) as NonNullable<FastifyDynamicSwaggerOptions["transformObject"]>;

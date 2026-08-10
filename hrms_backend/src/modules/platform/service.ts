@@ -1,8 +1,9 @@
 import { Roles, type AuthUser, type FinanceGovernanceConfig, type UUID } from "#shared";
 import type { MemoryDataStore } from "../../platform/data-store.js";
 import { badRequest, notFound } from "../../platform/errors.js";
+import { resolveActiveCompanyMembershipContext } from "../../platform/company-membership-context.js";
 import { CoreService } from "../core/service.js";
-import { PlatformRepository } from "./repository.js";
+import { PlatformRepository, type RegisteredDeviceReadModel } from "./repository.js";
 import { assertCanReadFinanceGovernance, assertCanWriteFinanceGovernance } from "./policy.js";
 
 export interface FinanceGovernanceReadModel {
@@ -29,6 +30,40 @@ export class PlatformService {
   getFinanceGovernance(actor: AuthUser): FinanceGovernanceReadModel {
     assertCanReadFinanceGovernance(actor);
     return this.presentFinanceGovernance(this.repository.getFinanceGovernanceConfig());
+  }
+
+  async registerDevice(
+    actor: AuthUser,
+    input: {
+      installation_id_hash: string;
+      platform: "ios" | "android";
+    }
+  ): Promise<{ device: RegisteredDeviceReadModel; created: boolean }> {
+    const context = resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      operation: "platform.devices.register",
+      requireActiveEmployment: true
+    });
+    return this.repository.registerDevice({
+      companyId: context.companyId,
+      userId: context.userId,
+      installationIdHash: input.installation_id_hash,
+      platform: input.platform
+    });
+  }
+
+  async listDevices(actor: AuthUser): Promise<{ items: RegisteredDeviceReadModel[] }> {
+    const context = resolveActiveCompanyMembershipContext(this.store, {
+      userId: actor.id,
+      operation: "platform.devices.list",
+      requireActiveEmployment: true
+    });
+    return {
+      items: await this.repository.listDevices({
+        companyId: context.companyId,
+        userId: context.userId
+      })
+    };
   }
 
   updateFinanceGovernance(
