@@ -283,6 +283,42 @@ export const registeredDevices = platform.table(
   ]
 );
 
+export const registeredDeviceKeyVersions = platform.table(
+  "registered_device_key_versions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    registeredDeviceId: uuid("registered_device_id").notNull(),
+    keyVersion: integer("key_version").notNull(),
+    algorithm: text("algorithm").notNull(),
+    publicKeyFormat: text("public_key_format").notNull(),
+    publicKeyMaterial: text("public_key_material").notNull(),
+    publicKeyFingerprintSha256: text("public_key_fingerprint_sha256").notNull(),
+    status: text("status").notNull().default("active"),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull().defaultNow(),
+    effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    unique("platform_registered_device_key_versions_device_version_uq")
+      .on(table.companyId, table.registeredDeviceId, table.keyVersion),
+    unique("platform_registered_device_key_versions_device_fingerprint_uq")
+      .on(table.companyId, table.registeredDeviceId, table.publicKeyFingerprintSha256),
+    index("platform_registered_device_key_versions_lookup_idx")
+      .on(table.companyId, table.registeredDeviceId, table.status, table.keyVersion.desc()),
+    check("platform_registered_device_key_versions_key_version_check", sql`${table.keyVersion} > 0`),
+    check("platform_registered_device_key_versions_algorithm_check", sql`btrim(${table.algorithm}) <> ''`),
+    check("platform_registered_device_key_versions_public_key_format_check", sql`btrim(${table.publicKeyFormat}) <> ''`),
+    check("platform_device_key_versions_public_key_material_check", sql`btrim(${table.publicKeyMaterial}) <> ''`),
+    check("platform_registered_device_key_versions_fingerprint_check", sql`${table.publicKeyFingerprintSha256} ~ '^[0-9a-f]{64}$'`),
+    check("platform_registered_device_key_versions_status_check", sql`${table.status} IN ('active', 'retired', 'revoked')`),
+    check("platform_device_key_versions_effective_interval_check", sql`${table.effectiveUntil} IS NULL OR ${table.effectiveUntil} >= ${table.effectiveFrom}`),
+    check("platform_registered_device_key_versions_updated_at_check", sql`${table.updatedAt} >= ${table.createdAt}`)
+  ]
+);
+
 export const userCredentials = platform.table(
   "user_credentials",
   {
@@ -2538,6 +2574,7 @@ export const schema = {
   companyProfiles,
   userSessionPreferences,
   registeredDevices,
+  registeredDeviceKeyVersions,
   userCredentials,
   idempotencyKeys,
   outboxEvents,
