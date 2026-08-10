@@ -43,6 +43,12 @@ What these commands do:
 | `pnpm release:seed` | Seeds representative release/demo data. |
 | `pnpm dev` | Runs `tsx scripts/run-with-env.ts .env.local -- tsx src/server.ts`. |
 
+The local, QA, and production Compose files use `postgis/postgis:16-3.5-alpine` so PostgreSQL has the PostGIS and
+`btree_gist` extension binaries required by GEO-S12-001. Existing local Docker volumes are not reinitialized by an image
+tag change. Keep the existing volume, run the migrations, and verify the extensions in that database. Only reset a
+disposable local volume after backing up anything valuable; never delete or recreate shared, hosted, QA, or production
+database storage to roll this out.
+
 Backend local URLs:
 
 | Endpoint | URL |
