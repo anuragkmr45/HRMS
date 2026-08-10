@@ -33,9 +33,33 @@ Success response includes:
 }
 ```
 
-The API also sets the configured HttpOnly session cookie. Local insecure runtimes use `SameSite=Lax`; hosted HTTPS runtimes with `COOKIE_SECURE=true` use `SameSite=None; Secure` so browser refresh/session bootstrap works when the frontend and API are on different hosted origins. Swagger and mobile clients should use the returned bearer token for protected calls.
+The API also sets the configured HttpOnly session cookie containing the same session credential as `access_token`. Local insecure runtimes use `SameSite=Lax`; hosted HTTPS runtimes with `COOKIE_SECURE=true` use `SameSite=None; Secure` so browser session bootstrap works when the frontend and API are on different hosted origins. Swagger and mobile clients should use the returned bearer token for protected calls.
 
 Login is rate-limited at 10 attempts per minute per IP by default. A `429 TOO_MANY_REQUESTS` response means the client should wait for `Retry-After` before trying again.
+
+## Native Mobile Authentication
+
+Current implemented behavior:
+
+1. Login over HTTPS with `POST /api/v1/auth/login`.
+2. Read `access_token` from the JSON response.
+3. Ignore `Set-Cookie` for native authentication. Native applications must not emulate or depend on the browser session cookie.
+4. Store the bearer credential only in OS-provided secure credential storage.
+5. Send `Authorization: Bearer <access_token>` to protected APIs.
+6. Handle RBAC, tenant, and active-company API errors exactly like browser/API clients.
+7. On `401` from expiry or server-side revocation, re-authenticate. Refresh is not currently supported.
+8. Send `Authorization: Bearer <access_token>` to `POST /api/v1/auth/logout` so the current server-side session can be revoked.
+9. Delete the credential from device secure storage after logout.
+
+Current limitations:
+
+- There is no separate refresh token and no `/api/v1/auth/refresh` endpoint.
+- `JWT_REFRESH_SECRET` exists in configuration but does not imply a supported refresh API.
+- Clients must not invent or depend on undocumented cookie-based refresh behavior.
+
+Future recommendation:
+
+If refresh-token support is required later, implement it as a separately scoped security feature with explicit issuance, rotation, persistence or replay protection, revocation, and native transport semantics.
 
 ## Current User
 
@@ -49,11 +73,21 @@ Authorization: Bearer <access_token>
 
 Returns the authenticated actor resolved by backend auth middleware.
 
+If both `Authorization: Bearer <access_token>` and the browser session cookie are sent, the explicit bearer credential is selected first. A stale browser cookie does not break a valid bearer request. An invalid explicit bearer credential returns the normal `401` API error and does not fall back to another identity through cookies.
+
 ## Logout
 
 `POST /api/v1/auth/logout`
 
-Logout revokes the Valkey-backed session when the current session cookie is valid and always clears the browser session cookie. This makes logout safe to call from any topbar even if the local cookie is already stale or missing. Bearer-token clients should drop the token client-side after logout.
+Logout revokes the Valkey-backed server-side session when the current session cookie or explicit bearer token is valid and always clears the browser session cookie. This makes logout safe to call from any topbar even if the local cookie is already stale or missing. Bearer-token clients should send the current bearer token to logout, then drop the token client-side after logout.
+
+When both cookie and bearer credentials are present on logout, the explicit bearer credential is used for server-side revocation and the browser cookie is still cleared.
+
+## CSRF Transport Separation
+
+The backend currently has no dedicated CSRF middleware. Browser cookie authentication and native bearer authentication are different credential transport modes. Native bearer requests do not require a browser CSRF token.
+
+If dedicated CSRF protection is introduced later, it must protect unsafe cookie-authenticated browser requests without requiring CSRF credentials for pure bearer-authenticated native requests. Do not weaken browser CSRF protection to support mobile clients.
 
 ## Validation And Auth Errors
 
@@ -94,6 +128,46 @@ Protected route without auth:
 {
   "code": "UNAUTHORIZED",
   "message": "Authentication required",
+  "request_id": "..."
+}
+```
+
+Malformed or expired session/bearer token:
+
+```json
+{
+  "code": "UNAUTHORIZED",
+  "message": "Invalid or expired session",
+  "request_id": "..."
+}
+```
+
+Revoked server-side session:
+
+```json
+{
+  "code": "UNAUTHORIZED",
+  "message": "Session has been revoked",
+  "request_id": "..."
+}
+```
+
+Authenticated but unauthorized:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "Forbidden",
+  "request_id": "..."
+}
+```
+
+Missing active-company context:
+
+```json
+{
+  "code": "COMPANY_CONTEXT_REQUIRED",
+  "message": "Company context is required for this operation.",
   "request_id": "..."
 }
 ```

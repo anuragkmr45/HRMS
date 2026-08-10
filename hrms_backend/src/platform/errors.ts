@@ -18,7 +18,7 @@ export const badRequest = (message: string, details?: unknown) =>
 export const companyContextRequired = (details?: unknown) =>
   new AppError(
     ErrorCodes.CompanyContextRequired,
-    "Company context is required for attendance access.",
+    "Company context is required for this operation.",
     400,
     details,
   );

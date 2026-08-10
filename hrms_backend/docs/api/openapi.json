@@ -6693,7 +6693,7 @@
         "tags": [
           "Auth & Sessions"
         ],
-        "description": "Authenticates the platform using email/password and establishes shared session context for all web zones. Successful login also sets the configured HttpOnly session cookie. A DEV-only `employee_code` fallback remains available for local QA scripts, but the primary consumer contract is email/password.",
+        "description": "Authenticates the platform using email/password and establishes shared session context for all web zones. Successful login returns the current session/access JWT in `access_token` and also sets the configured HttpOnly session cookie with the same session credential for browser transport. Native clients must use the JSON bearer token and must not depend on cookies. No separate refresh token or `/api/v1/auth/refresh` endpoint is currently supported. A DEV-only `employee_code` fallback remains available for local QA scripts, but the primary consumer contract is email/password.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7135,7 +7135,7 @@
         "tags": [
           "Auth & Sessions"
         ],
-        "description": "Revokes the current Valkey-backed session when a valid cookie is present and always clears the browser session cookie. Safe to call when no session is present.",
+        "description": "Revokes the current Valkey-backed session when a valid cookie or explicit bearer token is present and always clears the browser session cookie. Safe to call when no session is present. Native clients should send `Authorization: Bearer <access_token>` to revoke the current server-side session, then remove the credential from OS secure storage.",
         "security": [],
         "responses": {
           "200": {
@@ -7440,7 +7440,7 @@
         "tags": [
           "Auth & Sessions"
         ],
-        "description": "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults.",
+        "description": "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults. When both transports are present, the explicit bearer credential takes precedence over an incidental browser cookie.",
         "security": [
           {
             "sessionCookie": []
@@ -22670,9 +22670,9 @@
               "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
             },
             "in": "path",
-            "name": "id",
+            "name": "deviceId",
             "required": true,
-            "description": "Resource UUID path parameter"
+            "description": "Registered device UUID path parameter"
           }
         ],
         "security": [
@@ -23069,9 +23069,9 @@
               "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
             },
             "in": "path",
-            "name": "id",
+            "name": "deviceId",
             "required": true,
-            "description": "Resource UUID path parameter"
+            "description": "Registered device UUID path parameter"
           }
         ],
         "security": [
@@ -23468,9 +23468,9 @@
               "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
             },
             "in": "path",
-            "name": "id",
+            "name": "deviceId",
             "required": true,
-            "description": "Resource UUID path parameter"
+            "description": "Registered device UUID path parameter"
           }
         ],
         "security": [
@@ -70603,6 +70603,912 @@
                           }
                         }
                       }
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the documented delay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "TOO_MANY_REQUESTS"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Too many requests. Please wait and try again."
+                    },
+                    "details": {
+                      "type": "object",
+                      "required": [
+                        "retry_after_seconds"
+                      ],
+                      "properties": {
+                        "retry_after_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 60
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "TOO_MANY_REQUESTS",
+                  "message": "Too many requests. Please wait and try again.",
+                  "details": {
+                    "retry_after_seconds": 60
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/offline-sync": {
+      "post": {
+        "summary": "Sync offline attendance events",
+        "tags": [
+          "Attendance"
+        ],
+        "description": "Accepts an authenticated mobile offline attendance batch using the Sprint 13 offline sync contract. The server derives company, actor, and employee context, requires a registered mobile device, stores each eligible event provisionally, and returns one sync decision per event. Offline sync does not create punch events, sessions, daily projections, payroll state, or other authoritative live attendance mutations.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "contract_version",
+                  "batch_id",
+                  "device",
+                  "events"
+                ],
+                "properties": {
+                  "contract_version": {
+                    "type": "string",
+                    "enum": [
+                      "attendance.offline_sync.v1"
+                    ],
+                    "example": "attendance.offline_sync.v1"
+                  },
+                  "batch_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Offline sync batch UUID",
+                    "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                  },
+                  "device": {
+                    "type": "object",
+                    "properties": {
+                      "registered_device_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Canonical platform registered device UUID required for personal-mobile attendance sources.",
+                        "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                      },
+                      "device_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "example": "browser-session-device"
+                      },
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "web",
+                          "ios",
+                          "android"
+                        ],
+                        "example": "web"
+                      },
+                      "app_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "example": "2026.08.03"
+                      },
+                      "os_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "example": "Windows 11"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Bounded device envelope. registered_device_id is the canonical platform registry reference required for personal-mobile attendance sources; other device fields are untrusted audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions."
+                  },
+                  "events": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "client_event_id",
+                        "sequence",
+                        "command_kind",
+                        "captured_at",
+                        "source",
+                        "event_type"
+                      ],
+                      "properties": {
+                        "client_event_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+                          "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+                        },
+                        "sequence": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "example": 7
+                        },
+                        "command_kind": {
+                          "type": "string",
+                          "enum": [
+                            "employee_manual_now"
+                          ],
+                          "example": "employee_manual_now"
+                        },
+                        "captured_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Client capture timestamp with offset. Server time remains authoritative for command execution.",
+                          "example": "2026-05-04T10:00:00.000Z"
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "mobile_offline"
+                          ],
+                          "default": "mobile_offline",
+                          "example": "mobile_offline"
+                        },
+                        "event_type": {
+                          "type": "string",
+                          "enum": [
+                            "check_in",
+                            "break_start",
+                            "break_end",
+                            "check_out"
+                          ],
+                          "example": "check_in"
+                        },
+                        "work_mode": {
+                          "type": "string",
+                          "enum": [
+                            "office",
+                            "remote",
+                            "wfh",
+                            "field"
+                          ],
+                          "default": "office",
+                          "example": "office"
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "app_session_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "app_state": {
+                              "type": "string",
+                              "enum": [
+                                "foreground",
+                                "background",
+                                "terminated",
+                                "unknown"
+                              ]
+                            },
+                            "capture_method": {
+                              "type": "string",
+                              "enum": [
+                                "user_action",
+                                "system_retry"
+                              ]
+                            },
+                            "client_timezone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80,
+                              "example": "Asia/Kolkata"
+                            },
+                            "network_state": {
+                              "type": "string",
+                              "enum": [
+                                "offline",
+                                "online",
+                                "unknown"
+                              ]
+                            },
+                            "offline_reason": {
+                              "type": "string",
+                              "enum": [
+                                "network_unavailable",
+                                "app_backgrounded",
+                                "manual_retry",
+                                "unknown"
+                              ]
+                            },
+                            "note": {
+                              "type": "string",
+                              "maxLength": 280
+                            }
+                          }
+                        },
+                        "location": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "required": [
+                                "latitude",
+                                "longitude",
+                                "accuracy_meters",
+                                "captured_at"
+                              ],
+                              "properties": {
+                                "latitude": {
+                                  "type": "number",
+                                  "minimum": -90,
+                                  "maximum": 90,
+                                  "example": 12.971599
+                                },
+                                "longitude": {
+                                  "type": "number",
+                                  "minimum": -180,
+                                  "maximum": 180,
+                                  "example": 77.594566
+                                },
+                                "accuracy_meters": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "example": 12.5
+                                },
+                                "captured_at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "One-shot browser capture timestamp from the employee action.",
+                                  "example": "2026-05-04T10:00:00.000Z"
+                                },
+                                "age_ms": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "example": 30000
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "enum": [
+                                    "browser",
+                                    "device",
+                                    "network",
+                                    "unknown"
+                                  ],
+                                  "example": "browser"
+                                },
+                                "permission_state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "granted",
+                                    "unknown"
+                                  ],
+                                  "default": "unknown",
+                                  "example": "granted"
+                                },
+                                "altitude_meters": {
+                                  "type": "number",
+                                  "example": 920.4
+                                },
+                                "is_mocked": {
+                                  "type": "boolean",
+                                  "example": false
+                                },
+                                "integrity_status": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "example": "browser_reported"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "permission_state"
+                              ],
+                              "properties": {
+                                "captured_at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "Optional one-shot browser failure timestamp.",
+                                  "example": "2026-05-04T10:00:00.000Z"
+                                },
+                                "age_ms": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "example": 30000
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "enum": [
+                                    "browser",
+                                    "device",
+                                    "network",
+                                    "unknown"
+                                  ],
+                                  "example": "browser"
+                                },
+                                "permission_state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "denied",
+                                    "unavailable"
+                                  ],
+                                  "example": "denied"
+                                },
+                                "integrity_status": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "example": "permission_denied"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ],
+                          "description": "One-shot location evidence captured at employee action time. Required for source=web_geo. Failure evidence must not include coordinates.",
+                          "example": {
+                            "latitude": 12.971599,
+                            "longitude": 77.594566,
+                            "accuracy_meters": 12.5,
+                            "captured_at": "2026-05-04T03:40:00.000Z",
+                            "provider": "browser",
+                            "permission_state": "granted"
+                          }
+                        }
+                      },
+                      "additionalProperties": false,
+                      "example": {
+                        "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                        "sequence": 7,
+                        "command_kind": "employee_manual_now",
+                        "captured_at": "2026-05-04T09:10:00.000+05:30",
+                        "source": "mobile_offline",
+                        "event_type": "check_in",
+                        "work_mode": "office",
+                        "metadata": {
+                          "app_state": "foreground",
+                          "capture_method": "user_action",
+                          "client_timezone": "Asia/Kolkata",
+                          "network_state": "offline",
+                          "offline_reason": "network_unavailable"
+                        },
+                        "location": {
+                          "latitude": 12.971599,
+                          "longitude": 77.594566,
+                          "accuracy_meters": 12.5,
+                          "captured_at": "2026-05-04T03:40:00.000Z",
+                          "provider": "device",
+                          "permission_state": "granted"
+                        }
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": false,
+                "example": {
+                  "contract_version": "attendance.offline_sync.v1",
+                  "batch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+                  "device": {
+                    "device_id": "ios-device-001",
+                    "platform": "ios",
+                    "app_version": "2026.08.03",
+                    "os_version": "iOS 18.5"
+                  },
+                  "events": [
+                    {
+                      "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                      "sequence": 7,
+                      "command_kind": "employee_manual_now",
+                      "captured_at": "2026-05-04T09:10:00.000+05:30",
+                      "source": "mobile_offline",
+                      "event_type": "check_in",
+                      "work_mode": "office",
+                      "metadata": {
+                        "app_state": "foreground",
+                        "capture_method": "user_action",
+                        "client_timezone": "Asia/Kolkata",
+                        "network_state": "offline",
+                        "offline_reason": "network_unavailable"
+                      },
+                      "location": {
+                        "latitude": 12.971599,
+                        "longitude": 77.594566,
+                        "accuracy_meters": 12.5,
+                        "captured_at": "2026-05-04T03:40:00.000Z",
+                        "provider": "device",
+                        "permission_state": "granted"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "contract_version",
+                    "batch_id",
+                    "server_received_at",
+                    "results"
+                  ],
+                  "properties": {
+                    "contract_version": {
+                      "type": "string",
+                      "enum": [
+                        "attendance.offline_sync.v1"
+                      ],
+                      "example": "attendance.offline_sync.v1"
+                    },
+                    "batch_id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "Offline sync batch UUID",
+                      "example": "018f9f4a-7f9a-7c15-8f25-6f7f96f9f001"
+                    },
+                    "server_received_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Server receipt timestamp",
+                      "example": "2026-05-04T10:00:00.000Z"
+                    },
+                    "results": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 50,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "client_event_id",
+                          "sequence",
+                          "sync_status",
+                          "verification_status",
+                          "replayed",
+                          "server_received_at",
+                          "payroll_eligible"
+                        ],
+                        "properties": {
+                          "client_event_id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Client-generated logical attendance action UUID. For self-service attendance punches this value is required, must equal Idempotency-Key, and must be reused with the exact same payload for HTTP retry, app restart, offline persistence, and later synchronization.",
+                            "example": "019fc5b7-0811-7a33-ae47-46a559f9e797"
+                          },
+                          "sequence": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "example": 7
+                          },
+                          "sync_status": {
+                            "type": "string",
+                            "enum": [
+                              "accepted",
+                              "replayed",
+                              "conflict",
+                              "rejected",
+                              "deferred"
+                            ],
+                            "example": "accepted"
+                          },
+                          "verification_status": {
+                            "type": "string",
+                            "enum": [
+                              "unverified",
+                              "review_required",
+                              "rejected"
+                            ],
+                            "example": "unverified"
+                          },
+                          "replayed": {
+                            "type": "boolean",
+                            "example": false
+                          },
+                          "reason_code": {
+                            "type": "string",
+                            "enum": [
+                              "offline_sync.accepted_unverified",
+                              "offline_sync.replayed",
+                              "offline_sync.changed_body_conflict",
+                              "offline_sync.validation_failed",
+                              "offline_sync.processing_deferred",
+                              "offline_sync.sequence_gap",
+                              "offline_sync.sequence_out_of_order",
+                              "offline_sync.duplicate_sequence",
+                              "offline_sync.review_required"
+                            ],
+                            "nullable": true
+                          },
+                          "server_received_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Server receipt timestamp",
+                            "example": "2026-05-04T10:00:00.000Z"
+                          },
+                          "processed_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Server processing timestamp",
+                            "example": "2026-05-04T10:00:00.000Z",
+                            "nullable": true
+                          },
+                          "payroll_eligible": {
+                            "type": "boolean",
+                            "enum": [
+                              false
+                            ],
+                            "description": "Offline results do not imply payroll eligibility.",
+                            "example": false
+                          }
+                        },
+                        "additionalProperties": false,
+                        "examples": [
+                          {
+                            "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                            "sequence": 7,
+                            "sync_status": "accepted",
+                            "verification_status": "unverified",
+                            "replayed": false,
+                            "reason_code": "offline_sync.accepted_unverified",
+                            "server_received_at": "2026-05-04T03:45:00.000Z",
+                            "processed_at": "2026-05-04T03:45:01.000Z",
+                            "payroll_eligible": false
+                          },
+                          {
+                            "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                            "sequence": 7,
+                            "sync_status": "replayed",
+                            "verification_status": "unverified",
+                            "replayed": true,
+                            "reason_code": "offline_sync.replayed",
+                            "server_received_at": "2026-05-04T03:46:00.000Z",
+                            "processed_at": "2026-05-04T03:46:00.000Z",
+                            "payroll_eligible": false
+                          },
+                          {
+                            "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e798",
+                            "sequence": 8,
+                            "sync_status": "deferred",
+                            "verification_status": "review_required",
+                            "replayed": false,
+                            "reason_code": "offline_sync.processing_deferred",
+                            "server_received_at": "2026-05-04T03:47:00.000Z",
+                            "processed_at": null,
+                            "payroll_eligible": false
+                          },
+                          {
+                            "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e799",
+                            "sequence": 9,
+                            "sync_status": "rejected",
+                            "verification_status": "rejected",
+                            "replayed": false,
+                            "reason_code": "offline_sync.validation_failed",
+                            "server_received_at": "2026-05-04T03:48:00.000Z",
+                            "processed_at": "2026-05-04T03:48:00.000Z",
+                            "payroll_eligible": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": false,
+                  "example": {
+                    "contract_version": "attendance.offline_sync.v1",
+                    "batch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+                    "server_received_at": "2026-05-04T03:45:00.000Z",
+                    "results": [
+                      {
+                        "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                        "sequence": 7,
+                        "sync_status": "accepted",
+                        "verification_status": "unverified",
+                        "replayed": false,
+                        "reason_code": "offline_sync.accepted_unverified",
+                        "server_received_at": "2026-05-04T03:45:00.000Z",
+                        "processed_at": "2026-05-04T03:45:01.000Z",
+                        "payroll_eligible": false
+                      },
+                      {
+                        "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+                        "sequence": 7,
+                        "sync_status": "replayed",
+                        "verification_status": "unverified",
+                        "replayed": true,
+                        "reason_code": "offline_sync.replayed",
+                        "server_received_at": "2026-05-04T03:46:00.000Z",
+                        "processed_at": "2026-05-04T03:46:00.000Z",
+                        "payroll_eligible": false
+                      },
+                      {
+                        "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e798",
+                        "sequence": 8,
+                        "sync_status": "deferred",
+                        "verification_status": "review_required",
+                        "replayed": false,
+                        "reason_code": "offline_sync.processing_deferred",
+                        "server_received_at": "2026-05-04T03:47:00.000Z",
+                        "processed_at": null,
+                        "payroll_eligible": false
+                      },
+                      {
+                        "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e799",
+                        "sequence": 9,
+                        "sync_status": "rejected",
+                        "verification_status": "rejected",
+                        "replayed": false,
+                        "reason_code": "offline_sync.validation_failed",
+                        "server_received_at": "2026-05-04T03:48:00.000Z",
+                        "processed_at": "2026-05-04T03:48:00.000Z",
+                        "payroll_eligible": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or invalid business request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "example": {
+                  "code": "VALIDATION_FAILED",
+                  "message": "Request validation failed",
+                  "details": {
+                    "formErrors": [
+                      "Invalid input: expected object, received undefined"
+                    ],
+                    "fieldErrors": {}
+                  },
+                  "request_id": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated actor is not allowed to perform this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "VALIDATION_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Request validation failed"
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "example": "601fe7b7-6361-463e-ae66-5d972673dd27"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "example": "WORKFLOW_CONFLICT"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "The ticket was modified by another actor. Refresh and retry."
+                    },
+                    "details": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Optional structured error details, including Zod formErrors/fieldErrors for validation failures."
                     },
                     "request_id": {
                       "type": "string",

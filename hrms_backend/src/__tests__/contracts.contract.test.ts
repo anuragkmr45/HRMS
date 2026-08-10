@@ -809,6 +809,308 @@ describe("Auth guard", () => {
         code: "UNAUTHORIZED",
         message: "Invalid or expired session",
       });
+      expect(typeof response.json().request_id).toBe("string");
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("supports /auth/me with bearer-only credentials", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().user).toMatchObject({
+        email: "finance@example.test",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("prefers valid bearer credentials over a stale session cookie", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `bearer ${token}`,
+          cookie: "hrms_session=stale-token",
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().user).toMatchObject({
+        email: "finance@example.test",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("does not fall back to a valid cookie when an explicit bearer credential is invalid", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: "Bearer stale-token",
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Invalid or expired session",
+      });
+      expect(typeof response.json().request_id).toBe("string");
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes bearer-only sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+      expect(logout.headers["set-cookie"]).toBeDefined();
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("continues to revoke browser cookie sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes different valid bearer and cookie sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const bearerLogin = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const cookieLogin = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const bearerToken = bearerLogin.json().access_token as string;
+      const cookieToken = cookieLogin.json().access_token as string;
+
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          cookie: cookieHeader(cookieLogin.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const bearerAfterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+        },
+      });
+      expect(bearerAfterLogout.statusCode).toBe(401);
+      expect(bearerAfterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+
+      const cookieAfterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${cookieToken}`,
+        },
+      });
+      expect(cookieAfterLogout.statusCode).toBe(401);
+      expect(cookieAfterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes a valid cookie session even when logout also receives an invalid bearer", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: "Bearer stale-token",
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
     } finally {
       await localApp.close();
     }

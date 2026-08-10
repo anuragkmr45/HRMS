@@ -6,7 +6,7 @@ OpenAPI title: Hawkaii HRMS API
 
 OpenAPI version: 0.1.0
 
-Documented operations: 254
+Documented operations: 255
 
 Use `openapi.json` for exact schemas and this index for frontend behavior notes.
 
@@ -2392,7 +2392,7 @@ Success body highlights:
 **Path/query parameters**
 | Name | In | Required | Type | Notes |
 |---|---|---:|---|---|
-| `id` | path | yes | string<uuid> | - |
+| `deviceId` | path | yes | string<uuid> | - |
 
 **Request body**
 
@@ -2445,7 +2445,7 @@ Success body highlights:
 **Path/query parameters**
 | Name | In | Required | Type | Notes |
 |---|---|---:|---|---|
-| `id` | path | yes | string<uuid> | - |
+| `deviceId` | path | yes | string<uuid> | - |
 
 **Request body**
 
@@ -2498,7 +2498,7 @@ Success body highlights:
 **Path/query parameters**
 | Name | In | Required | Type | Notes |
 |---|---|---:|---|---|
-| `id` | path | yes | string<uuid> | - |
+| `deviceId` | path | yes | string<uuid> | - |
 
 **Request body**
 
@@ -9489,6 +9489,102 @@ Success body highlights:
 | `next_allowed_action` | string enum("check_in", "break_start", "break_end", "check_out") | optional, nullable | - |
 | `punch_policy` | object | optional | - |
 | `geo_policy` | object | required | - |
+
+**Frontend behavior notes**
+
+- Display backend `message` and retain `request_id` for support.
+- Treat `401` as authentication failure and `403` as real permission denial.
+- Respect `429` and `Retry-After`; never build tight retry loops.
+
+### POST /api/v1/attendance/offline-sync
+
+| Field | Contract |
+|---|---|
+| Purpose | Sync offline attendance events |
+| Frontend use | Sync offline attendance events |
+| Auth | Protected. Send either the HttpOnly session cookie or `Authorization: Bearer <access_token>`. |
+| Roles/scope | Backend RBAC/ABAC decides access. |
+
+**Path/query parameters**
+
+No path or query parameters.
+
+**Request body**
+
+Content type: `application/json`
+
+Required: yes
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `contract_version` | string enum("attendance.offline_sync.v1") | required | - |
+| `batch_id` | string<uuid> | required | Offline sync batch UUID |
+| `device` | object | required | Bounded device envelope. registered_device_id is the canonical platform registry reference required for personal-mobile attendance sources; other device fields are untrusted audit metadata only and do not affect authentication, authorization, tenant resolution, attendance state, geofence, or policy decisions. |
+| `events` | array of object | required | minItems 1 |
+
+
+
+Example:
+
+```json
+{
+  "contract_version": "attendance.offline_sync.v1",
+  "batch_id": "018f9f4a-7f9a-7c15-8f25-6f7f96f9501",
+  "device": {
+    "device_id": "ios-device-001",
+    "platform": "ios",
+    "app_version": "2026.08.03",
+    "os_version": "iOS 18.5"
+  },
+  "events": [
+    {
+      "client_event_id": "019fc5b7-0811-7a33-ae47-46a559f9e797",
+      "sequence": 7,
+      "command_kind": "employee_manual_now",
+      "captured_at": "2026-05-04T09:10:00.000+05:30",
+      "source": "mobile_offline",
+      "event_type": "check_in",
+      "work_mode": "office",
+      "metadata": {
+        "app_state": "foreground",
+        "capture_method": "user_action",
+        "client_timezone": "Asia/Kolkata",
+        "network_state": "offline",
+        "offline_reason": "network_unavailable"
+      },
+      "location": {
+        "latitude": 12.971599,
+        "longitude": 77.594566,
+        "accuracy_meters": 12.5,
+        "captured_at": "2026-05-04T03:40:00.000Z",
+        "provider": "device",
+        "permission_state": "granted"
+      }
+    }
+  ]
+}
+```
+
+**Responses**
+| Status | Meaning |
+|---|---|
+| `200` | Successful response. |
+| `400` | Validation failed or invalid business request. |
+| `401` | Authentication required or invalid session. |
+| `403` | Authenticated actor is not allowed to perform this action. |
+| `404` | Resource not found. |
+| `409` | Optimistic concurrency conflict. |
+| `429` | Rate limit exceeded. Retry after the documented delay. |
+| `500` | Unhandled server error. |
+
+Success body highlights:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `contract_version` | string enum("attendance.offline_sync.v1") | required | - |
+| `batch_id` | string<uuid> | required | Offline sync batch UUID |
+| `server_received_at` | string<date-time> | required | Server receipt timestamp |
+| `results` | array of object | required | minItems 1 |
 
 **Frontend behavior notes**
 

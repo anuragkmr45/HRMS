@@ -8216,7 +8216,7 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/auth/login": operation(
     "Auth & Sessions",
     "Login",
-    "Authenticates the platform using email/password and establishes shared session context for all web zones. Successful login also sets the configured HttpOnly session cookie. A DEV-only `employee_code` fallback remains available for local QA scripts, but the primary consumer contract is email/password.",
+    "Authenticates the platform using email/password and establishes shared session context for all web zones. Successful login returns the current session/access JWT in `access_token` and also sets the configured HttpOnly session cookie with the same session credential for browser transport. Native clients must use the JSON bearer token and must not depend on cookies. No separate refresh token or `/api/v1/auth/refresh` endpoint is currently supported. A DEV-only `employee_code` fallback remains available for local QA scripts, but the primary consumer contract is email/password.",
     {
       body: {
         type: "object",
@@ -8278,14 +8278,14 @@ const routeDocs: Record<string, RouteSchema> = {
   "POST /api/v1/auth/logout": operation(
     "Auth & Sessions",
     "Logout",
-    "Revokes the current Valkey-backed session when a valid cookie is present and always clears the browser session cookie. Safe to call when no session is present.",
+    "Revokes the current Valkey-backed session when a valid cookie or explicit bearer token is present and always clears the browser session cookie. Safe to call when no session is present. Native clients should send `Authorization: Bearer <access_token>` to revoke the current server-side session, then remove the credential from OS secure storage.",
     { response200: statusResponseSchema },
     false,
   ),
   "GET /api/v1/auth/me": operation(
     "Auth & Sessions",
     "Current session",
-    "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults.",
+    "Returns the authenticated actor resolved from bearer token or session cookie, including active role, available roles, permissions, navigation hints, company context, preferences, and low-bandwidth client defaults. When both transports are present, the explicit bearer credential takes precedence over an incidental browser cookie.",
     { response200: authSessionContextSchema },
   ),
 
