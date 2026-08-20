@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryDataStore, seedIds, type MemoryDataStore } from "../../../platform/data-store.js";
+import { MemoryObjectStorage } from "../../../platform/object-storage.js";
 import { Roles } from "#shared";
 import { CoreService } from "../service.js";
 
@@ -51,18 +52,8 @@ describe("core hierarchy", () => {
     const store = createMemoryDataStore();
     const service = new CoreService(store);
     const admin = store.users.find((user) => user.id === seedIds.admin)!;
-    store.userSessionPreferences.push({
-      id: "pref-admin-company-a",
-      user_id: admin.id,
-      active_role: Roles.Admin,
-      company_id: "company-a",
-      landing_page: "/dashboard",
-      locale: "en-IN",
-      timezone: "Asia/Kolkata",
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-      version: 1
-    });
+    addCompanyProfile(store, companyA);
+    assignCompany(store, admin.id, companyA);
 
     const result = service.listUsers(admin, {
       page: 1,
@@ -78,19 +69,9 @@ describe("core hierarchy", () => {
     const store = createMemoryDataStore();
     const service = new CoreService(store);
     const admin = store.users.find((user) => user.id === seedIds.admin)!;
-    const masterData = addCompanyMasterData(store, "company-a");
-    store.userSessionPreferences.push({
-      id: "pref-admin-company-a",
-      user_id: admin.id,
-      active_role: Roles.Admin,
-      company_id: "company-a",
-      landing_page: "/dashboard",
-      locale: "en-IN",
-      timezone: "Asia/Kolkata",
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-      version: 1
-    });
+    addCompanyProfile(store, companyA);
+    const masterData = addCompanyMasterData(store, companyA);
+    assignCompany(store, admin.id, companyA);
 
     const created = service.createUser(admin, {
       employee_code: "NEW1",
@@ -104,7 +85,7 @@ describe("core hierarchy", () => {
 
     expect(created.employee_code).toBe("NEW1");
     expect(store.userSessionPreferences.find((preference) => preference.user_id === created.id)).toMatchObject({
-      company_id: "company-a",
+      company_id: companyA,
       active_role: Roles.Employee
     });
     const result = service.listUsers(admin, {
@@ -119,20 +100,11 @@ describe("core hierarchy", () => {
     const store = createMemoryDataStore();
     const service = new CoreService(store);
     const admin = store.users.find((user) => user.id === seedIds.admin)!;
-    const companyAData = addCompanyMasterData(store, "company-a");
-    const companyBData = addCompanyMasterData(store, "company-b");
-    store.userSessionPreferences.push({
-      id: "pref-admin-company-a",
-      user_id: admin.id,
-      active_role: Roles.Admin,
-      company_id: "company-a",
-      landing_page: "/dashboard",
-      locale: "en-IN",
-      timezone: "Asia/Kolkata",
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-      version: 1
-    });
+    addCompanyProfile(store, companyA);
+    addCompanyProfile(store, companyB);
+    const companyAData = addCompanyMasterData(store, companyA);
+    const companyBData = addCompanyMasterData(store, companyB);
+    assignCompany(store, admin.id, companyA);
 
     expect(() =>
       service.createUser(admin, {
@@ -184,6 +156,13 @@ describe("core hierarchy", () => {
     for (const action of ["patch-status", "deactivate", "disable-login", "remove-admin-role"] as const) {
       const store = createMemoryDataStore();
       const service = new CoreService(store);
+      addCompanyProfile(store, companyA);
+      assignCompany(store, actor.id, companyA);
+      store.userCredentials
+        .filter((credential) => credential.user_id === actor.id)
+        .forEach((credential) => {
+          credential.status = "revoked";
+        });
       const targetAdmin = addCompanyAdmin(store, "last", companyA);
 
       const run = () => {
@@ -221,6 +200,9 @@ describe("core hierarchy", () => {
     const store = createMemoryDataStore();
     const service = new CoreService(store);
     const actor = store.users.find((user) => user.id === seedIds.admin)!;
+    addCompanyProfile(store, companyA);
+    addCompanyProfile(store, companyB);
+    assignCompany(store, actor.id, companyA);
     const targetAdmin = addCompanyAdmin(store, "target", companyA);
     addCompanyAdmin(store, "backup", companyA);
     addCompanyAdmin(store, "other-company", companyB);
@@ -234,9 +216,165 @@ describe("core hierarchy", () => {
     expect(store.userCredentials.find((credential) => credential.user_id === targetAdmin.id)?.status).toBe("revoked");
   });
 
+  it("fails closed for missing or stale active company context on export and import reads", async () => {
+    const store = createMemoryDataStore();
+    const service = new CoreService(store);
+    const admin = store.users.find((user) => user.id === seedIds.admin)!;
+    const documentsBefore = store.documents.length;
+    const outboxBefore = store.outbox.length;
+
+    assignCompany(store, admin.id, null);
+    await expect(service.createExportJob(admin, { format: "csv", filters: {} })).rejects.toThrowError(
+      "Company context is required",
+    );
+    expect(() => service.getImportJob(admin, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toThrowError(
+      "Company context is required",
+    );
+
+    assignCompany(store, admin.id, companyB);
+    await expect(service.createExportJob(admin, { format: "csv", filters: {} })).rejects.toThrowError(
+      "Company context is required",
+    );
+    expect(store.documents).toHaveLength(documentsBefore);
+    expect(store.outbox).toHaveLength(outboxBefore);
+  });
+
+  it("exports only employees visible in the actor active company", async () => {
+    const store = createMemoryDataStore();
+    store.objectStorage = new MemoryObjectStorage();
+    const service = new CoreService(store);
+    const admin = store.users.find((user) => user.id === seedIds.admin)!;
+    const otherCompanyEmployee = store.users.find((user) => user.id === seedIds.employee2)!;
+    const defaultCompanyId = defaultCompany(store);
+    addCompanyProfile(store, companyB);
+    assignCompany(store, otherCompanyEmployee.id, companyB);
+
+    const exportJob = await service.createExportJob(admin, {
+      format: "csv",
+      filters: {},
+      columns: ["employee_code", "full_name"]
+    });
+
+    expect(exportJob.row_count).toBe(
+      store.users.filter((user) => !user.deleted_at && companyForUser(store, user.id) === defaultCompanyId).length,
+    );
+    const document = store.documents.find((candidate) => candidate.id === exportJob.download_document_id);
+    expect(document).toBeTruthy();
+    const object = await store.objectStorage?.getObject(document!.storage_key);
+    const csv = object?.body.toString("utf8") ?? "";
+    expect(csv).toContain("ADM");
+    expect(csv).toContain("E1");
+    expect(csv).not.toContain("E2");
+  });
+
+  it("rejects foreign-company export filters before generating documents", async () => {
+    const store = createMemoryDataStore();
+    const service = new CoreService(store);
+    const admin = store.users.find((user) => user.id === seedIds.admin)!;
+    addCompanyProfile(store, companyB);
+    const foreignData = addCompanyMasterData(store, companyB);
+    const documentsBefore = store.documents.length;
+    const outboxBefore = store.outbox.length;
+
+    await expect(service.createExportJob(admin, {
+      format: "csv",
+      filters: { department_id: foreignData.department.id },
+    })).rejects.toThrowError("Active department not found");
+    await expect(service.createExportJob(admin, {
+      format: "csv",
+      filters: { designation_id: foreignData.designation.id },
+    })).rejects.toThrowError("Active designation not found");
+
+    expect(store.documents).toHaveLength(documentsBefore);
+    expect(store.outbox).toHaveLength(outboxBefore);
+  });
+
+  it("does not enqueue employee export side effects for unauthorized actors", async () => {
+    const store = createMemoryDataStore();
+    const service = new CoreService(store);
+    const manager = store.users.find((user) => user.id === seedIds.manager)!;
+    const documentsBefore = store.documents.length;
+    const outboxBefore = store.outbox.length;
+
+    await expect(service.createExportJob(manager, { format: "csv", filters: {} })).rejects.toThrowError(
+      "Only Admin, HR Manager, and Auditor users can export employee profiles.",
+    );
+    expect(store.documents).toHaveLength(documentsBefore);
+    expect(store.outbox).toHaveLength(outboxBefore);
+  });
+
+  it("scopes employee import jobs by company and requester context", () => {
+    const store = createMemoryDataStore();
+    const service = new CoreService(store);
+    const admin = store.users.find((user) => user.id === seedIds.admin)!;
+    addCompanyProfile(store, companyB);
+    const otherAdmin = addCompanyAdmin(store, "import-b", companyB);
+
+    const job = service.createImportJob(admin, { file_name: "employees.csv", dry_run: true });
+    const event = store.outbox.find(
+      (candidate) => candidate.aggregate_type === "core.user_import" && candidate.aggregate_id === job.job_id,
+    );
+    expect(event?.payload).toMatchObject({
+      company_id: defaultCompany(store),
+      actor_user_id: admin.id,
+    });
+
+    expect(() => service.getImportJob(otherAdmin, job.job_id)).toThrowError("Employee import job not found.");
+    expect(service.getImportJob(admin, job.job_id)).toMatchObject({
+      job_id: job.job_id,
+      status: "queued",
+    });
+  });
+
 });
 
+function defaultCompany(store: MemoryDataStore): string {
+  const companyId = store.companyProfiles[0]?.id;
+  if (!companyId) throw new Error("Default company fixture is unavailable.");
+  return companyId;
+}
+
+function companyForUser(store: MemoryDataStore, userId: string): string | null {
+  return store.userSessionPreferences.find((preference) => preference.user_id === userId)?.company_id ?? null;
+}
+
+function addCompanyProfile(store: MemoryDataStore, companyId: string) {
+  if (store.companyProfiles.some((company) => company.id === companyId)) return;
+  const base = store.companyProfiles[0]!;
+  store.companyProfiles.push({
+    ...base,
+    id: companyId,
+    company_name: `Company ${companyId}`,
+    company_slug: `company-${companyId.slice(0, 8)}`,
+    status: "active",
+    version: 1
+  });
+}
+
+function assignCompany(store: MemoryDataStore, userId: string, companyId: string | null) {
+  const existing = store.userSessionPreferences.find((preference) => preference.user_id === userId);
+  if (existing) {
+    existing.company_id = companyId;
+    existing.updated_at = "2026-01-01T00:00:00.000Z";
+    existing.version += 1;
+    return;
+  }
+  store.userSessionPreferences.push({
+    id: `55555555-5555-4555-8555-${userId.replace(/[^0-9a-f]/giu, "").padStart(12, "0").slice(0, 12)}`,
+    user_id: userId,
+    active_role: Roles.Admin,
+    company_id: companyId,
+    landing_page: "/dashboard",
+    locale: "en-IN",
+    timezone: "Asia/Kolkata",
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    version: 1
+  });
+}
+
 function addCompanyAdmin(store: MemoryDataStore, suffix: string, companyId: string) {
+  addCompanyProfile(store, companyId);
   const base = store.users.find((user) => user.id === seedIds.admin)!;
   const user = {
     ...base,
