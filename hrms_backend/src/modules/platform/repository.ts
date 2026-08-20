@@ -5,6 +5,10 @@ import type { FinanceGovernanceConfig, UUID } from "#shared";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import {
+  setTenantDbContext,
+  withTenantDbTransaction,
+} from "../../platform/tenant-db-context.js";
+import {
   buildDeviceLifecycleEvent,
   buildDeviceRegisteredEvent,
   type PlatformDeviceLifecycleReason,
@@ -51,6 +55,7 @@ export class PlatformRepository {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await setTenantDbContext(client, input.companyId);
       const inserted = await client.query<RegisteredDeviceRow>(
         `INSERT INTO platform.registered_devices (
            company_id, user_id, installation_id_hash, platform
@@ -152,14 +157,19 @@ export class PlatformRepository {
         reason: "postgres_unavailable",
       });
     }
-    const result = await pool.query<RegisteredDeviceRow>(
-      `SELECT id, company_id, user_id, installation_id_hash, platform, status,
-         status_changed_at, created_at, updated_at
-       FROM platform.registered_devices
-       WHERE company_id = $1
-         AND user_id = $2
-       ORDER BY updated_at DESC, id ASC`,
-      [input.companyId, input.userId],
+    const result = await withTenantDbTransaction(
+      pool,
+      input.companyId,
+      (client) =>
+        client.query<RegisteredDeviceRow>(
+          `SELECT id, company_id, user_id, installation_id_hash, platform, status,
+             status_changed_at, created_at, updated_at
+           FROM platform.registered_devices
+           WHERE company_id = $1
+             AND user_id = $2
+           ORDER BY updated_at DESC, id ASC`,
+          [input.companyId, input.userId],
+        ),
     );
     return result.rows.map(presentRegisteredDevice);
   }
@@ -182,6 +192,7 @@ export class PlatformRepository {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await setTenantDbContext(client, input.companyId);
       const existing = await client.query<RegisteredDeviceRow>(
         `SELECT id, company_id, user_id, installation_id_hash, platform, status,
            status_changed_at, created_at, updated_at

@@ -23,6 +23,7 @@ import type {
   AttendanceGeoSafeEvaluation,
   AttendanceGeoSpatialCategory,
 } from "./geo-policy.js";
+import { setTenantDbContext } from "../../platform/tenant-db-context.js";
 
 export const ATTENDANCE_GEO_EVALUATOR_VERSION = "attendance-geo-v2";
 
@@ -444,6 +445,7 @@ export class AttendanceCommandTransactionRepository {
     companyId: UUID;
     registeredDeviceId: UUID;
   }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    await setTenantDbContext(this.client, input.companyId);
     const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
       `SELECT id, company_id, user_id, status,
           offline_sequence_cursor::text AS offline_sequence_cursor
@@ -460,6 +462,7 @@ export class AttendanceCommandTransactionRepository {
     companyId: UUID;
     registeredDeviceId: UUID;
   }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    await setTenantDbContext(this.client, input.companyId);
     const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
       `SELECT id, company_id, user_id, status,
           offline_sequence_cursor::text AS offline_sequence_cursor
@@ -519,6 +522,7 @@ export class AttendanceCommandTransactionRepository {
     registeredDeviceId: UUID;
     sequenceCursor: number;
   }): Promise<void> {
+    await setTenantDbContext(this.client, input.companyId);
     const result = await this.client.query(
       `UPDATE platform.registered_devices
        SET offline_sequence_cursor = $4,
