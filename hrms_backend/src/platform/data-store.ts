@@ -4,6 +4,8 @@ import type {
   AssetRecord,
   AttendanceDayRecord,
   AttendancePunch,
+  AttendanceRegularizationAction,
+  AttendanceRegularizationCorrectionApplication,
   AttendanceRegularizationRequest,
   AuthUser,
   CoreUser,
@@ -47,7 +49,7 @@ import type {
   RbacRoleRecord,
   TimesheetSubmission,
   UUID,
-  WfhRequest
+  WfhRequest,
 } from "#shared";
 import {
   AssetStatuses,
@@ -82,12 +84,21 @@ import {
   AdminWorkflowApproverTypes,
   AdminWorkflowKeys,
   type AdminWorkflowKey,
+  AttendanceCoordinateRetentionDefaults,
   RbacPermissionActions,
-  RbacPermissionGroups
+  RbacPermissionGroups,
 } from "#shared";
-import { MemorySessionStore, getLocalDemoPassword, hashPasswordSync, type SessionStore } from "#auth";
+import {
+  MemorySessionStore,
+  getLocalDemoPassword,
+  hashPasswordSync,
+  type SessionStore,
+} from "#auth";
 import { getReleaseSeedEmails } from "./seed-personas.js";
-import { defaultPdfCompressionOptions, type PdfCompressionOptions } from "./pdf-compression.js";
+import {
+  defaultPdfCompressionOptions,
+  type PdfCompressionOptions,
+} from "./pdf-compression.js";
 import type { EmailDeliveryRecord, EmailEventRecord } from "./email/types.js";
 
 export interface NotificationRecord {
@@ -164,7 +175,11 @@ export interface UserCredentialRecord {
 export interface AuthTokenRecord {
   id: UUID;
   token_hash: string;
-  token_type: "email_verification" | "password_setup" | "password_reset" | "company_bootstrap";
+  token_type:
+    | "email_verification"
+    | "password_setup"
+    | "password_reset"
+    | "company_bootstrap";
   user_id: UUID | null;
   email: string | null;
   company_id: UUID | null;
@@ -254,7 +269,13 @@ export interface AssetRequestRecord {
   priority: "low" | "medium" | "high" | "urgent";
   needed_by: string | null;
   preferred_specs: Record<string, unknown>;
-  status: "pending" | "approved" | "rejected" | "returned" | "fulfilled" | "cancelled";
+  status:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "returned"
+    | "fulfilled"
+    | "cancelled";
   decision_by_user_id: UUID | null;
   decision_at: string | null;
   decision_remarks: string | null;
@@ -281,7 +302,12 @@ export interface AssetAcknowledgementRecord {
 export interface AssetMaintenanceRecord {
   id: UUID;
   asset_id: UUID;
-  maintenance_type: "repair" | "preventive" | "warranty" | "inspection" | "other";
+  maintenance_type:
+    | "repair"
+    | "preventive"
+    | "warranty"
+    | "inspection"
+    | "other";
   vendor_id: UUID | null;
   cost: string | null;
   started_on: string;
@@ -307,7 +333,11 @@ export interface AssetVendorRecord {
   deleted_at: string | null;
 }
 
-export type AssetRecoverySettlementStatus = "recovered" | "deduction" | "waived" | "lost_damaged";
+export type AssetRecoverySettlementStatus =
+  | "recovered"
+  | "deduction"
+  | "waived"
+  | "lost_damaged";
 
 export interface AssetRecoveryTicketRecord {
   id: UUID;
@@ -342,7 +372,10 @@ export interface WorkflowDefinitionRecord {
   id: UUID;
   name: string;
   module: "timesheets";
-  definition: { approver_strategy: "ltree_manager" | "project_manager" | "hr_manager"; require_billable_review: boolean };
+  definition: {
+    approver_strategy: "ltree_manager" | "project_manager" | "hr_manager";
+    require_billable_review: boolean;
+  };
   version: number;
   status: "active" | "inactive";
   created_at: string;
@@ -385,7 +418,11 @@ export interface ObjectStorageGetResult {
 export interface ObjectStoragePort {
   readonly kind: "memory" | "cloudinary";
   readonly bucket: string;
-  putObject(key: string, body: Buffer, metadata?: Record<string, string>): Promise<ObjectStoragePutResult>;
+  putObject(
+    key: string,
+    body: Buffer,
+    metadata?: Record<string, string>,
+  ): Promise<ObjectStoragePutResult>;
   presignedGetUrl(key: string, expiresInSeconds: number): Promise<string>;
   getObject(key: string): Promise<ObjectStorageGetResult | null>;
   statObject(key: string): Promise<{ size: number } | null>;
@@ -396,8 +433,13 @@ export interface DataStorePersistence {
   flush(): Promise<void>;
   flushAuth?(options?: AuthPersistenceFlushOptions): Promise<void>;
   flushCompanyBootstrap?(options?: AuthPersistenceFlushOptions): Promise<void>;
-  flushCompanyLogo?(options?: CompanyLogoPersistenceFlushOptions): Promise<void>;
-  flushDomain?(domain: PersistenceDomain, options?: DomainPersistenceFlushOptions): Promise<void>;
+  flushCompanyLogo?(
+    options?: CompanyLogoPersistenceFlushOptions,
+  ): Promise<void>;
+  flushDomain?(
+    domain: PersistenceDomain,
+    options?: DomainPersistenceFlushOptions,
+  ): Promise<void>;
   reload(): Promise<void>;
   close(): Promise<void>;
 }
@@ -496,7 +538,12 @@ export interface DataStore {
   assetRecoveryTickets: AssetRecoveryTicketRecord[];
   licenseEntitlements: LicenseEntitlement[];
   licenseActivations: LicenseActivation[];
-  compromisedKeys: Array<{ id: UUID; key_hash: string; status: string; created_at: string }>;
+  compromisedKeys: Array<{
+    id: UUID;
+    key_hash: string;
+    status: string;
+    created_at: string;
+  }>;
   workSegments: WorkSegment[];
   workflowDefinitions: WorkflowDefinitionRecord[];
   timesheetSubmissions: TimesheetSubmission[];
@@ -520,6 +567,8 @@ export interface DataStore {
   attendancePunches: AttendancePunch[];
   attendanceDayRecords: AttendanceDayRecord[];
   attendanceRegularizations: AttendanceRegularizationRequest[];
+  attendanceRegularizationActions: AttendanceRegularizationAction[];
+  attendanceRegularizationCorrectionApplications: AttendanceRegularizationCorrectionApplication[];
   leaveRequests: LeaveRequest[];
   wfhRequests: WfhRequest[];
   holidays: Holiday[];
@@ -584,7 +633,9 @@ export function nowIso(): string {
 
 function uuidFromName(name: string): UUID {
   const hash = createHash("sha256").update(name).digest("hex");
-  const variant = (8 + (Number.parseInt(hash.slice(16, 17), 16) % 4)).toString(16);
+  const variant = (8 + (Number.parseInt(hash.slice(16, 17), 16) % 4)).toString(
+    16,
+  );
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 
@@ -620,7 +671,7 @@ export const seedIds: SeedIds = {
   adminSecuritySettings: uuidFromName("admin-security-settings-default"),
   workflowDefinition: uuidFromName("workflow-timesheet-default"),
   licenseProduct: uuidFromName("license-product-office"),
-  entitlement: uuidFromName("license-entitlement-office")
+  entitlement: uuidFromName("license-entitlement-office"),
 };
 
 function makeUser(input: {
@@ -653,19 +704,27 @@ function makeUser(input: {
     joined_on: "2026-01-01",
     terminated_on: null,
     deleted_at: null,
-    version: 1
+    version: 1,
   };
 }
 
 function rbacPermissionId(group: string, action: string): string {
-  return `${group.toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "")}:${action}`;
+  return `${group
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "_")
+    .replace(/^_+|_+$/gu, "")}:${action}`;
 }
 
 function defaultRbacPermissionsFor(roleKey: string): string[] {
-  const all = RbacPermissionGroups.flatMap((group) => RbacPermissionActions.map((action) => rbacPermissionId(group, action)));
-  const viewExport = RbacPermissionGroups.flatMap((group) => ["view", "export"].map((action) => rbacPermissionId(group, action)));
+  const all = RbacPermissionGroups.flatMap((group) =>
+    RbacPermissionActions.map((action) => rbacPermissionId(group, action)),
+  );
+  const viewExport = RbacPermissionGroups.flatMap((group) =>
+    ["view", "export"].map((action) => rbacPermissionId(group, action)),
+  );
   const ids = new Set<string>();
-  const set = (group: string, actions: readonly string[]) => actions.forEach((action) => ids.add(rbacPermissionId(group, action)));
+  const set = (group: string, actions: readonly string[]) =>
+    actions.forEach((action) => ids.add(rbacPermissionId(group, action)));
 
   if (roleKey === Roles.Admin) return all;
   if (roleKey === Roles.Auditor) return viewExport;
@@ -718,12 +777,15 @@ function buildDefaultRbac(created: string): {
   const descriptions: Record<string, string> = {
     [Roles.Employee]: "Self-service access for personal HRMS workflows.",
     [Roles.Reviewer]: "Manager/reviewer access for team approvals and queues.",
-    [Roles.Director]: "Department leader access for reports and escalated approvals.",
-    [Roles.FinanceManager]: "Finance workflow access for expenses, payments, and reports.",
+    [Roles.Director]:
+      "Department leader access for reports and escalated approvals.",
+    [Roles.FinanceManager]:
+      "Finance workflow access for expenses, payments, and reports.",
     [Roles.Admin]: "Full administrative access across Hawkaii HRMS.",
     [Roles.Auditor]: "Read-only compliance and audit access.",
     [Roles.AssetManager]: "Asset inventory, request, and recovery management.",
-    [Roles.HRManager]: "People operations access for employees, attendance, leave, and HR reports."
+    [Roles.HRManager]:
+      "People operations access for employees, attendance, leave, and HR reports.",
   };
   const roles = Object.values(Roles).map((role) => ({
     id: randomUUID(),
@@ -735,7 +797,7 @@ function buildDefaultRbac(created: string): {
     created_at: created,
     updated_at: created,
     deleted_at: null,
-    version: 1
+    version: 1,
   }));
   const permissions = roles.flatMap((role) =>
     defaultRbacPermissionsFor(role.role_key).map((permissionId) => ({
@@ -745,8 +807,8 @@ function buildDefaultRbac(created: string): {
       status: "active" as const,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }))
+      deleted_at: null,
+    })),
   );
   return { roles, permissions };
 }
@@ -756,7 +818,7 @@ function workflowStage(
   order: number,
   approverType: (typeof AdminWorkflowApproverTypes)[number],
   approverValue: string,
-  escalateAfterDays: number
+  escalateAfterDays: number,
 ): AdminWorkflowConfigRecord["stages"][number] {
   return {
     id: `${workflowKey}_stage_${order}`,
@@ -764,11 +826,13 @@ function workflowStage(
     approver_type: approverType,
     approver_value: approverValue,
     escalate_after_days: escalateAfterDays,
-    mandatory_remarks_on_reject: true
+    mandatory_remarks_on_reject: true,
   };
 }
 
-export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfigRecord[] {
+export function buildDefaultAdminWorkflows(
+  created: string,
+): AdminWorkflowConfigRecord[] {
   const defaults: Array<{
     key: AdminWorkflowKey;
     module: string;
@@ -781,14 +845,16 @@ export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfig
       label: "Leave approval",
       stages: [
         workflowStage("leave", 1, "Reporting Manager", "Direct manager", 2),
-        workflowStage("leave", 2, "Role", "HR Admin", 3)
-      ]
+        workflowStage("leave", 2, "Role", "HR Admin", 3),
+      ],
     },
     {
       key: "wfh",
       module: "leave_wfh",
       label: "WFH approval",
-      stages: [workflowStage("wfh", 1, "Reporting Manager", "Direct manager", 1)]
+      stages: [
+        workflowStage("wfh", 1, "Reporting Manager", "Direct manager", 1),
+      ],
     },
     {
       key: "timesheet",
@@ -796,8 +862,8 @@ export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfig
       label: "Timesheet approval",
       stages: [
         workflowStage("timesheet", 1, "Reporting Manager", "Direct manager", 2),
-        workflowStage("timesheet", 2, "Role", "Project Manager", 2)
-      ]
+        workflowStage("timesheet", 2, "Role", "Project Manager", 2),
+      ],
     },
     {
       key: "expense",
@@ -805,17 +871,23 @@ export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfig
       label: "Expense approval",
       stages: [
         workflowStage("expense", 1, "Reporting Manager", "Direct manager", 2),
-        workflowStage("expense", 2, "Role", "Finance Manager", 3)
-      ]
+        workflowStage("expense", 2, "Role", "Finance Manager", 3),
+      ],
     },
     {
       key: "asset_request",
       module: "assets",
       label: "Asset request approval",
       stages: [
-        workflowStage("asset_request", 1, "Reporting Manager", "Direct manager", 2),
-        workflowStage("asset_request", 2, "Role", "IT / Asset Admin", 2)
-      ]
+        workflowStage(
+          "asset_request",
+          1,
+          "Reporting Manager",
+          "Direct manager",
+          2,
+        ),
+        workflowStage("asset_request", 2, "Role", "IT / Asset Admin", 2),
+      ],
     },
     {
       key: "helpdesk_escalation",
@@ -824,9 +896,15 @@ export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfig
       stages: [
         workflowStage("helpdesk_escalation", 1, "Role", "Helpdesk Agent", 1),
         workflowStage("helpdesk_escalation", 2, "Role", "Module Owner", 1),
-        workflowStage("helpdesk_escalation", 3, "Specific User", "Main Admin", 1)
-      ]
-    }
+        workflowStage(
+          "helpdesk_escalation",
+          3,
+          "Specific User",
+          "Main Admin",
+          1,
+        ),
+      ],
+    },
   ];
 
   return defaults.map((workflow) => ({
@@ -839,11 +917,14 @@ export function buildDefaultAdminWorkflows(created: string): AdminWorkflowConfig
     created_at: created,
     updated_at: created,
     deleted_at: null,
-    version: 1
+    version: 1,
   }));
 }
 
-export function buildDefaultAdminPolicies(created: string, companyId: UUID | null = null): AdminPolicyConfigRecord[] {
+export function buildDefaultAdminPolicies(
+  created: string,
+  companyId: UUID | null = null,
+): AdminPolicyConfigRecord[] {
   const defaults: Array<{
     key: AdminPolicyKey;
     module: string;
@@ -866,8 +947,26 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         punchOutEnd: "23:59",
         autoPunchOutEnabled: true,
         autoPunchOutTime: "23:59",
-        allowOffDayPunches: false
-      }
+        allowOffDayPunches: false,
+        attendanceMode: "manual_only",
+        fallbackApprovalMode: "disabled",
+        regularizationMode: "approval_required",
+        locationUnavailableAction: "allow",
+        permissionDeniedAction: "allow",
+        outsideFenceAction: "allow",
+        boundaryUncertainAction: "allow",
+        staleEvidenceAction: "allow",
+        accuracyExceededAction: "allow",
+        effectiveGeofenceId: null,
+        effectiveGeofenceIds: [],
+        geofenceGraceMeters: 0,
+        maxLocationAgeMs: null,
+        maxAccuracyMeters: null,
+        coordinateRetentionClasses: {
+          [AttendanceCoordinateRetentionDefaults.Class]: AttendanceCoordinateRetentionDefaults.Seconds,
+        },
+        defaultCoordinateRetentionClass: AttendanceCoordinateRetentionDefaults.Class,
+      },
     },
     {
       key: "leave",
@@ -878,8 +977,8 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         sickPerYear: 10,
         earnedPerYear: 18,
         carryForwardCap: 30,
-        encashmentAllowed: true
-      }
+        encashmentAllowed: true,
+      },
     },
     {
       key: "timesheet",
@@ -889,8 +988,8 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         weeklyHours: 40,
         minDailyHours: 6,
         submitBy: "Monday 11:00 AM",
-        lockAfterApproval: true
-      }
+        lockAfterApproval: true,
+      },
     },
     {
       key: "expense",
@@ -900,8 +999,8 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         perDayLimit: 5000,
         receiptMandatoryAbove: 500,
         selfApprovalAllowed: false,
-        autoEscalateDays: 3
-      }
+        autoEscalateDays: 3,
+      },
     },
     {
       key: "asset",
@@ -911,8 +1010,8 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         damagePenalty: true,
         mandatoryAck: true,
         returnSlaDays: 5,
-        warrantyAlertDays: 60
-      }
+        warrantyAlertDays: 60,
+      },
     },
     {
       key: "sla",
@@ -926,16 +1025,18 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
         normalResponseHrs: 8,
         normalResolveHrs: 48,
         lowResponseHrs: 24,
-        lowResolveHrs: 96
-      }
-    }
+        lowResolveHrs: 96,
+      },
+    },
   ];
 
   const allowedKeys = new Set(AdminPolicyKeys);
   return defaults
     .filter((policy) => allowedKeys.has(policy.key))
     .map((policy) => ({
-      id: companyId ? uuidFromName(`admin-policy-${companyId}-${policy.key}`) : uuidFromName(`admin-policy-${policy.key}`),
+      id: companyId
+        ? uuidFromName(`admin-policy-${companyId}-${policy.key}`)
+        : uuidFromName(`admin-policy-${policy.key}`),
       company_id: companyId,
       policy_key: policy.key,
       module: policy.module,
@@ -945,11 +1046,13 @@ export function buildDefaultAdminPolicies(created: string, companyId: UUID | nul
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
+      version: 1,
     }));
 }
 
-export function buildDefaultAdminEmailTemplates(created: string): AdminEmailTemplateRecord[] {
+export function buildDefaultAdminEmailTemplates(
+  created: string,
+): AdminEmailTemplateRecord[] {
   const defaults: Array<{
     key: AdminEmailTemplateKey;
     module: string;
@@ -962,50 +1065,50 @@ export function buildDefaultAdminEmailTemplates(created: string): AdminEmailTemp
       module: "auth",
       name: "Employee Invite",
       subject: "Welcome to {{company}} - set up your account",
-      body: "Hi {{name}},\n\nYou've been invited to join {{company}} on Hawkaii HRMS. Click the link below to set your password and complete onboarding.\n\n{{link}}\n\n- People Ops"
+      body: "Hi {{name}},\n\nYou've been invited to join {{company}} on Hawkaii HRMS. Click the link below to set your password and complete onboarding.\n\n{{link}}\n\n- People Ops",
     },
     {
       key: "verify",
       module: "auth",
       name: "Email Verification",
       subject: "Verify your email for {{company}}",
-      body: "Hi {{name}},\n\nPlease verify your email by clicking the link below.\n\n{{link}}\n\nThis link expires in 24 hours."
+      body: "Hi {{name}},\n\nPlease verify your email by clicking the link below.\n\n{{link}}\n\nThis link expires in 24 hours.",
     },
     {
       key: "reset",
       module: "auth",
       name: "Password Reset",
       subject: "Reset your {{company}} password",
-      body: "Hi {{name}},\n\nUse the link below to reset your password. If you didn't request this, you can ignore this email.\n\n{{link}}"
+      body: "Hi {{name}},\n\nUse the link below to reset your password. If you didn't request this, you can ignore this email.\n\n{{link}}",
     },
     {
       key: "leave",
       module: "leave_wfh",
       name: "Leave Approval",
       subject: "Your leave request was {{status}}",
-      body: "Hi {{name}},\n\nYour leave request from {{from}} to {{to}} has been {{status}} by {{approver}}.\n\nRemarks: {{remarks}}"
+      body: "Hi {{name}},\n\nYour leave request from {{from}} to {{to}} has been {{status}} by {{approver}}.\n\nRemarks: {{remarks}}",
     },
     {
       key: "expense",
       module: "expenses",
       name: "Expense Approval",
       subject: "Expense {{id}} {{status}}",
-      body: "Hi {{name}},\n\nYour expense claim {{id}} for {{amount}} has been {{status}}.\n\nRemarks: {{remarks}}"
+      body: "Hi {{name}},\n\nYour expense claim {{id}} for {{amount}} has been {{status}}.\n\nRemarks: {{remarks}}",
     },
     {
       key: "ts_reminder",
       module: "timesheets",
       name: "Timesheet Reminder",
       subject: "Submit your weekly timesheet",
-      body: "Hi {{name}},\n\nFriendly reminder to submit your timesheet for week ending {{week}} before {{deadline}}."
+      body: "Hi {{name}},\n\nFriendly reminder to submit your timesheet for week ending {{week}} before {{deadline}}.",
     },
     {
       key: "ticket_update",
       module: "helpdesk",
       name: "Helpdesk Ticket Update",
       subject: "Ticket {{id}} updated - {{status}}",
-      body: "Hi {{name}},\n\nTicket {{id}} ({{title}}) is now {{status}}.\n\nLatest update: {{message}}"
-    }
+      body: "Hi {{name}},\n\nTicket {{id}} ({{title}}) is now {{status}}.\n\nLatest update: {{message}}",
+    },
   ];
 
   const allowedKeys = new Set(AdminEmailTemplateKeys);
@@ -1023,11 +1126,13 @@ export function buildDefaultAdminEmailTemplates(created: string): AdminEmailTemp
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
+      version: 1,
     }));
 }
 
-export function buildDefaultAdminNotificationChannels(created: string): AdminNotificationChannelRecord[] {
+export function buildDefaultAdminNotificationChannels(
+  created: string,
+): AdminNotificationChannelRecord[] {
   const defaults: Array<{
     key: AdminNotificationEventKey;
     module: string;
@@ -1036,14 +1141,70 @@ export function buildDefaultAdminNotificationChannels(created: string): AdminNot
     email: boolean;
     push: boolean;
   }> = [
-    { key: "employee_invited", module: "auth", label: "Employee invited", inApp: true, email: true, push: false },
-    { key: "leave_requested", module: "leave_wfh", label: "Leave requested", inApp: true, email: true, push: false },
-    { key: "timesheet_submitted", module: "timesheets", label: "Timesheet submitted", inApp: true, email: false, push: false },
-    { key: "expense_submitted", module: "expenses", label: "Expense submitted", inApp: true, email: true, push: false },
-    { key: "payment_released", module: "expenses", label: "Payment released", inApp: true, email: true, push: false },
-    { key: "asset_assigned", module: "assets", label: "Asset assigned", inApp: true, email: true, push: false },
-    { key: "ticket_assigned", module: "helpdesk", label: "Helpdesk ticket assigned", inApp: true, email: true, push: false },
-    { key: "sla_breached", module: "helpdesk", label: "SLA breached", inApp: true, email: true, push: true }
+    {
+      key: "employee_invited",
+      module: "auth",
+      label: "Employee invited",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "leave_requested",
+      module: "leave_wfh",
+      label: "Leave requested",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "timesheet_submitted",
+      module: "timesheets",
+      label: "Timesheet submitted",
+      inApp: true,
+      email: false,
+      push: false,
+    },
+    {
+      key: "expense_submitted",
+      module: "expenses",
+      label: "Expense submitted",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "payment_released",
+      module: "expenses",
+      label: "Payment released",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "asset_assigned",
+      module: "assets",
+      label: "Asset assigned",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "ticket_assigned",
+      module: "helpdesk",
+      label: "Helpdesk ticket assigned",
+      inApp: true,
+      email: true,
+      push: false,
+    },
+    {
+      key: "sla_breached",
+      module: "helpdesk",
+      label: "SLA breached",
+      inApp: true,
+      email: true,
+      push: true,
+    },
   ];
 
   const allowedKeys = new Set(AdminNotificationEventKeys);
@@ -1061,11 +1222,13 @@ export function buildDefaultAdminNotificationChannels(created: string): AdminNot
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
+      version: 1,
     }));
 }
 
-export function buildDefaultAdminSecuritySettings(created: string): AdminSecuritySettingsRecord {
+export function buildDefaultAdminSecuritySettings(
+  created: string,
+): AdminSecuritySettingsRecord {
   return {
     id: seedIds.adminSecuritySettings,
     settings_key: "default",
@@ -1081,11 +1244,13 @@ export function buildDefaultAdminSecuritySettings(created: string): AdminSecurit
     created_at: created,
     updated_at: created,
     deleted_at: null,
-    version: 1
+    version: 1,
   };
 }
 
-export function buildDefaultAdminMasterDataItems(created: string): AdminMasterDataItemRecord[] {
+export function buildDefaultAdminMasterDataItems(
+  created: string,
+): AdminMasterDataItemRecord[] {
   const definitions: Array<{
     masterKey: string;
     code: string;
@@ -1096,24 +1261,60 @@ export function buildDefaultAdminMasterDataItems(created: string): AdminMasterDa
     { masterKey: "employmentTypes", code: "PART_TIME", name: "Part-time" },
     { masterKey: "employmentTypes", code: "INTERN", name: "Intern" },
     { masterKey: "employmentTypes", code: "CONTRACTOR", name: "Contractor" },
-    { masterKey: "workLocations", code: "BENGALURU_HQ", name: "Bengaluru HQ", description: "India" },
-    { masterKey: "workLocations", code: "REMOTE_INDIA", name: "Remote India", description: "Distributed" },
-    { masterKey: "shifts", code: "GENERAL", name: "General Shift", description: "09:30 - 18:30 IST" },
-    { masterKey: "shifts", code: "EU_OVERLAP", name: "EU Overlap", description: "12:00 - 21:00 IST" },
-    { masterKey: "leaveTypes", code: "CASUAL", name: "Casual Leave", description: "Annual entitlement" },
-    { masterKey: "leaveTypes", code: "SICK", name: "Sick Leave", description: "Medical leave" },
+    {
+      masterKey: "workLocations",
+      code: "BENGALURU_HQ",
+      name: "Bengaluru HQ",
+      description: "India",
+    },
+    {
+      masterKey: "workLocations",
+      code: "REMOTE_INDIA",
+      name: "Remote India",
+      description: "Distributed",
+    },
+    {
+      masterKey: "shifts",
+      code: "GENERAL",
+      name: "General Shift",
+      description: "09:30 - 18:30 IST",
+    },
+    {
+      masterKey: "shifts",
+      code: "EU_OVERLAP",
+      name: "EU Overlap",
+      description: "12:00 - 21:00 IST",
+    },
+    {
+      masterKey: "leaveTypes",
+      code: "CASUAL",
+      name: "Casual Leave",
+      description: "Annual entitlement",
+    },
+    {
+      masterKey: "leaveTypes",
+      code: "SICK",
+      name: "Sick Leave",
+      description: "Medical leave",
+    },
     { masterKey: "expenseCategories", code: "TRAVEL", name: "Travel" },
     { masterKey: "expenseCategories", code: "MEALS", name: "Meals" },
     { masterKey: "assetCategories", code: "LAPTOP", name: "Laptop" },
     { masterKey: "assetCategories", code: "MOBILE", name: "Mobile Device" },
     { masterKey: "helpdeskCategories", code: "IT_SUPPORT", name: "IT Support" },
     { masterKey: "helpdeskCategories", code: "FACILITIES", name: "Facilities" },
-    { masterKey: "projectRoles", code: "PROJECT_MANAGER", name: "Project Manager" },
-    { masterKey: "projectRoles", code: "DEVELOPER", name: "Developer" }
+    {
+      masterKey: "projectRoles",
+      code: "PROJECT_MANAGER",
+      name: "Project Manager",
+    },
+    { masterKey: "projectRoles", code: "DEVELOPER", name: "Developer" },
   ];
 
   return definitions.map((definition, index) => ({
-    id: uuidFromName(`admin-master-data:${definition.masterKey}:${definition.code}`),
+    id: uuidFromName(
+      `admin-master-data:${definition.masterKey}:${definition.code}`,
+    ),
     master_key: definition.masterKey,
     code: definition.code,
     name: definition.name,
@@ -1124,19 +1325,22 @@ export function buildDefaultAdminMasterDataItems(created: string): AdminMasterDa
     created_at: created,
     updated_at: created,
     deleted_at: null,
-    version: 1
+    version: 1,
   }));
 }
 
 export function createMemoryDataStore(): MemoryDataStore {
   const created = nowIso();
+  const defaultCompanyId = uuidFromName("company-default");
   const releaseSeedEmails = getReleaseSeedEmails();
   const defaultRbac = buildDefaultRbac(created);
   const defaultAdminWorkflows = buildDefaultAdminWorkflows(created);
   const defaultAdminPolicies = buildDefaultAdminPolicies(created);
   const defaultAdminEmailTemplates = buildDefaultAdminEmailTemplates(created);
-  const defaultAdminNotificationChannels = buildDefaultAdminNotificationChannels(created);
-  const defaultAdminSecuritySettings = buildDefaultAdminSecuritySettings(created);
+  const defaultAdminNotificationChannels =
+    buildDefaultAdminNotificationChannels(created);
+  const defaultAdminSecuritySettings =
+    buildDefaultAdminSecuritySettings(created);
   const defaultAdminMasterDataItems = buildDefaultAdminMasterDataItems(created);
   const departments: Department[] = [
     {
@@ -1149,7 +1353,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       director_user_id: seedIds.executive,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.departmentFinance,
@@ -1161,8 +1365,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       director_user_id: seedIds.financeManager,
       status: "active",
       deleted_at: null,
-      version: 1
-    }
+      version: 1,
+    },
   ];
 
   const designations: Designation[] = [
@@ -1174,7 +1378,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 10,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationManager,
@@ -1184,7 +1388,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 6,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: uuidFromName("designation-director"),
@@ -1194,7 +1398,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 10,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: uuidFromName("designation-reviewer"),
@@ -1204,7 +1408,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 6,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationFinance,
@@ -1214,7 +1418,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 8,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationEmployee,
@@ -1224,7 +1428,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 1,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationAdmin,
@@ -1234,7 +1438,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 9,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationHrManager,
@@ -1244,7 +1448,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 7,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationProjectManager,
@@ -1254,7 +1458,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 6,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationAssetManager,
@@ -1264,7 +1468,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 6,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationAuditor,
@@ -1274,7 +1478,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 5,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationHelpdeskAgent,
@@ -1284,7 +1488,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 3,
       status: "active",
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: seedIds.designationHelpdeskManager,
@@ -1294,8 +1498,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       level: 6,
       status: "active",
       deleted_at: null,
-      version: 1
-    }
+      version: 1,
+    },
   ];
 
   const users: CoreUser[] = [
@@ -1308,7 +1512,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationExecutive,
       managerId: null,
       path: "CEO.SALES.S1",
-      roles: [Roles.Employee, Roles.Reviewer]
+      roles: [Roles.Employee, Roles.Reviewer],
     }),
     makeUser({
       id: seedIds.manager,
@@ -1319,7 +1523,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationManager,
       managerId: seedIds.executive,
       path: "CEO.SALES.S1.D1",
-      roles: [Roles.Employee, Roles.Reviewer]
+      roles: [Roles.Employee, Roles.Reviewer],
     }),
     makeUser({
       id: seedIds.employee1,
@@ -1330,7 +1534,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationEmployee,
       managerId: seedIds.manager,
       path: "CEO.SALES.S1.D1.E1",
-      roles: [Roles.Employee]
+      roles: [Roles.Employee],
     }),
     makeUser({
       id: seedIds.employee2,
@@ -1341,7 +1545,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationEmployee,
       managerId: seedIds.manager,
       path: "CEO.SALES.S1.D1.E2",
-      roles: [Roles.Employee]
+      roles: [Roles.Employee],
     }),
     makeUser({
       id: seedIds.employee3,
@@ -1352,7 +1556,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationEmployee,
       managerId: seedIds.manager,
       path: "CEO.SALES.S1.D1.E3",
-      roles: [Roles.Employee]
+      roles: [Roles.Employee],
     }),
     makeUser({
       id: seedIds.financeManager,
@@ -1363,7 +1567,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationFinance,
       managerId: null,
       path: "CEO.FIN.N1",
-      roles: [Roles.FinanceManager]
+      roles: [Roles.FinanceManager],
     }),
     makeUser({
       id: seedIds.alternateFinance,
@@ -1374,7 +1578,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationFinance,
       managerId: seedIds.financeManager,
       path: "CEO.FIN.N1.N2",
-      roles: [Roles.FinanceManager]
+      roles: [Roles.FinanceManager],
     }),
     makeUser({
       id: seedIds.admin,
@@ -1385,7 +1589,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationFinance,
       managerId: null,
       path: "CEO.ADM",
-      roles: [Roles.Admin]
+      roles: [Roles.Admin],
     }),
     makeUser({
       id: seedIds.auditor,
@@ -1396,7 +1600,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationFinance,
       managerId: null,
       path: "CEO.AUD",
-      roles: [Roles.Auditor]
+      roles: [Roles.Auditor],
     }),
     makeUser({
       id: seedIds.assetManager,
@@ -1407,35 +1611,40 @@ export function createMemoryDataStore(): MemoryDataStore {
       designationId: seedIds.designationFinance,
       managerId: null,
       path: "CEO.AST",
-      roles: [Roles.AssetManager]
-    })
+      roles: [Roles.AssetManager],
+    }),
   ];
 
-  const managerBackupAssignments: ManagerBackupAssignment[] = [seedIds.employee1, seedIds.employee2, seedIds.employee3].map(
-    (employeeId) => ({
-      id: randomUUID(),
-      employee_user_id: employeeId,
-      backup_manager_user_id: seedIds.executive,
-      assigned_by_user_id: seedIds.admin,
-      effective_from: "2026-01-01",
-      effective_to: null,
-      status: "active",
-      created_at: created,
-      updated_at: created,
-      deleted_at: null,
-      version: 1
-    })
-  );
+  const managerBackupAssignments: ManagerBackupAssignment[] = [
+    seedIds.employee1,
+    seedIds.employee2,
+    seedIds.employee3,
+  ].map((employeeId) => ({
+    id: randomUUID(),
+    employee_user_id: employeeId,
+    backup_manager_user_id: seedIds.executive,
+    assigned_by_user_id: seedIds.admin,
+    effective_from: "2026-01-01",
+    effective_to: null,
+    status: "active",
+    created_at: created,
+    updated_at: created,
+    deleted_at: null,
+    version: 1,
+  }));
 
   const localDemoPassword = getLocalDemoPassword();
   const userCredentials: UserCredentialRecord[] = users.map((user) => ({
     id: uuidFromName(`credential-${user.employee_code}`),
     user_id: user.id,
-    password_hash: hashPasswordSync(localDemoPassword, `hrms-local-${user.employee_code.toLowerCase()}`),
+    password_hash: hashPasswordSync(
+      localDemoPassword,
+      `hrms-local-${user.employee_code.toLowerCase()}`,
+    ),
     status: "active",
     created_at: created,
     updated_at: created,
-    deleted_at: null
+    deleted_at: null,
   }));
 
   const financeGovernanceConfig: FinanceGovernanceConfig = {
@@ -1451,7 +1660,7 @@ export function createMemoryDataStore(): MemoryDataStore {
     created_at: created,
     updated_at: created,
     deleted_at: null,
-    version: 1
+    version: 1,
   };
 
   const firstAssetId = uuidFromName("asset-laptop-001");
@@ -1465,13 +1674,20 @@ export function createMemoryDataStore(): MemoryDataStore {
     permanent_address: "Bangalore, India",
     city: "Bangalore",
     country: "India",
-    emergency_contact: { name: "Emergency Contact", relation: "Family", phone: "+91 99000 00000" },
-    personal_details: { nationality: "Indian", marital_status: "Not specified" },
+    emergency_contact: {
+      name: "Emergency Contact",
+      relation: "Family",
+      phone: "+91 99000 00000",
+    },
+    personal_details: {
+      nationality: "Indian",
+      marital_status: "Not specified",
+    },
     work_preferences: { work_mode: "Hybrid" },
     version: 1,
     created_at: created,
     updated_at: created,
-    deleted_at: null
+    deleted_at: null,
   }));
   const emsLetters: EmsLetter[] = [
     {
@@ -1487,7 +1703,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("ems-letter-e1-salary-certificate"),
@@ -1502,8 +1718,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const emsPolicies: EmsPolicy[] = [
     {
@@ -1518,7 +1734,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("ems-policy-leave"),
@@ -1532,7 +1748,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("ems-policy-wfh"),
@@ -1546,19 +1762,24 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
-  const emsPolicyAcknowledgements: EmsPolicyAcknowledgement[] = emsPolicies.map((policy) => ({
-    id: uuidFromName(`ems-policy-ack-${policy.policy_code}-e1`),
-    policy_id: policy.id,
-    employee_user_id: seedIds.employee1,
-    status: policy.policy_code === "LEAVE" ? EmsPolicyAcknowledgementStatuses.Pending : EmsPolicyAcknowledgementStatuses.Acknowledged,
-    acknowledged_at: policy.policy_code === "LEAVE" ? null : created,
-    version: 1,
-    created_at: created,
-    updated_at: created
-  }));
+  const emsPolicyAcknowledgements: EmsPolicyAcknowledgement[] = emsPolicies.map(
+    (policy) => ({
+      id: uuidFromName(`ems-policy-ack-${policy.policy_code}-e1`),
+      policy_id: policy.id,
+      employee_user_id: seedIds.employee1,
+      status:
+        policy.policy_code === "LEAVE"
+          ? EmsPolicyAcknowledgementStatuses.Pending
+          : EmsPolicyAcknowledgementStatuses.Acknowledged,
+      acknowledged_at: policy.policy_code === "LEAVE" ? null : created,
+      version: 1,
+      created_at: created,
+      updated_at: created,
+    }),
+  );
   const emsAdminChecklists: EmsAdminChecklist[] = [
     {
       id: uuidFromName("ems-onboarding-e2"),
@@ -1571,14 +1792,14 @@ export function createMemoryDataStore(): MemoryDataStore {
         docs: false,
         assets: false,
         access: false,
-        orientation: false
+        orientation: false,
       },
       remarks: null,
       completed_at: null,
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
+      version: 1,
     },
     {
       id: uuidFromName("ems-exit-e3"),
@@ -1590,15 +1811,15 @@ export function createMemoryDataStore(): MemoryDataStore {
         clearance: true,
         assets: false,
         finance: false,
-        letter: false
+        letter: false,
       },
       remarks: null,
       completed_at: null,
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
-    }
+      version: 1,
+    },
   ];
   const emsProbationReviews: EmsProbationReview[] = [
     {
@@ -1614,8 +1835,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       created_at: created,
       updated_at: created,
       deleted_at: null,
-      version: 1
-    }
+      version: 1,
+    },
   ];
   const projectHawkaiiId = uuidFromName("project-hawkaii-hrms");
   const projectFinanceId = uuidFromName("project-finance-automation");
@@ -1634,7 +1855,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("project-hawkaii-hrms-member-e2"),
@@ -1650,7 +1871,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("project-finance-automation-member-e2"),
@@ -1666,23 +1887,25 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
-  const projectAllocations: ProjectAllocationRecord[] = projectMembers.map((member) => ({
-    id: uuidFromName(`allocation-${member.id}`),
-    project_id: member.project_id,
-    employee_user_id: member.employee_user_id,
-    date_from: member.start_date,
-    date_to: member.end_date,
-    allocation_percent: member.allocation_percent,
-    billable: member.billable,
-    notes: "Seed allocation",
-    version: 1,
-    created_at: created,
-    updated_at: created,
-    deleted_at: null
-  }));
+  const projectAllocations: ProjectAllocationRecord[] = projectMembers.map(
+    (member) => ({
+      id: uuidFromName(`allocation-${member.id}`),
+      project_id: member.project_id,
+      employee_user_id: member.employee_user_id,
+      date_from: member.start_date,
+      date_to: member.end_date,
+      allocation_percent: member.allocation_percent,
+      billable: member.billable,
+      notes: "Seed allocation",
+      version: 1,
+      created_at: created,
+      updated_at: created,
+      deleted_at: null,
+    }),
+  );
   const projectMilestones: ProjectMilestoneRecord[] = [
     {
       id: uuidFromName("project-hawkaii-hrms-milestone-core"),
@@ -1696,7 +1919,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("project-finance-automation-milestone-expense"),
@@ -1710,8 +1933,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const projects: ProjectRecord[] = [
     {
@@ -1727,7 +1950,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       end_date: "2026-09-30",
       status: ProjectStatuses.Active,
       health: ProjectHealthStatuses.Green,
-      description: "Internal HRMS implementation and production readiness program.",
+      description:
+        "Internal HRMS implementation and production readiness program.",
       estimated_hours: "2400.00",
       actual_hours: "320.00",
       estimated_budget: "0.00",
@@ -1738,7 +1962,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: projectFinanceId,
@@ -1764,8 +1988,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const helpdeskCategories: HelpdeskCategory[] = [
     {
@@ -1782,12 +2006,12 @@ export function createMemoryDataStore(): MemoryDataStore {
         { key: "email", label: "Email / Calendar" },
         { key: "software", label: "Software install" },
         { key: "hardware", label: "Hardware issue" },
-        { key: "access", label: "Access / Permissions" }
+        { key: "access", label: "Access / Permissions" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-category-hr"),
@@ -1802,12 +2026,12 @@ export function createMemoryDataStore(): MemoryDataStore {
         { key: "leave", label: "Leave query" },
         { key: "policy", label: "Policy clarification" },
         { key: "letter", label: "Letter request" },
-        { key: "payroll", label: "Payroll query" }
+        { key: "payroll", label: "Payroll query" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-category-finance"),
@@ -1821,12 +2045,12 @@ export function createMemoryDataStore(): MemoryDataStore {
       sub_categories: [
         { key: "reimburse", label: "Reimbursement" },
         { key: "invoice", label: "Invoice / GST" },
-        { key: "advance", label: "Advance request" }
+        { key: "advance", label: "Advance request" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-category-admin"),
@@ -1840,12 +2064,12 @@ export function createMemoryDataStore(): MemoryDataStore {
       sub_categories: [
         { key: "seat", label: "Seat / Workspace" },
         { key: "travel", label: "Travel" },
-        { key: "stationery", label: "Stationery" }
+        { key: "stationery", label: "Stationery" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-category-assets"),
@@ -1859,12 +2083,12 @@ export function createMemoryDataStore(): MemoryDataStore {
       sub_categories: [
         { key: "request", label: "New asset" },
         { key: "repair", label: "Repair" },
-        { key: "return", label: "Return" }
+        { key: "return", label: "Return" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-category-project-support"),
@@ -1878,20 +2102,21 @@ export function createMemoryDataStore(): MemoryDataStore {
       sub_categories: [
         { key: "tooling", label: "Tooling / CI" },
         { key: "infra", label: "Infrastructure" },
-        { key: "client", label: "Client coordination" }
+        { key: "client", label: "Client coordination" },
       ],
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const helpdeskTickets: HelpdeskTicket[] = [
     {
       id: uuidFromName("helpdesk-ticket-12001"),
       ticket_no: "TKT-12001",
       subject: "VPN not connecting from office",
-      description: "Corporate VPN times out from the office network and from tethering.",
+      description:
+        "Corporate VPN times out from the office network and from tethering.",
       category_id: helpdeskCategories[0]!.id,
       category_key: HelpdeskTicketCategories.IT,
       sub_category: "vpn",
@@ -1915,7 +2140,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 2,
       created_at: created,
       updated_at: created,
-      deleted_at: null
+      deleted_at: null,
     },
     {
       id: uuidFromName("helpdesk-ticket-12002"),
@@ -1945,8 +2170,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       version: 1,
       created_at: created,
       updated_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const helpdeskComments: HelpdeskTicketComment[] = [
     {
@@ -1959,8 +2184,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       internal: false,
       document_ids: [],
       created_at: created,
-      deleted_at: null
-    }
+      deleted_at: null,
+    },
   ];
   const helpdeskAttachments: HelpdeskTicketAttachment[] = [];
   const helpdeskEvents: HelpdeskTicketEvent[] = [
@@ -1971,7 +2196,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       actor_name: "Employee E1",
       action: "Ticket created",
       detail: null,
-      created_at: created
+      created_at: created,
     },
     {
       id: uuidFromName("helpdesk-event-12001-assigned"),
@@ -1980,7 +2205,7 @@ export function createMemoryDataStore(): MemoryDataStore {
       actor_name: "System",
       action: "Auto-assigned",
       detail: "Assigned to Asset Manager",
-      created_at: created
+      created_at: created,
     },
     {
       id: uuidFromName("helpdesk-event-12002-created"),
@@ -1989,8 +2214,8 @@ export function createMemoryDataStore(): MemoryDataStore {
       actor_name: "Employee E2",
       action: "Ticket created",
       detail: null,
-      created_at: created
-    }
+      created_at: created,
+    },
   ];
   const notifications: NotificationRecord[] = [
     {
@@ -2000,15 +2225,16 @@ export function createMemoryDataStore(): MemoryDataStore {
       event_type: "helpdesk.ticket_assigned",
       payload: {
         title: "High priority ticket update",
-        description: "TKT-12001 - VPN connectivity issue is assigned and in progress.",
+        description:
+          "TKT-12001 - VPN connectivity issue is assigned and in progress.",
         category: "alert",
-        action_url: "/helpdesk/TKT-12001"
+        action_url: "/helpdesk/TKT-12001",
       },
       status: "pending",
       read_at: null,
       version: 1,
       created_at: created,
-      updated_at: created
+      updated_at: created,
     },
     {
       id: uuidFromName("notification-manager-timesheet"),
@@ -2019,13 +2245,13 @@ export function createMemoryDataStore(): MemoryDataStore {
         title: "Timesheet submitted",
         description: "Employee E1 submitted the current week for approval.",
         category: "approval",
-        action_url: "/timesheet/approvals"
+        action_url: "/timesheet/approvals",
       },
       status: "pending",
       read_at: null,
       version: 1,
       created_at: created,
-      updated_at: created
+      updated_at: created,
     },
     {
       id: uuidFromName("notification-finance-expense-paid"),
@@ -2036,14 +2262,14 @@ export function createMemoryDataStore(): MemoryDataStore {
         title: "Expense paid",
         description: "Your reimbursement has been released by Finance.",
         category: "system",
-        action_url: "/expenses/my"
+        action_url: "/expenses/my",
       },
       status: "sent",
       read_at: created,
       version: 1,
       created_at: created,
-      updated_at: created
-    }
+      updated_at: created,
+    },
   ];
   return {
     kind: "memory",
@@ -2060,8 +2286,45 @@ export function createMemoryDataStore(): MemoryDataStore {
     users,
     userCredentials,
     authTokens: [],
-    companyProfiles: [],
-    userSessionPreferences: [],
+    companyProfiles: [
+      {
+        id: defaultCompanyId,
+        company_name: "Hawkaii HRMS",
+        company_slug: "hawkaii-hrms",
+        website: null,
+        industry: null,
+        address: null,
+        timezone: "Asia/Kolkata",
+        locale: "en-IN",
+        currency: "INR",
+        fiscal_year_start_month: 4,
+        working_week: "Mon-Fri",
+        work_hours_per_day: 8,
+        logo_label: null,
+        logo_document_id: null,
+        logo_url: null,
+        logo_file_name: null,
+        logo_mime_type: null,
+        logo_size_bytes: null,
+        status: "active",
+        bootstrap_completed_at: created,
+        created_at: created,
+        updated_at: created,
+        version: 1,
+      },
+    ],
+    userSessionPreferences: users.map((user) => ({
+      id: uuidFromName(`session-preference-${user.id}`),
+      user_id: user.id,
+      active_role: user.roles[0]!,
+      company_id: defaultCompanyId,
+      landing_page: "/dashboard",
+      locale: "en-IN",
+      timezone: user.timezone ?? "Asia/Kolkata",
+      created_at: created,
+      updated_at: created,
+      version: 1,
+    })),
     financeGovernanceConfig,
     managerBackupAssignments,
     tickets: [],
@@ -2091,8 +2354,8 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
-      }
+        deleted_at: null,
+      },
     ],
     assetAssignments: [],
     assetStateEvents: [],
@@ -2110,8 +2373,8 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
-      }
+        deleted_at: null,
+      },
     ],
     assetRecoveryTickets: [],
     licenseEntitlements: [
@@ -2121,8 +2384,8 @@ export function createMemoryDataStore(): MemoryDataStore {
         seat_count: 1,
         status: LicenseStatuses.Active,
         created_at: created,
-        updated_at: created
-      }
+        updated_at: created,
+      },
     ],
     licenseActivations: [],
     compromisedKeys: [],
@@ -2132,12 +2395,15 @@ export function createMemoryDataStore(): MemoryDataStore {
         id: seedIds.workflowDefinition,
         name: "Default ltree manager approval",
         module: "timesheets",
-        definition: { approver_strategy: "ltree_manager", require_billable_review: false },
+        definition: {
+          approver_strategy: "ltree_manager",
+          require_billable_review: false,
+        },
         version: 1,
         status: "active",
         created_at: created,
-        updated_at: created
-      }
+        updated_at: created,
+      },
     ],
     timesheetSubmissions: [],
     timesheetActions: [],
@@ -2153,11 +2419,14 @@ export function createMemoryDataStore(): MemoryDataStore {
     attendancePunches: [],
     attendanceDayRecords: [],
     attendanceRegularizations: [],
+    attendanceRegularizationActions: [],
+    attendanceRegularizationCorrectionApplications: [],
     leaveRequests: [],
     wfhRequests: [],
     holidays: [
       {
         id: uuidFromName("holiday-2026-republic-day"),
+        company_id: defaultCompanyId,
         name: "Republic Day",
         holiday_date: "2026-01-26",
         region: "All",
@@ -2165,10 +2434,11 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
+        deleted_at: null,
       },
       {
         id: uuidFromName("holiday-2026-holi"),
+        company_id: defaultCompanyId,
         name: "Holi",
         holiday_date: "2026-03-04",
         region: "All",
@@ -2176,10 +2446,11 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
+        deleted_at: null,
       },
       {
         id: uuidFromName("holiday-2026-independence-day"),
+        company_id: defaultCompanyId,
         name: "Independence Day",
         holiday_date: "2026-08-15",
         region: "All",
@@ -2187,10 +2458,11 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
+        deleted_at: null,
       },
       {
         id: uuidFromName("holiday-2026-diwali"),
+        company_id: defaultCompanyId,
         name: "Diwali",
         holiday_date: "2026-11-08",
         region: "All",
@@ -2198,8 +2470,8 @@ export function createMemoryDataStore(): MemoryDataStore {
         version: 1,
         created_at: created,
         updated_at: created,
-        deleted_at: null
-      }
+        deleted_at: null,
+      },
     ],
     emsEmployeeProfiles,
     emsProfileChangeRequests: [],
@@ -2215,12 +2487,12 @@ export function createMemoryDataStore(): MemoryDataStore {
     documentProcessing: {
       pdfCompression: defaultPdfCompressionOptions(),
       mediaUploads: defaultMediaUploadPolicy(),
-      companyLogoUploads: defaultCompanyLogoUploadPolicy()
+      companyLogoUploads: defaultCompanyLogoUploadPolicy(),
     },
     persistence: null,
     pgPool: null,
     nextOutboxId: 1,
-    nextTicketNo: 1
+    nextTicketNo: 1,
   };
 }
 
@@ -2240,10 +2512,10 @@ function defaultMediaUploadPolicy(): MediaUploadPolicy {
       "application/msword",
       "application/vnd.ms-excel",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ],
     imageOutputMimeType: "image/jpeg",
-    cloudinaryTransformation: "q_auto:eco,f_auto"
+    cloudinaryTransformation: "q_auto:eco,f_auto",
   };
 }
 
@@ -2255,7 +2527,7 @@ function defaultCompanyLogoUploadPolicy(): MediaUploadPolicy {
     imageJpegQuality: 0.82,
     allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
     imageOutputMimeType: "image/jpeg",
-    cloudinaryTransformation: "c_fit,w_512,h_512,q_auto:eco,f_auto"
+    cloudinaryTransformation: "c_fit,w_512,h_512,q_auto:eco,f_auto",
   };
 }
 
@@ -2270,7 +2542,9 @@ export function sanitizeFilename(fileName: string): string {
   const dot = fileName.lastIndexOf(".");
   const name = dot >= 0 ? fileName.slice(0, dot) : fileName;
   const ext = dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : "bin";
-  const safeName = name.replace(/[^a-zA-Z0-9_-]+/gu, "_").replace(/^_+|_+$/gu, "");
+  const safeName = name
+    .replace(/[^a-zA-Z0-9_-]+/gu, "_")
+    .replace(/^_+|_+$/gu, "");
   return `${safeName || "document"}.${ext.replace(/[^a-z0-9]/gu, "") || "bin"}`;
 }
 
@@ -2281,13 +2555,21 @@ export function makeStorageKey(input: {
   version: number;
 }): string {
   const safe = sanitizeFilename(input.fileName);
-  const ext = safe.includes(".") ? safe.split(".").at(-1) ?? "bin" : "bin";
+  const ext = safe.includes(".") ? (safe.split(".").at(-1) ?? "bin") : "bin";
   const date = new Date().toISOString().slice(0, 10);
   return `${date}_${input.actor.employee_code}_${sanitizeFilename(input.documentType).replace(/\.[^.]+$/u, "")}_v${input.version}_${randomUUID()}.${ext}`;
 }
 
-export function getRequiredDocuments(subType: ExpenseSubType): readonly string[] {
+export function getRequiredDocuments(
+  subType: ExpenseSubType,
+): readonly string[] {
   return RequiredDocumentsByExpenseSubType[subType];
 }
 
-export { DocumentClassifications, ExpenseStatuses, ExpenseSubTypes, ExpenseTypes, PaymentTypes };
+export {
+  DocumentClassifications,
+  ExpenseStatuses,
+  ExpenseSubTypes,
+  ExpenseTypes,
+  PaymentTypes,
+};

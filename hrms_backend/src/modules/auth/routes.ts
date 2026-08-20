@@ -67,14 +67,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/logout", async (request, reply) => {
-    const token = request.cookies?.[fastify.config.SESSION_COOKIE_NAME];
-    if (token) {
+    const service = new AuthService(fastify.store, fastify.config.JWT_SECRET, fastify.emailDelivery);
+    const revokedJtis = new Set<string>();
+    for (const token of logoutTokens(request, fastify.config.SESSION_COOKIE_NAME)) {
       try {
         const claims = verifyJwt(token, fastify.config.JWT_SECRET);
-        const service = new AuthService(fastify.store, fastify.config.JWT_SECRET, fastify.emailDelivery);
+        if (revokedJtis.has(claims.jti)) {
+          continue;
+        }
         await service.logout(claims.jti);
+        revokedJtis.add(claims.jti);
       } catch {
-        // Clear stale/invalid browser cookies without leaking token validity.
+        // Keep logout idempotent and clear stale/invalid browser cookies without leaking token validity.
       }
     }
     reply.clearCookie(fastify.config.SESSION_COOKIE_NAME, {
@@ -155,6 +159,28 @@ async function parseCompanyLogoUpload(request: FastifyRequest) {
 
 function sessionCookieSameSite(cookieSecure: boolean): "lax" | "none" {
   return cookieSecure ? "none" : "lax";
+}
+
+function logoutTokens(request: FastifyRequest, sessionCookieName: string): string[] {
+  const tokens = new Set<string>();
+  const bearerToken = bearerTokenFromAuthorization(request.headers.authorization);
+  if (bearerToken) {
+    tokens.add(bearerToken);
+  }
+  const cookieToken = request.cookies?.[sessionCookieName]?.trim();
+  if (cookieToken) {
+    tokens.add(cookieToken);
+  }
+  return [...tokens];
+}
+
+function bearerTokenFromAuthorization(authorization: string | undefined): string | null {
+  if (!authorization) {
+    return null;
+  }
+  const match = /^Bearer(?:\s+(.+))?$/iu.exec(authorization.trim());
+  const token = match?.[1]?.trim();
+  return token || null;
 }
 
 function appendServerTiming(reply: FastifyReply, name: string, startedAt: bigint): void {

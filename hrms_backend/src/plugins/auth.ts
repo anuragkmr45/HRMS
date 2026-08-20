@@ -2,6 +2,26 @@ import fp from "fastify-plugin";
 import { verifyJwt } from "#auth";
 import { unauthorized } from "../platform/errors.js";
 
+export interface SelectedAuthToken {
+  token: string | undefined;
+  source: "bearer" | "cookie" | "none";
+}
+
+export function selectAuthToken(input: {
+  authorization?: string;
+  cookieToken?: string;
+}): SelectedAuthToken {
+  const bearerToken = parseBearerToken(input.authorization);
+  if (bearerToken !== undefined) {
+    return { token: bearerToken, source: "bearer" };
+  }
+  const cookieToken = input.cookieToken?.trim();
+  if (cookieToken) {
+    return { token: cookieToken, source: "cookie" };
+  }
+  return { token: undefined, source: "none" };
+}
+
 export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("actor");
 
@@ -38,16 +58,17 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     const cookieToken = request.cookies?.[fastify.config.SESSION_COOKIE_NAME];
-    const authHeader = request.headers.authorization;
-    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
-    const token = cookieToken ?? bearerToken;
-    if (!token) {
-      throw unauthorized();
+    const selected = selectAuthToken({
+      authorization: request.headers.authorization,
+      cookieToken
+    });
+    if (!selected.token) {
+      throw selected.source === "bearer" ? unauthorized("Invalid or expired session") : unauthorized();
     }
 
     let claims: ReturnType<typeof verifyJwt>;
     try {
-      claims = verifyJwt(token, fastify.config.JWT_SECRET);
+      claims = verifyJwt(selected.token, fastify.config.JWT_SECRET);
     } catch {
       throw unauthorized("Invalid or expired session");
     }
@@ -62,3 +83,11 @@ export const authPlugin = fp(async (fastify) => {
     request.actor = actor;
   });
 });
+
+function parseBearerToken(authorization: string | undefined): string | undefined {
+  if (!authorization) {
+    return undefined;
+  }
+  const match = /^Bearer(?:\s+(.+))?$/iu.exec(authorization.trim());
+  return match ? (match[1]?.trim() ?? "") : undefined;
+}
