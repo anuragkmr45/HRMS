@@ -72,6 +72,7 @@ import {
   canonicalAttendanceRequestHash,
   type AttendanceCommandEnvelopeInput,
 } from "./command-service.js";
+import { recordAttendanceReviewQueueAge } from "./observability.js";
 import {
   normalizeAttendancePolicyConfig,
   type AttendanceMode,
@@ -421,6 +422,26 @@ function employeePunchSource(source: EmployeePunchSource): EmployeePunchSource {
 
 function assertNeverSource(value: never): never {
   throw badRequest("Unsupported attendance punch source.", { source: String(value) });
+}
+
+function observeManagerRegularizationQueueAge(
+  requests: AttendanceRegularizationRequest[],
+): void {
+  const nowMs = Date.now();
+  for (const request of requests) {
+    if (request.status !== AttendanceRegularizationStatuses.Pending) {
+      continue;
+    }
+    const createdAtMs = Date.parse(request.created_at);
+    if (!Number.isFinite(createdAtMs)) {
+      continue;
+    }
+    recordAttendanceReviewQueueAge({
+      ageSeconds: Math.max(0, Math.floor((nowMs - createdAtMs) / 1000)),
+      queue: "attendance_regularization_manager",
+      status: "pending",
+    });
+  }
 }
 
 export class AttendanceService {
@@ -998,6 +1019,7 @@ export class AttendanceService {
     const filtered = scoped.filter(
       (request) => !status || request.status === status,
     );
+    observeManagerRegularizationQueueAge(scoped);
     return {
       ...page(
         filtered.map((request) => this.presentRegularization(request)),

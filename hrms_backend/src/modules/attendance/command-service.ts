@@ -62,6 +62,14 @@ import {
 } from "./shift-resolver.js";
 import { canonicalJsonHash } from "./canonical-json.js";
 import type { AttendanceAutoPunchOutClosure } from "./service.js";
+import {
+  recordAttendanceDecision,
+  recordAttendanceDuplicateEvent,
+  recordAttendanceLocationAccuracy,
+  type AttendanceDecisionObservation,
+  type AttendanceDuplicateEventObservation,
+  type AttendanceLocationAccuracyObservation,
+} from "./observability.js";
 
 export interface AttendanceCommandInput {
   event_type: AttendancePunchEventType;
@@ -101,6 +109,9 @@ interface AttendanceCommandOutcome {
   response: Record<string, unknown>;
   responseStatus: number;
   replayed?: boolean;
+  decisionObservation?: AttendanceDecisionObservation;
+  locationAccuracyObservation?: AttendanceLocationAccuracyObservation;
+  duplicateObservation?: AttendanceDuplicateEventObservation;
 }
 
 interface LocationEvidenceDecisionContext {
@@ -276,6 +287,50 @@ function isRecognizedGeoRejectedDecision(
   return !decision.allowed && geoRejectedReasonCodes.has(decision.reasonCode);
 }
 
+function emitAttendanceCommandObservability(
+  outcome: AttendanceCommandOutcome,
+): void {
+  if (outcome.duplicateObservation) {
+    recordAttendanceDuplicateEvent(outcome.duplicateObservation);
+    return;
+  }
+  if (outcome.replayed) return;
+  if (outcome.decisionObservation) {
+    recordAttendanceDecision(outcome.decisionObservation);
+  }
+  if (outcome.locationAccuracyObservation) {
+    recordAttendanceLocationAccuracy(outcome.locationAccuracyObservation);
+  }
+}
+
+function replaySourceChannel(
+  command: AttendanceCommandExecutionRecord,
+): AttendancePunchSourceChannel | "unknown" {
+  const snapshot = command.request_snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return "unknown";
+  }
+  const record = snapshot as Record<string, unknown>;
+  const envelope = record.envelope;
+  if (envelope && typeof envelope === "object" && !Array.isArray(envelope)) {
+    const commandPayload = (envelope as Record<string, unknown>).command;
+    if (
+      commandPayload &&
+      typeof commandPayload === "object" &&
+      !Array.isArray(commandPayload)
+    ) {
+      const source = (commandPayload as Record<string, unknown>).source;
+      return typeof source === "string"
+        ? (source as AttendancePunchSourceChannel)
+        : "unknown";
+    }
+  }
+  const source = record.source;
+  return typeof source === "string"
+    ? (source as AttendancePunchSourceChannel)
+    : "unknown";
+}
+
 function isoDateTime(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
 }
@@ -387,7 +442,7 @@ export class AttendanceCommandService {
       );
     }
     const repository = new PostgresAttendanceCommandRepository(pool);
-    return repository.transaction(async (tx) => {
+    const closure = await repository.transaction(async (tx) => {
       const state = await tx.ensureAndLockEmployeeState(
         input.companyId,
         input.employeeUserId,
@@ -576,6 +631,17 @@ export class AttendanceCommandService {
           day as unknown as AttendanceAutoPunchOutClosure["day_record"],
       };
     });
+    if (closure) {
+      recordAttendanceDecision({
+        sourceChannel: "admin",
+        outcome: "allowed",
+        decisionType: "auto_checkout",
+        commandOrigin: "system",
+        eventType: AttendancePunchEventTypes.CheckOut,
+        reasonCode: "auto_punch_out",
+      });
+    }
+    return closure;
   }
 
   async execute(input: {
@@ -1042,7 +1108,24 @@ export class AttendanceCommandService {
               responseHash,
               responseStatus: 409,
             });
-            return { response, responseStatus: 409 };
+            return {
+              response,
+              responseStatus: 409,
+              decisionObservation: {
+                sourceChannel: commandInput.source,
+                outcome: "denied",
+                decisionType: "manual_attendance",
+                commandOrigin: commandKind,
+                eventType: commandInput.event_type,
+                reasonCode: code,
+              },
+              locationAccuracyObservation: locationEvidence
+                ? {
+                    sourceChannel: commandInput.source,
+                    accuracyMeters: locationEvidence.accuracyMeters,
+                  }
+                : undefined,
+            };
           }
           const decision = await tx.createDecision({
             commandExecutionId: command.id,
@@ -1184,9 +1267,27 @@ export class AttendanceCommandService {
             responseHash,
             responseStatus: 200,
           });
-          return { response, responseStatus: 200 };
+          return {
+            response,
+            responseStatus: 200,
+            decisionObservation: {
+              sourceChannel: commandInput.source,
+              outcome: "allowed",
+              decisionType: "manual_attendance",
+              commandOrigin: commandKind,
+              eventType: commandInput.event_type,
+              reasonCode: null,
+            },
+            locationAccuracyObservation: locationEvidence
+              ? {
+                  sourceChannel: commandInput.source,
+                  accuracyMeters: locationEvidence.accuracyMeters,
+                }
+              : undefined,
+          };
         },
       );
+      emitAttendanceCommandObservability(result);
       if (result.responseStatus === 409) {
         return this.finalizeSelfServiceOutcome(result);
       }
@@ -1205,6 +1306,7 @@ export class AttendanceCommandService {
               requestHash,
             ),
           );
+          emitAttendanceCommandObservability(result);
           return this.finalizeSelfServiceOutcome(result);
         }
         throw conflict(
@@ -1465,11 +1567,25 @@ export class AttendanceCommandService {
         responseHash,
         responseStatus: 200,
       });
-      return { response, responseStatus: 200 };
+      return {
+        response,
+        responseStatus: 200,
+        decisionObservation: {
+          sourceChannel: "admin",
+          outcome: "allowed",
+          decisionType: input.commandKind,
+          commandOrigin: input.commandKind,
+          eventType: input.command.event_type,
+          reasonCode: null,
+        },
+      };
     };
     const result = existingTransaction
       ? await run(existingTransaction)
       : await new PostgresAttendanceCommandRepository(pool!).transaction(run);
+    if (!existingTransaction) {
+      emitAttendanceCommandObservability(result);
+    }
     return result.replayed
       ? markAttendanceReplayResponse(result.response)
       : result.response;
@@ -1514,7 +1630,7 @@ export class AttendanceCommandService {
       throw new Error(
         "PostgreSQL attendance commands require a configured pgPool.",
       );
-    return new PostgresAttendanceCommandRepository(pool).transaction(
+    const result = await new PostgresAttendanceCommandRepository(pool).transaction(
       async (tx) => {
         const locked = (
           await tx.query<{
@@ -1886,6 +2002,24 @@ export class AttendanceCommandService {
         };
       },
     );
+    if (input.decision === "approve") {
+      for (const application of result.applications) {
+        const replacementPunch = application.replacement_punch;
+        if (!replacementPunch) continue;
+        recordAttendanceDecision({
+          sourceChannel: "admin",
+          outcome: "allowed",
+          decisionType: "approved_regularization",
+          commandOrigin: "approved_regularization",
+          eventType:
+            typeof replacementPunch.event_type === "string"
+              ? (replacementPunch.event_type as AttendancePunchEventType)
+              : undefined,
+          reasonCode: null,
+        });
+      }
+    }
+    return result;
   }
 
   /* Legacy method body retained below for replacement by the transaction-aware implementation. */
@@ -2234,6 +2368,11 @@ export class AttendanceCommandService {
       response: command.response_snapshot,
       responseStatus: key.response_status,
       replayed: true,
+      duplicateObservation: {
+        duplicateKind: "platform_idempotency_replay",
+        sourceChannel: replaySourceChannel(command),
+        reasonCode: "platform_idempotency_replay",
+      },
     };
   }
 
@@ -2314,6 +2453,11 @@ export class AttendanceCommandService {
       response: command.response_snapshot,
       responseStatus: command.response_status,
       replayed: true,
+      duplicateObservation: {
+        duplicateKind: "client_event_replay",
+        sourceChannel: replaySourceChannel(command),
+        reasonCode: "client_event_replay",
+      },
     };
   }
 

@@ -32,6 +32,11 @@ import {
   type AttendanceOfflineInboxRecord,
   type OfflineSyncSecuritySignalType,
 } from "./command-repository.js";
+import {
+  recordAttendanceDuplicateEvent,
+  recordAttendanceLocationAccuracy,
+  type AttendanceDuplicateEventObservation,
+} from "./observability.js";
 
 type IndexedOfflineEvent = {
   index: number;
@@ -68,7 +73,7 @@ export class AttendanceOfflineSyncService {
     }
 
     const repository = new PostgresAttendanceCommandRepository(pool);
-    return repository.transaction(async (tx) => {
+    const response = await repository.transaction(async (tx) => {
       await tx.lockOfflineClientEventIds({
         companyId: context.companyId,
         actorUserId: context.userId,
@@ -156,6 +161,24 @@ export class AttendanceOfflineSyncService {
         results,
       });
     });
+    for (const [index, result] of response.results.entries()) {
+      const duplicateObservation = offlineDuplicateObservation(result);
+      if (duplicateObservation) {
+        recordAttendanceDuplicateEvent(duplicateObservation);
+      }
+      const event = input.events[index];
+      if (
+        result.sync_status === "accepted" &&
+        event?.location &&
+        hasCoordinateEvidence(event.location)
+      ) {
+        recordAttendanceLocationAccuracy({
+          sourceChannel: "mobile_offline",
+          accuracyMeters: event.location.accuracy_meters,
+        });
+      }
+    }
+    return response;
   }
 
   private async processEvent(
@@ -512,6 +535,45 @@ function duplicateSequenceResult(
     processed_at: serverReceivedAt,
     payroll_eligible: false,
   });
+}
+
+function offlineDuplicateObservation(
+  result: AttendanceOfflineSyncResult,
+): AttendanceDuplicateEventObservation | null {
+  switch (result.reason_code) {
+    case "offline_sync.replayed":
+      return {
+        duplicateKind: "offline_client_event_replay",
+        sourceChannel: "mobile_offline",
+        reasonCode: result.reason_code,
+      };
+    case "offline_sync.changed_body_conflict":
+      return {
+        duplicateKind: "offline_changed_body_conflict",
+        sourceChannel: "mobile_offline",
+        reasonCode: result.reason_code,
+      };
+    case "offline_sync.duplicate_sequence":
+      return {
+        duplicateKind: "offline_duplicate_sequence",
+        sourceChannel: "mobile_offline",
+        reasonCode: result.reason_code,
+      };
+    case "offline_sync.sequence_gap":
+      return {
+        duplicateKind: "offline_sequence_gap",
+        sourceChannel: "mobile_offline",
+        reasonCode: result.reason_code,
+      };
+    case "offline_sync.sequence_out_of_order":
+      return {
+        duplicateKind: "offline_sequence_out_of_order",
+        sourceChannel: "mobile_offline",
+        reasonCode: result.reason_code,
+      };
+    default:
+      return null;
+  }
 }
 
 async function persistOfflineLocationEvidence(

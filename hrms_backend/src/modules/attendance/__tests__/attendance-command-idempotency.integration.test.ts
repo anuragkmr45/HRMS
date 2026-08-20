@@ -3,6 +3,7 @@ import { AttendanceCoordinateRetentionDefaults } from "#shared";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 import { canonicalAttendanceResponseHash } from "../command-service.js";
+import { setAttendanceObservabilityTestSink } from "../observability.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -109,6 +110,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       try {
         await app?.close();
       } finally {
+        setAttendanceObservabilityTestSink(null);
         if (originalDatabaseUrl === undefined) {
           delete process.env.DATABASE_URL;
         } else {
@@ -303,6 +305,12 @@ describe("PostgreSQL attendance command idempotency", () => {
   });
 
   it("replays one completed command and rejects a changed request", async () => {
+    const decisions: unknown[] = [];
+    const duplicates: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      decision: (attributes) => decisions.push(attributes),
+      duplicateEvent: (attributes) => duplicates.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const idempotencyKey = "00000000-0000-4000-8000-000000000101";
     const headers = {
@@ -373,6 +381,17 @@ describe("PostgreSQL attendance command idempotency", () => {
       },
       day_status: first.json().day_status,
     });
+    expect(decisions).toContainEqual(expect.objectContaining({
+      source_channel: "web",
+      outcome: "allowed",
+      decision_type: "manual_attendance",
+      command_origin: "employee_manual_now",
+      event_type: "check_in",
+    }));
+    expect(duplicates).toContainEqual(expect.objectContaining({
+      duplicate_kind: "client_event_replay",
+      source_channel: "web",
+    }));
 
     const counts = await app.store.pgPool!.query<{
       platform_keys: string;
@@ -968,6 +987,10 @@ describe("PostgreSQL attendance command idempotency", () => {
   });
 
   it("persists canonical location evidence without leaking coordinates into generic artifacts", async () => {
+    const accuracies: Array<{ value: number; attributes: unknown }> = [];
+    setAttendanceObservabilityTestSink({
+      locationAccuracy: (value, attributes) => accuracies.push({ value, attributes }),
+    });
     const employee = await loginAs(app, "E1");
     const idempotencyKey = testClientEventId(401);
     const capturedAt = new Date(Date.now() - 60_000).toISOString();
@@ -1009,6 +1032,13 @@ describe("PostgreSQL attendance command idempotency", () => {
     expect(first.statusCode).toBe(200);
     expect(first.json().punch).not.toHaveProperty("location");
     expect(first.json().punch.metadata).toEqual({ note: "front door" });
+    expect(accuracies).toContainEqual({
+      value: 8.5,
+      attributes: {
+        source_channel: "web",
+        accuracy_bucket: "0_25m",
+      },
+    });
 
     const replay = await app.inject({
       method: "POST",

@@ -26,9 +26,12 @@ importers:
       '@fastify/swagger-ui':
         specifier: ^5.2.3
         version: 5.2.6
+      '@opentelemetry/api':
+        specifier: 1.9.0
+        version: 1.9.0
       drizzle-orm:
         specifier: ^0.44.7
-        version: 0.44.7(@types/pg@8.20.0)(pg@8.20.0)
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.20.0)
       fastify:
         specifier: ^5.6.2
         version: 5.8.5
@@ -65,7 +68,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.0.15
-        version: 4.1.6(@types/node@24.12.4)(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0))
+        version: 4.1.6(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0))
 
 packages:
 
@@ -312,6 +315,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opentelemetry/api@1.9.0':
+    resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
+    engines: {node: '>=8.0.0'}
 
   '@oxc-project/types@0.129.0':
     resolution: {integrity: sha512-3oz8m3FGdr2nDXVqmFUw7jolKliC4MoyXYIG2c7gpjBnzUWQpUGIYcXYKxTdTi+N2jusvt610ckTMkxdwHkYEg==}
@@ -1587,6 +1594,8 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
+  '@opentelemetry/api@1.9.0': {}
+
   '@oxc-project/types@0.129.0': {}
 
   '@pinojs/redact@0.4.0': {}
@@ -1805,8 +1814,9 @@ snapshots:
     dependencies:
       path-type: 4.0.0
 
-  drizzle-orm@0.44.7(@types/pg@8.20.0)(pg@8.20.0):
+  drizzle-orm@0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.20.0):
     optionalDependencies:
+      '@opentelemetry/api': 1.9.0
       '@types/pg': 8.20.0
       pg: 8.20.0
 
@@ -2430,7 +2440,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.9.0
 
-  vitest@4.1.6(@types/node@24.12.4)(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)):
+  vitest@4.1.6(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.6
       '@vitest/mocker': 4.1.6(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0))
@@ -2453,6 +2463,7 @@ snapshots:
       vite: 8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@opentelemetry/api': 1.9.0
       '@types/node': 24.12.4
     transitivePeerDependencies:
       - msw

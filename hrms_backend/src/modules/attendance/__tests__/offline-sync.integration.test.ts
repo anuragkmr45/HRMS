@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 import { ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION } from "../offline-sync-contract.js";
+import { setAttendanceObservabilityTestSink } from "../observability.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 
@@ -24,6 +25,7 @@ describe("attendance offline sync ingestion", () => {
       try {
         await app?.close();
       } finally {
+        setAttendanceObservabilityTestSink(null);
         if (originalDatabaseUrl === undefined) {
           delete process.env.DATABASE_URL;
         } else {
@@ -68,6 +70,10 @@ describe("attendance offline sync ingestion", () => {
   });
 
   it("replays the same event without duplicating durable rows or outbox", async () => {
+    const duplicates: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      duplicateEvent: (attributes) => duplicates.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -90,6 +96,11 @@ describe("attendance offline sync ingestion", () => {
       reason_code: "offline_sync.replayed",
       server_received_at: first.json().results[0].server_received_at,
     });
+    expect(duplicates).toContainEqual({
+      duplicate_kind: "offline_client_event_replay",
+      source_channel: "mobile_offline",
+      reason_code: "offline_sync.replayed",
+    });
     await expectCounts(app, {
       inbox: "1",
       events: "1",
@@ -104,6 +115,10 @@ describe("attendance offline sync ingestion", () => {
   });
 
   it("returns changed-body conflict for reused client_event_id", async () => {
+    const duplicates: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      duplicateEvent: (attributes) => duplicates.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -126,6 +141,11 @@ describe("attendance offline sync ingestion", () => {
       verification_status: "rejected",
       reason_code: "offline_sync.changed_body_conflict",
     });
+    expect(duplicates).toContainEqual({
+      duplicate_kind: "offline_changed_body_conflict",
+      source_channel: "mobile_offline",
+      reason_code: "offline_sync.changed_body_conflict",
+    });
     await expectCounts(app, {
       inbox: "1",
       events: "1",
@@ -140,6 +160,10 @@ describe("attendance offline sync ingestion", () => {
   });
 
   it("rejects a different event that reuses a device sequence", async () => {
+    const duplicates: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      duplicateEvent: (attributes) => duplicates.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -158,6 +182,11 @@ describe("attendance offline sync ingestion", () => {
       verification_status: "rejected",
       reason_code: "offline_sync.duplicate_sequence",
     });
+    expect(duplicates).toContainEqual({
+      duplicate_kind: "offline_duplicate_sequence",
+      source_channel: "mobile_offline",
+      reason_code: "offline_sync.duplicate_sequence",
+    });
     await expectCounts(app, {
       inbox: "1",
       events: "1",
@@ -172,6 +201,10 @@ describe("attendance offline sync ingestion", () => {
   });
 
   it("treats a first sequence greater than 1 as a suspicious gap without advancing cursor", async () => {
+    const duplicates: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      duplicateEvent: (attributes) => duplicates.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     const registeredDeviceId = await insertRegisteredDevice(app, {
@@ -186,6 +219,11 @@ describe("attendance offline sync ingestion", () => {
     expect(gap.json().results[0]).toMatchObject({
       sync_status: "deferred",
       verification_status: "review_required",
+      reason_code: "offline_sync.sequence_gap",
+    });
+    expect(duplicates).toContainEqual({
+      duplicate_kind: "offline_sequence_gap",
+      source_channel: "mobile_offline",
       reason_code: "offline_sync.sequence_gap",
     });
     await expectCounts(app, {

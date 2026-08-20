@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../__tests__/real-infra.js";
 import { PostgresAttendanceCommandRepository } from "../../modules/attendance/command-repository.js";
+import { setAttendanceObservabilityTestSink } from "../../modules/attendance/observability.js";
 import { resolveEffectiveAttendancePolicy } from "../../modules/attendance/policy-resolver.js";
 import { AttendanceAutoPunchoutWorker } from "../attendance-auto-punchout-worker.js";
 
@@ -216,12 +217,17 @@ describe("AttendanceAutoPunchoutWorker PostgreSQL DB-first flow", () => {
     try {
       await app?.close();
     } finally {
+      setAttendanceObservabilityTestSink(null);
       if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = originalDatabaseUrl;
     }
   });
 
   it("closes an eligible authoritative session and writes projection and outbox in one command transaction", async () => {
+    const decisions: unknown[] = [];
+    setAttendanceObservabilityTestSink({
+      decision: (attributes) => decisions.push(attributes),
+    });
     const employee = await loginAs(app, "E1");
     const companyId = employeeCompanyId(app, employee.user.id);
     await createAttendancePolicy(app, {
@@ -245,6 +251,14 @@ describe("AttendanceAutoPunchoutWorker PostgreSQL DB-first flow", () => {
       skipped: false,
       closed_sessions: 1,
       punches_created: 1,
+    });
+    expect(decisions).toContainEqual({
+      source_channel: "admin",
+      outcome: "allowed",
+      decision_type: "auto_checkout",
+      command_origin: "system",
+      event_type: "check_out",
+      reason_code: "auto_punch_out",
     });
     const closure = result.closures[0];
     expect(closure?.first_check_in_id).toMatch(

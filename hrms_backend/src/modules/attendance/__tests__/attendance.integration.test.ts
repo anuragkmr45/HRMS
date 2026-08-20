@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authHeader as baseAuthHeader, loginAs } from "#testing";
 import { buildApp } from "../../../app.js";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
+import { setAttendanceObservabilityTestSink } from "../observability.js";
 
 type TestApp = Awaited<ReturnType<typeof buildApp>>;
 
@@ -172,6 +173,7 @@ describe("attendance", () => {
       );
       await app?.close();
     } finally {
+      setAttendanceObservabilityTestSink(null);
       if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = originalDatabaseUrl;
     }
@@ -735,6 +737,10 @@ describe("attendance", () => {
   });
 
   it("submits and approves regularization with manager scope, OCC, and exception visibility", async () => {
+    const queueAges: Array<{ value: number; attributes: unknown }> = [];
+    setAttendanceObservabilityTestSink({
+      reviewQueueAge: (value, attributes) => queueAges.push({ value, attributes }),
+    });
     const employee = await loginAs(app, "E1");
     const manager = await loginAs(app, "D1");
     const otherEmployee = await loginAs(app, "E2");
@@ -785,6 +791,12 @@ describe("attendance", () => {
       current_approver_user_id: manager.user.id,
     });
     expect(managerQueue.json().queue_counts.pending).toBeGreaterThanOrEqual(1);
+    expect(queueAges.length).toBeGreaterThanOrEqual(1);
+    expect(queueAges[0]?.value).toBeGreaterThanOrEqual(0);
+    expect(queueAges[0]?.attributes).toEqual({
+      queue: "attendance_regularization_manager",
+      status: "pending",
+    });
 
     const nonManagerQueue = await app.inject({
       method: "GET",
