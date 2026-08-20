@@ -49,13 +49,38 @@ curl -sS -X POST http://localhost:3101/api/v1/auth/login \
   -d "{\"email\":\"finance@example.test\",\"password\":\"${LOCAL_DEMO_PASSWORD:-LocalDev@123}\"}"
 ```
 
-The success response returns `access_token` and also sets the configured HttpOnly session cookie. API/mobile clients should send:
+The success response returns `access_token` and also sets the configured HttpOnly session cookie. The cookie contains the same session credential for browser transport. API/mobile clients should send:
 
 ```text
 Authorization: Bearer <access_token>
 ```
 
 Browser clients can use the session cookie. Backend RBAC/ABAC remains the source of truth.
+
+## Native Mobile Authentication
+
+Recommended current flow:
+
+1. Login over HTTPS.
+2. Read `access_token` from the JSON response.
+3. Ignore and do not depend on any `Set-Cookie` value for native authentication.
+4. Store the credential using OS secure credential storage.
+5. Send `Authorization: Bearer <access_token>` to protected APIs.
+6. Handle RBAC, tenant, active-company, validation, conflict, and rate-limit errors exactly like other clients.
+7. On `401` caused by expiry or revocation, re-authenticate because refresh is not currently supported.
+8. Send the bearer credential to `POST /api/v1/auth/logout` so the current server-side session can be revoked.
+9. Delete the credential from device secure storage after logout.
+10. Do not use browser cookies as the native session mechanism.
+
+Current limitations:
+
+- There is no separate refresh token and no `/api/v1/auth/refresh` endpoint.
+- `JWT_REFRESH_SECRET` existing in configuration does not imply a supported refresh API.
+- Clients must not invent or depend on undocumented cookie-based refresh behavior.
+
+Future recommendation: if refresh-token support is required later, implement it as a separately scoped security feature with explicit issuance, rotation, persistence or replay protection, revocation, and native transport semantics.
+
+CSRF note: the backend currently has no dedicated CSRF middleware. Native bearer requests do not require browser CSRF credentials. If CSRF protection is introduced later, it should protect unsafe cookie-authenticated browser requests without requiring CSRF credentials for pure bearer-authenticated native requests.
 
 ## Common Response Rules
 
@@ -65,6 +90,7 @@ Browser clients can use the session cookie. Backend RBAC/ABAC remains the source
 - Lists use `page` and `page_size`; some routes also support `sort` and domain filters.
 - Mutations that change workflow state require `expected_version` for OCC.
 - `403` means authenticated but forbidden by role/object policy.
+- `400 COMPANY_CONTEXT_REQUIRED` means the authenticated user does not have a valid active-company context for the operation.
 - `409` means stale `expected_version`; refresh the object and retry.
 - `429` means the client crossed an API rate limit; wait for `Retry-After` before retrying.
 - Error responses include `request_id`; include it in defect reports.

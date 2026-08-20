@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-07-27T05:42:37.882Z",
+  "database_url_loaded": true,
+  "status": "fail",
+  "failures": [
+    "cross-schema foreign keys found: [{\"constraint_schema\":\"core\",\"table_name\":\"departments\",\"foreign_table_schema\":\"platform\",\"foreign_table_name\":\"company_profiles\"},{\"constraint_schema\":\"core\",\"table_name\":\"designations\",\"foreign_table_schema\":\"platform\",\"foreign_table_name\":\"company_profiles\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"shift_templates\",\"foreign_table_schema\":\"platform\",\"foreign_table_name\":\"company_profiles\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"shift_assignments\",\"foreign_table_schema\":\"core\",\"foreign_table_name\":\"users\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"shift_instances\",\"foreign_table_schema\":\"core\",\"foreign_table_name\":\"users\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"policies\",\"foreign_table_schema\":\"platform\",\"foreign_table_name\":\"company_profiles\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"policies\",\"foreign_table_schema\":\"core\",\"foreign_table_name\":\"users\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"policy_versions\",\"foreign_table_schema\":\"core\",\"foreign_table_name\":\"users\"},{\"constraint_schema\":\"attendance\",\"table_name\":\"policy_assignments\",\"foreign_table_schema\":\"core\",\"foreign_table_name\":\"users\"}]"
+  ],
+  "notes": [
+    "verified PostGIS functional execution (3.5 USE_GEOS=1 USE_PROJ=1 USE_STATS=1)",
+    "verified 32 tables",
+    "verified 13 required indexes",
+    "verified 4 immutable audit/log triggers"
+  ]
+}
