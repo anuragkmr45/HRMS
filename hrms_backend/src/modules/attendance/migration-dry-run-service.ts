@@ -440,6 +440,9 @@ function filterDifferencesForDate(
     unexpected: filterDifferenceGroupForDate(differences.unexpected, workDate),
     changed: filterDifferenceGroupForDate(differences.changed, workDate),
     blocked: differences.blocked.filter((item) => dateFromScope(item.scope) === workDate),
+    locked_payroll_differences: differences.locked_payroll_differences.filter((item) =>
+      diffAppliesToDate(item, workDate)
+    ),
   };
 }
 

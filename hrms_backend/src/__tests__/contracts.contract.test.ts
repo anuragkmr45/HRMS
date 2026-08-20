@@ -89,6 +89,7 @@ const expectedOperations = [
   "GET /api/v1/attendance/calendar/daily",
   "GET /api/v1/attendance/calendar/monthly",
   "GET /api/v1/attendance/exceptions",
+  "GET /api/v1/attendance/payroll-periods/{id}/summary",
   "GET /api/v1/attendance/punches/my",
   "GET /api/v1/attendance/regularizations/my",
   "GET /api/v1/attendance/regularizations/queue/manager",
@@ -223,6 +224,9 @@ const expectedOperations = [
   "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections",
   "POST /api/v1/attendance/exports",
   "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish",
+  "POST /api/v1/attendance/payroll-periods",
+  "POST /api/v1/attendance/payroll-periods/{id}/lock",
+  "POST /api/v1/attendance/payroll-periods/{id}/unlock",
   "POST /api/v1/attendance/regularizations",
   "POST /api/v1/attendance/regularizations/{id}/decision",
   "POST /api/v1/attendance/offline-sync",
@@ -1516,7 +1520,7 @@ describe("API contracts", () => {
     expect(rows.map((row) => row.key).sort()).toEqual(
       [...expectedOperations].sort(),
     );
-    expect(rows.length).toBe(255);
+    expect(rows.length).toBe(259);
 
     const attendancePunch = spec.paths?.["/api/v1/attendance/punches"]?.post as
       | Record<string, any>

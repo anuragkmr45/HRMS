@@ -70,6 +70,10 @@ import {
   type AttendanceDuplicateEventObservation,
   type AttendanceLocationAccuracyObservation,
 } from "./observability.js";
+import {
+  acquirePayrollAttendancePeriodLock,
+  recordApprovedRegularizationPayrollAdjustments,
+} from "./payroll-period-service.js";
 
 export interface AttendanceCommandInput {
   event_type: AttendancePunchEventType;
@@ -1663,6 +1667,7 @@ export class AttendanceCommandService {
           input.companyId,
           input.employeeUserId,
         );
+        await acquirePayrollAttendancePeriodLock(tx, input.companyId);
         input.authorize(locked);
         const items = (
           await tx.query<{
@@ -1980,6 +1985,16 @@ export class AttendanceCommandService {
                   )
                 ).rows[0] ?? {},
               );
+        if (input.decision === "approve") {
+          await recordApprovedRegularizationPayrollAdjustments(tx, {
+            companyId: input.companyId,
+            employeeUserId: input.employeeUserId,
+            workDate: input.workDate,
+            regularizationRequestId: input.regularizationRequestId,
+            regularizationRequestItemIds: items.map((item) => item.id),
+            correctedDay: day,
+          });
+        }
         await tx.insertOutboxEvent(
           buildRegularizationDecisionEvent({
             companyId: input.companyId,

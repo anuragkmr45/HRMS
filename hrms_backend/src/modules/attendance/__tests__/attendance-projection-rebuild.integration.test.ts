@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AuthUser } from "#shared";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 import { seedIds } from "../../../platform/data-store.js";
 import {
   AttendanceProjectionRebuildService,
   AttendanceProjectionReplayError,
 } from "../projection-rebuild-service.js";
+import { AttendancePayrollPeriodService } from "../payroll-period-service.js";
 import { AttendanceCoordinatePurgeWorker } from "../../../workers/attendance-coordinate-purge-worker.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
@@ -56,7 +58,7 @@ describe("PostgreSQL attendance projection rebuild service", () => {
       previousState: "working",
       nextState: "completed",
     });
-  });
+  }, 30_000);
 
   afterEach(async () => {
     try {
@@ -98,6 +100,96 @@ describe("PostgreSQL attendance projection rebuild service", () => {
     expect(afterFirst.break_seconds).toBe(1_800);
     expect(second.status).toBe("succeeded");
     expect(afterSecond).toEqual(afterFirst);
+  });
+
+  it("reports locked payroll differences without mutating finalized snapshots", async () => {
+    await service().run(baseInput("rebuild"));
+    const liveBeforeLock = await projectionSnapshot(app, companyId);
+    expect(liveBeforeLock.work_seconds).toBe(30_600);
+
+    const payroll = new AttendancePayrollPeriodService(app.store);
+    const period = await payroll.createPeriod(adminActor(app), {
+      period_start: day,
+      period_end: day,
+    });
+    const locked = await payroll.lockPeriod(adminActor(app), period.id, {
+      reason: "Projection rebuild test lock",
+    });
+    const lockedVersion = locked.version;
+    const baseBefore = await payroll.summary(adminActor(app), period.id, {});
+    expect(baseBefore).toMatchObject({
+      finalized: true,
+      base_source: "finalized_snapshot",
+      base: { records: 1, total_work_seconds: 30_600 },
+    });
+
+    await insertAcceptedPunch(app, companyId, {
+      ordinal: 5,
+      eventType: "check_out",
+      occurredAt: "2026-05-18T17:00:00.000Z",
+      previousState: "working",
+      nextState: "completed",
+      sessionId: "99999999-9999-4999-8999-999999999905",
+    });
+    await insertRegularizationApplication(app, companyId, {
+      operation: "replace",
+      targetOrdinal: 4,
+      replacementOrdinal: 5,
+      applicationId: "77777777-7777-4777-8777-777777777702",
+    });
+
+    const reconcile = await service().run(baseInput("reconcile"));
+    expect(reconcile.status).toBe("succeeded");
+    expect(reconcile.rows_written).toEqual(emptyRowsWrittenExpectation());
+    expect(reconcile.differences.locked_payroll_differences).toEqual([
+      expect.objectContaining({
+        key: `${day}:${period.id}`,
+        existing: expect.objectContaining({
+          payroll_period_id: period.id,
+          period_version: lockedVersion,
+          finalized: expect.objectContaining({ work_seconds: 30_600 }),
+        }),
+        expected: expect.objectContaining({
+          live_projection: expect.objectContaining({ work_seconds: 27_000 }),
+        }),
+      }),
+    ]);
+    await expect(projectionSnapshot(app, companyId)).resolves.toMatchObject({
+      work_seconds: 30_600,
+    });
+
+    const rebuild = await service().run(baseInput("rebuild"));
+    expect(rebuild.status).toBe("succeeded");
+    expect(rebuild.safe_to_rebuild).toBe(true);
+    expect(rebuild.effective_source_record_count).toBe(4);
+    expect(rebuild.rows_written.daily_records_upserted).toBe(1);
+    expect(rebuild.differences.locked_payroll_differences[0]).toMatchObject({
+      existing: expect.objectContaining({
+        payroll_period_id: period.id,
+        period_version: lockedVersion,
+        finalized: expect.objectContaining({ work_seconds: 30_600 }),
+      }),
+      expected: expect.objectContaining({
+        live_projection: expect.objectContaining({ work_seconds: 27_000 }),
+      }),
+    });
+    await expect(projectionSnapshot(app, companyId)).resolves.toMatchObject({
+      work_seconds: 27_000,
+    });
+
+    const baseAfter = await payroll.summary(adminActor(app), period.id, {});
+    expect(baseAfter).toMatchObject({
+      finalized: true,
+      base_source: "finalized_snapshot",
+      base: { records: 1, total_work_seconds: 30_600 },
+      adjustment_summary: { count: 0 },
+    });
+    expect(baseAfter.rows).toEqual([
+      expect.objectContaining({
+        period_version: lockedVersion,
+        work_seconds: 30_600,
+      }),
+    ]);
   });
 
   it("leaves immutable facts unchanged across rebuild", async () => {
@@ -361,6 +453,20 @@ async function seedCompanyId(app: TestApp): Promise<string> {
   ).rows[0];
   if (!row?.company_id) throw new Error("Seed company is missing.");
   return row.company_id;
+}
+
+function adminActor(app: TestApp): AuthUser {
+  return app.store.users.find((user) => user.id === seedIds.admin)! as AuthUser;
+}
+
+function emptyRowsWrittenExpectation() {
+  return {
+    sessions_deleted: 0,
+    break_segments_deleted: 0,
+    sessions_inserted: 0,
+    break_segments_inserted: 0,
+    daily_records_upserted: 0,
+  };
 }
 
 async function insertShiftInstance(
@@ -677,9 +783,15 @@ async function insertCorruptedProjection(
 async function insertRegularizationApplication(
   app: TestApp,
   companyId: string,
-  input: { operation: "void"; targetOrdinal: number; applicationId: string },
+  input: {
+    operation: "replace" | "void";
+    targetOrdinal: number;
+    applicationId: string;
+    replacementOrdinal?: number;
+  },
 ): Promise<void> {
   const target = idsFor(input.targetOrdinal);
+  const replacement = input.replacementOrdinal ? idsFor(input.replacementOrdinal) : null;
   const requestId = "77777777-7777-4777-8777-777777777711";
   const itemId = "77777777-7777-4777-8777-777777777712";
   const actionId = "77777777-7777-4777-8777-777777777713";
@@ -702,8 +814,16 @@ async function insertRegularizationApplication(
        id, company_id, regularization_request_id, ordinal, operation,
        target_punch_event_id, event_type, occurred_at, created_at
      )
-     VALUES ($1,$2,$3,0,$4,$5,NULL,NULL,'2026-05-18T19:00:00.000Z')`,
-    [itemId, companyId, requestId, input.operation, target.punch],
+     VALUES ($1,$2,$3,0,$4,$5,$6,$7,'2026-05-18T19:00:00.000Z')`,
+    [
+      itemId,
+      companyId,
+      requestId,
+      input.operation,
+      target.punch,
+      input.operation === "replace" ? "check_out" : null,
+      input.operation === "replace" ? "2026-05-18T17:00:00.000Z" : null,
+    ],
   );
   await app.store.pgPool!.query(
     `INSERT INTO attendance.regularization_actions (
@@ -723,7 +843,7 @@ async function insertRegularizationApplication(
        replacement_punch_event_id, attendance_event_id, applied_by_user_id,
        applied_at
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL,$8,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
        '2026-05-18T20:00:00.000Z')`,
     [
       input.applicationId,
@@ -733,6 +853,8 @@ async function insertRegularizationApplication(
       actionId,
       input.operation,
       target.punch,
+      replacement?.punch ?? null,
+      replacement?.attendanceEvent ?? null,
       seedIds.admin,
     ],
   );

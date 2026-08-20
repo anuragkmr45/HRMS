@@ -12,6 +12,7 @@ import {
 } from "#shared";
 import { badRequest, unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
+import { AttendancePayrollPeriodService } from "./payroll-period-service.js";
 import { AttendanceOfflineSyncService } from "./offline-sync-service.js";
 import {
   ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER,
@@ -57,6 +58,22 @@ const attendanceExportSchema = z.object({
   filters: attendanceExportFiltersSchema.optional(),
   columns: z.array(z.string().min(1).max(80)).max(80).optional(),
   format: z.enum(["csv", "xlsx", "json"]).optional(),
+});
+const attendancePayrollPeriodCreateSchema = z.object({
+  company_id: z.uuid().optional(),
+  period_start: isoDateQuerySchema,
+  period_end: isoDateQuerySchema,
+});
+const attendancePayrollPeriodActionSchema = z.object({
+  company_id: z.uuid().optional(),
+  reason: z.string().trim().max(1000).optional(),
+});
+const attendancePayrollPeriodUnlockSchema = z.object({
+  company_id: z.uuid().optional(),
+  reason: z.string().trim().min(1).max(1000),
+});
+const attendancePayrollPeriodSummaryQuerySchema = z.object({
+  company_id: z.uuid().optional(),
 });
 const geofenceVersionPublishSchema = z
   .object({
@@ -305,6 +322,52 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     return service.decideRegularization(request.actor, params.id, input);
+  });
+
+  fastify.post("/payroll-periods", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    return new AttendancePayrollPeriodService(fastify.store).createPeriod(
+      request.actor,
+      attendancePayrollPeriodCreateSchema.parse(request.body),
+    );
+  });
+
+  fastify.post("/payroll-periods/:id/lock", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).lockPeriod(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodActionSchema.parse(request.body ?? {}),
+    );
+  });
+
+  fastify.post("/payroll-periods/:id/unlock", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).unlockPeriod(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodUnlockSchema.parse(request.body ?? {}),
+    );
+  });
+
+  fastify.get("/payroll-periods/:id/summary", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).summary(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodSummaryQuerySchema.parse(request.query),
+    );
   });
 
   fastify.post(

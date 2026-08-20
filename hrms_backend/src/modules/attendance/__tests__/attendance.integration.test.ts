@@ -157,6 +157,59 @@ function ensureCompanyContexts(app: TestApp, companyId: string) {
   }
 }
 
+async function insertPayrollDailyRecord(
+  app: TestApp,
+  input: {
+    id?: string;
+    companyId: string;
+    employeeUserId: string;
+    workDate: string;
+    status?: "present" | "absent";
+    workSeconds?: number;
+    workMinutes?: number;
+    regularizationStatus?: string | null;
+  },
+): Promise<string> {
+  const id = input.id ?? randomUUID();
+  const status = input.status ?? "present";
+  const workSeconds = input.workSeconds ?? 28_800;
+  const workMinutes = input.workMinutes ?? Math.floor(workSeconds / 60);
+  await app.store.pgPool!.query(
+    `INSERT INTO attendance.daily_records (
+       id, company_id, employee_user_id, work_date, status, day_classification,
+       presence_state, punctuality_state, evidence_state, approval_kind,
+       approval_state, payroll_state, first_check_in, last_check_out,
+       work_minutes, break_minutes, late_minutes, early_out_minutes,
+       work_seconds, break_seconds, scheduled_seconds, late_seconds,
+       early_departure_seconds, work_mode, note, exception_type,
+       regularization_status, version, created_at, updated_at, deleted_at
+     )
+     VALUES (
+       $1,$2,$3,$4::date,$5,'working_day',$6,$7,$8,'none',
+       'not_required','unprocessed',$9,$10,$11,0,0,0,$12,0,28800,0,0,
+       $13,$14,NULL,$15,1,now(),now(),NULL
+     )`,
+    [
+      id,
+      input.companyId,
+      input.employeeUserId,
+      input.workDate,
+      status,
+      status === "present" ? "present" : "absent",
+      status === "present" ? "on_time" : "not_applicable",
+      status === "present" ? "complete" : "missing",
+      status === "present" ? `${input.workDate}T09:00:00.000Z` : null,
+      status === "present" ? `${input.workDate}T17:00:00.000Z` : null,
+      workMinutes,
+      workSeconds,
+      status === "present" ? "office" : null,
+      status === "present" ? null : "Absent",
+      input.regularizationStatus ?? null,
+    ],
+  );
+  return id;
+}
+
 describe("attendance", () => {
   let app: TestApp;
 
@@ -221,6 +274,294 @@ describe("attendance", () => {
       headers: authHeader(admin.token),
     });
     expect(teamSummary.statusCode).toBe(200);
+  });
+
+  it("rejects overlapping attendance payroll periods for the same company", async () => {
+    const admin = await loginAs(app, "ADM");
+    const company = ensureActiveCompany(app);
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: "2026-08-01", period_end: "2026-08-31" },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+
+    const overlapping = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: "2026-08-15", period_end: "2026-09-15" },
+    });
+    expect(overlapping.statusCode, overlapping.body).toBe(409);
+    expect(overlapping.json().message).toMatch(/overlaps/iu);
+
+    const persisted = await app.store.pgPool!.query<{
+      exact_second_range: number;
+      overlapping_ranges: number;
+    }>(
+      `SELECT
+         count(*) FILTER (
+           WHERE period_start = '2026-08-15'::date
+             AND period_end = '2026-09-15'::date
+         )::int AS exact_second_range,
+         count(*) FILTER (
+           WHERE daterange(period_start, period_end + 1, '[)')
+             && daterange('2026-08-15'::date, '2026-09-15'::date + 1, '[)')
+         )::int AS overlapping_ranges
+       FROM attendance.payroll_periods
+       WHERE company_id = $1`,
+      [company.id],
+    );
+    expect(persisted.rows[0]).toEqual({
+      exact_second_range: 0,
+      overlapping_ranges: 1,
+    });
+  });
+
+  it("locks, unlocks, and summarizes attendance payroll periods from finalized snapshots", async () => {
+    const admin = await loginAs(app, "ADM");
+    const employee = await loginAs(app, "E1");
+    const company = ensureActiveCompany(app);
+    const workDate = "2026-05-18";
+    const dailyRecordId = randomUUID();
+    await app.store.pgPool!.query(
+      `INSERT INTO attendance.daily_records (
+         id, company_id, employee_user_id, work_date, status, day_classification,
+         presence_state, punctuality_state, evidence_state, approval_kind,
+         approval_state, payroll_state, first_check_in, last_check_out,
+         work_minutes, break_minutes, late_minutes, early_out_minutes,
+         work_seconds, break_seconds, scheduled_seconds, late_seconds,
+         early_departure_seconds, work_mode, note, exception_type,
+         regularization_status, version, created_at, updated_at, deleted_at
+       )
+       VALUES (
+         $1,$2,$3,$4::date,'present','working_day','present','on_time',
+         'complete','none','not_required','unprocessed',
+         '2026-05-18T09:00:00.000Z','2026-05-18T17:00:00.000Z',
+         480,0,0,0,28800,0,28800,0,0,'office',NULL,NULL,NULL,1,now(),now(),NULL
+       )`,
+      [dailyRecordId, company.id, employee.user.id, workDate],
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: workDate, period_end: workDate },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ state: "open", period_start: workDate, period_end: workDate });
+
+    const openSummary = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/summary`,
+      headers: authHeader(admin.token),
+    });
+    expect(openSummary.statusCode).toBe(200);
+    expect(openSummary.json()).toMatchObject({
+      finalized: false,
+      base_source: "live_daily_records",
+      base: { total_work_seconds: 28800 },
+    });
+
+    const locked = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "May payroll close" },
+    });
+    expect(locked.statusCode).toBe(200);
+    expect(locked.json()).toMatchObject({ state: "locked", snapshot_rows: 1 });
+
+    const secondLock = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: {},
+    });
+    expect(secondLock.statusCode).toBe(409);
+
+    await app.store.pgPool!.query(
+      `UPDATE attendance.daily_records
+       SET work_seconds = 3600, work_minutes = 60, updated_at = now(), version = version + 1
+       WHERE id = $1`,
+      [dailyRecordId],
+    );
+
+    const lockedSummary = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/summary`,
+      headers: authHeader(admin.token),
+    });
+    expect(lockedSummary.statusCode).toBe(200);
+    expect(lockedSummary.json()).toMatchObject({
+      finalized: true,
+      base_source: "finalized_snapshot",
+      base: { total_work_seconds: 28800 },
+      adjustment_summary: { count: 0 },
+    });
+
+    const missingReason = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/unlock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "" },
+    });
+    expect(missingReason.statusCode).toBe(400);
+
+    const crossCompany = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/unlock`,
+      headers: authHeader(admin.token),
+      payload: { company_id: randomUUID(), reason: "wrong company" },
+    });
+    expect(crossCompany.statusCode).toBe(403);
+
+    const unlocked = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/unlock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Reopening for attendance corrections" },
+    });
+    expect(unlocked.statusCode).toBe(200);
+    expect(unlocked.json()).toMatchObject({ state: "open" });
+    const actions = await app.store.pgPool!.query<{ action: string; reason: string | null }>(
+      `SELECT action, reason
+       FROM attendance.payroll_period_actions
+       WHERE company_id = $1 AND payroll_period_id = $2
+       ORDER BY occurred_at, id`,
+      [company.id, created.json().id],
+    );
+    expect(actions.rows.map((row) => row.action)).toEqual(["created", "locked", "unlocked"]);
+    expect(actions.rows.at(-1)?.reason).toBe("Reopening for attendance corrections");
+  });
+
+  it("keeps unlock and relock payroll snapshot generations isolated", async () => {
+    const admin = await loginAs(app, "ADM");
+    const employee = await loginAs(app, "E1");
+    const company = ensureActiveCompany(app);
+    const workDate = "2026-05-19";
+    const dailyRecordId = await insertPayrollDailyRecord(app, {
+      companyId: company.id,
+      employeeUserId: employee.user.id,
+      workDate,
+      workSeconds: 28_800,
+      workMinutes: 480,
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: workDate, period_end: workDate },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+
+    const firstLock = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "First close" },
+    });
+    expect(firstLock.statusCode, firstLock.body).toBe(200);
+    const firstVersion = firstLock.json().version;
+    const firstSnapshot = (await app.store.pgPool!.query<{ id: string }>(
+      `SELECT id
+       FROM attendance.payroll_attendance_snapshots
+       WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+         AND employee_user_id = $4 AND work_date = $5::date`,
+      [company.id, created.json().id, firstVersion, employee.user.id, workDate],
+    )).rows[0];
+    expect(firstSnapshot).toBeDefined();
+
+    await app.store.pgPool!.query(
+      `INSERT INTO attendance.payroll_attendance_adjustments (
+         company_id, payroll_period_id, period_version, employee_user_id, work_date,
+         source_type, source_id, regularization_request_id, finalized_snapshot_id,
+         finalized_values, corrected_values, delta_values, status,
+         created_at, updated_at
+       )
+       VALUES (
+         $1,$2,$3,$4,$5::date,'attendance_regularization_item',$6,NULL,$7,
+         '{"work_seconds":28800}'::jsonb,'{"work_seconds":32400}'::jsonb,
+         '{"work_seconds":3600}'::jsonb,'pending',now(),now()
+       )`,
+      [company.id, created.json().id, firstVersion, employee.user.id, workDate, randomUUID(), firstSnapshot!.id],
+    );
+
+    const unlocked = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/unlock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Reopen for corrected source data" },
+    });
+    expect(unlocked.statusCode, unlocked.body).toBe(200);
+    expect(unlocked.json().version).not.toBe(firstVersion);
+
+    await app.store.pgPool!.query(
+      `UPDATE attendance.daily_records
+       SET work_seconds = 3600, work_minutes = 60, updated_at = now(), version = version + 1
+       WHERE id = $1`,
+      [dailyRecordId],
+    );
+
+    const secondLock = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Second close" },
+    });
+    expect(secondLock.statusCode, secondLock.body).toBe(200);
+    const currentVersion = secondLock.json().version;
+    expect(currentVersion).not.toBe(firstVersion);
+
+    const generations = await app.store.pgPool!.query<{
+      period_version: number;
+      total_work_seconds: number;
+    }>(
+      `SELECT period_version, sum(work_seconds)::int AS total_work_seconds
+       FROM attendance.payroll_attendance_snapshots
+       WHERE company_id = $1 AND payroll_period_id = $2
+       GROUP BY period_version
+       ORDER BY period_version`,
+      [company.id, created.json().id],
+    );
+    expect(generations.rows).toEqual([
+      { period_version: firstVersion, total_work_seconds: 28_800 },
+      { period_version: currentVersion, total_work_seconds: 3_600 },
+    ]);
+
+    const summary = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/payroll-periods/${created.json().id}/summary`,
+      headers: authHeader(admin.token),
+    });
+    expect(summary.statusCode, summary.body).toBe(200);
+    expect(summary.json()).toMatchObject({
+      finalized: true,
+      base_source: "finalized_snapshot",
+      base: { records: 1, total_work_seconds: 3_600 },
+      adjustment_summary: { count: 0, pending: 0 },
+    });
+    expect(summary.json().rows).toHaveLength(1);
+    expect(summary.json().rows[0]).toMatchObject({
+      period_version: currentVersion,
+      work_seconds: 3_600,
+    });
+
+    const actions = await app.store.pgPool!.query<{ action: string; reason: string | null }>(
+      `SELECT action, reason
+       FROM attendance.payroll_period_actions
+       WHERE company_id = $1 AND payroll_period_id = $2
+       ORDER BY occurred_at, id`,
+      [company.id, created.json().id],
+    );
+    expect(actions.rows.map((row) => row.action)).toEqual(["created", "locked", "unlocked", "locked"]);
+    expect(actions.rows.find((row) => row.action === "unlocked")?.reason).toBe(
+      "Reopen for corrected source data",
+    );
   });
 
   it("records punch sequence, returns summaries, and blocks duplicate/out-of-order actions", async () => {

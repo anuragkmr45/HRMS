@@ -16,6 +16,10 @@ import {
   type AttendanceApprovalFact,
   type AttendanceDailyProjection,
 } from "./daily-projection.js";
+import {
+  acquirePayrollAttendancePeriodLock,
+  payrollValuesFromRecord,
+} from "./payroll-period-service.js";
 
 export type ProjectionRebuildMode = "reconcile" | "rebuild";
 export type ProjectionRebuildStatus = "succeeded" | "failed";
@@ -58,6 +62,7 @@ export interface ProjectionRebuildDifferences {
   missing: ProjectionDifferenceGroup;
   unexpected: ProjectionDifferenceGroup;
   changed: ProjectionDifferenceGroup;
+  locked_payroll_differences: SafeProjectionDiff[];
   blocked: SafeProjectionBlock[];
 }
 
@@ -288,6 +293,7 @@ export class AttendanceProjectionRebuildService {
       await this.validateTenantAndAuthorization(client, input);
       await this.lockExistingEmployeeCommandState(client, input.companyId, input.employeeUserId);
       await this.acquireEmployeeAdvisoryLock(client, input.companyId, input.employeeUserId);
+      await acquirePayrollAttendancePeriodLock(client, input.companyId);
       const computed = await computeProjection(client, input, false);
       const rowsWritten = emptyRowsWritten();
       await this.completeRun(client, runId, "succeeded", computed, rowsWritten);
@@ -303,6 +309,7 @@ export class AttendanceProjectionRebuildService {
       await this.validateTenantAndAuthorization(client, input);
       await this.lockExistingEmployeeCommandState(client, input.companyId, input.employeeUserId);
       await this.acquireEmployeeAdvisoryLock(client, input.companyId, input.employeeUserId);
+      await acquirePayrollAttendancePeriodLock(client, input.companyId);
       const computed = await computeProjection(client, input, true);
       if (!computed.safeToRebuild) {
         throw new AttendanceProjectionReplayError("range_not_safe_to_rebuild", "Projection rebuild range is blocked.");
@@ -674,6 +681,12 @@ async function computeProjection(
   blocks.push(...dailyBlocks);
   const existing = await loadExistingProjection(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
   const differences = diffProjection(existing, expected, blocks);
+  differences.locked_payroll_differences = await loadLockedPayrollDifferences(
+    client,
+    input.companyId,
+    input.employeeUserId,
+    expected.dailyRecords,
+  );
   const versions = summarizeVersions(rawFacts, shifts.rows, validation.evaluatorVersions);
   const fingerprint = canonicalJsonHash({
     facts: rawFacts.map((fact) => ({
@@ -1265,6 +1278,54 @@ async function loadExistingProjection(
   };
 }
 
+async function loadLockedPayrollDifferences(
+  client: PoolClient,
+  companyId: UUID,
+  employeeUserId: UUID,
+  expectedDailyRecords: AttendanceDailyProjection[],
+): Promise<SafeProjectionDiff[]> {
+  if (expectedDailyRecords.length === 0) return [];
+  const expectedByDate = new Map(expectedDailyRecords.map((record) => [record.work_date, record]));
+  const dates = [...expectedByDate.keys()].sort();
+  const rows = (await client.query<Record<string, unknown>>(
+    `SELECT snapshot.*, snapshot.work_date::text AS work_date,
+        period.id AS payroll_period_id,
+        period.version AS payroll_period_version
+     FROM attendance.payroll_attendance_snapshots snapshot
+     JOIN attendance.payroll_periods period
+       ON period.company_id = snapshot.company_id
+      AND period.id = snapshot.payroll_period_id
+      AND period.version = snapshot.period_version
+      AND period.state = 'locked'
+     WHERE snapshot.company_id = $1
+       AND snapshot.employee_user_id = $2
+       AND snapshot.work_date = ANY($3::date[])
+     ORDER BY snapshot.work_date, snapshot.payroll_period_id`,
+    [companyId, employeeUserId, dates],
+  )).rows;
+  const diffs: SafeProjectionDiff[] = [];
+  for (const row of rows) {
+    const workDate = String(row.work_date);
+    const expected = expectedByDate.get(workDate);
+    if (!expected) continue;
+    const finalizedValues = payrollValuesFromRecord(normalizeDates(row));
+    const liveValues = payrollValuesFromRecord(expected as unknown as Record<string, unknown>);
+    if (canonicalJsonHash(finalizedValues) === canonicalJsonHash(liveValues)) continue;
+    diffs.push({
+      key: `${workDate}:${String(row.payroll_period_id)}`,
+      existing: {
+        payroll_period_id: row.payroll_period_id,
+        period_version: row.payroll_period_version,
+        finalized: finalizedValues,
+      },
+      expected: {
+        live_projection: liveValues,
+      },
+    });
+  }
+  return diffs;
+}
+
 async function loadMutableBoundaryBlocks(
   client: PoolClient,
   companyId: UUID,
@@ -1395,6 +1456,7 @@ function diffProjection(
       break_segments: changedDiffs(existing.breaks, expected.breaks.map(expectedBreakDiff)),
       daily_records: changedDiffs(existing.dailyRecords, expected.dailyRecords.map(expectedDailyDiff)),
     },
+    locked_payroll_differences: [],
     blocked: [...blocks].sort(compareBy("code", "scope", "detail")),
   };
 }

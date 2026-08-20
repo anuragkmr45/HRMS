@@ -4,8 +4,23 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
+import { recordApprovedRegularizationPayrollAdjustments } from "../payroll-period-service.js";
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
+
+interface PayrollRelevantDayRow {
+  status: string;
+  day_classification: string;
+  presence_state: string;
+  approval_kind: string;
+  approval_state: string;
+  regularization_status: string | null;
+  work_seconds: number;
+  break_seconds: number;
+  scheduled_seconds: number;
+  work_minutes: number;
+  break_minutes: number;
+}
 
 describe("regularization normalized items and actions", () => {
   let app: FastifyInstance;
@@ -119,10 +134,69 @@ describe("regularization normalized items and actions", () => {
     return punchId;
   }
 
+  async function insertAbsentDailyRecord(input: {
+    companyId: string;
+    employeeUserId: string;
+    workDate: string;
+  }): Promise<void> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    await app.store.pgPool!.query(
+      `INSERT INTO attendance.daily_records (
+         id, company_id, employee_user_id, work_date, status, day_classification,
+         presence_state, punctuality_state, evidence_state, approval_kind,
+         approval_state, payroll_state, first_check_in, last_check_out,
+         work_minutes, break_minutes, late_minutes, early_out_minutes,
+         work_seconds, break_seconds, scheduled_seconds, late_seconds,
+         early_departure_seconds, work_mode, note, exception_type,
+         regularization_status, version, created_at, updated_at, deleted_at
+       )
+       VALUES (
+         $1,$2,$3,$4::date,'absent','working_day','absent','not_applicable',
+         'missing','none','not_required','unprocessed',
+         NULL,NULL,0,0,0,0,0,0,28800,0,0,NULL,'Absent',NULL,NULL,1,now(),now(),NULL
+       )`,
+      [id, input.companyId, input.employeeUserId, input.workDate],
+    );
+    app.store.attendanceDayRecords.push({
+      id,
+      company_id: input.companyId,
+      employee_user_id: input.employeeUserId,
+      work_date: input.workDate,
+      status: "absent",
+      day_classification: "working_day",
+      presence_state: "absent",
+      punctuality_state: "not_applicable",
+      evidence_state: "missing",
+      approval_kind: "none",
+      approval_state: "not_required",
+      payroll_state: "unprocessed",
+      first_check_in: null,
+      last_check_out: null,
+      work_minutes: 0,
+      break_minutes: 0,
+      late_minutes: 0,
+      early_out_minutes: 0,
+      work_seconds: 0,
+      break_seconds: 0,
+      scheduled_seconds: 28_800,
+      late_seconds: 0,
+      early_departure_seconds: 0,
+      work_mode: null,
+      note: "Absent",
+      exception_type: null,
+      regularization_status: null,
+      version: 1,
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+    });
+  }
+
   beforeEach(async () => {
     app = await buildRealApp();
     await app.ready();
-  });
+  }, 30_000);
 
   afterEach(async () => {
     try {
@@ -514,6 +588,429 @@ describe("regularization normalized items and actions", () => {
        WHERE aggregate_id = $1 AND event_type = 'attendance.regularization.approved'`,
       [request.json().id],
     )).rows[0].count).toBe(1);
+  });
+
+  it("keeps payroll lock and approved regularization race outcomes payroll-safe", async () => {
+    const employee = await loginAs(app, "E1");
+    const manager = await loginAs(app, "D1");
+    const admin = await loginAs(app, "ADM");
+    const companyId = companyIdFor(employee.user.id);
+    const pool = app.store.pgPool!;
+
+    const correctionFirstDate = "2026-05-14";
+    const correctionFirstRequest = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: correctionFirstDate,
+        reason: "Forgot to punch before payroll close",
+        items: [{
+          operation: "add",
+          event_type: "check_in",
+          occurred_at: "2026-05-14T03:30:00.000Z",
+        }],
+      },
+    });
+    expect(correctionFirstRequest.statusCode, correctionFirstRequest.body).toBe(200);
+    const correctionFirstApproval = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${correctionFirstRequest.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(correctionFirstApproval.statusCode, correctionFirstApproval.body).toBe(200);
+    const correctionFirstLive = (await pool.query<PayrollRelevantDayRow>(
+      `SELECT status, day_classification, presence_state, approval_kind,
+              approval_state, regularization_status, work_seconds, break_seconds,
+              scheduled_seconds, work_minutes, break_minutes
+       FROM attendance.daily_records
+       WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date`,
+      [companyId, employee.user.id, correctionFirstDate],
+    )).rows[0];
+    expect(correctionFirstLive).toBeDefined();
+    const correctionFirstPeriod = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: correctionFirstDate, period_end: correctionFirstDate },
+    });
+    expect(correctionFirstPeriod.statusCode, correctionFirstPeriod.body).toBe(200);
+    const correctionFirstLock = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${correctionFirstPeriod.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Lock after correction" },
+    });
+    expect(correctionFirstLock.statusCode, correctionFirstLock.body).toBe(200);
+    const correctionFirstSnapshot = (await pool.query<PayrollRelevantDayRow>(
+      `SELECT status, day_classification, presence_state, approval_kind,
+              approval_state, regularization_status, work_seconds, break_seconds,
+              scheduled_seconds, work_minutes, break_minutes
+       FROM attendance.payroll_attendance_snapshots
+       WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+         AND employee_user_id = $4 AND work_date = $5::date`,
+      [
+        companyId,
+        correctionFirstPeriod.json().id,
+        correctionFirstLock.json().version,
+        employee.user.id,
+        correctionFirstDate,
+      ],
+    )).rows[0];
+    expect(correctionFirstSnapshot).toEqual(correctionFirstLive);
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM attendance.payroll_attendance_adjustments
+       WHERE company_id = $1 AND regularization_request_id = $2`,
+      [companyId, correctionFirstRequest.json().id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const lockFirstDate = "2026-05-15";
+    await insertAbsentDailyRecord({
+      companyId,
+      employeeUserId: employee.user.id,
+      workDate: lockFirstDate,
+    });
+    const lockFirstPeriod = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: lockFirstDate, period_end: lockFirstDate },
+    });
+    expect(lockFirstPeriod.statusCode, lockFirstPeriod.body).toBe(200);
+    const lockFirstLock = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${lockFirstPeriod.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Lock before correction" },
+    });
+    expect(lockFirstLock.statusCode, lockFirstLock.body).toBe(200);
+    const lockFirstRequest = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: lockFirstDate,
+        reason: "Forgot to punch after payroll close",
+        items: [{
+          operation: "add",
+          event_type: "check_in",
+          occurred_at: "2026-05-15T03:30:00.000Z",
+        }],
+      },
+    });
+    expect(lockFirstRequest.statusCode, lockFirstRequest.body).toBe(200);
+    const lockFirstApproval = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${lockFirstRequest.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(lockFirstApproval.statusCode, lockFirstApproval.body).toBe(200);
+
+    const lockFirstState = (await pool.query<{
+      snapshot_status: string;
+      snapshot_work_seconds: number;
+      live_regularization_status: string | null;
+      live_work_seconds: number;
+      adjustment_corrected_values: Record<string, unknown>;
+      adjustment_count: number;
+    }>(
+      `SELECT
+         (SELECT status
+          FROM attendance.payroll_attendance_snapshots
+          WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+            AND employee_user_id = $4 AND work_date = $5::date) AS snapshot_status,
+         (SELECT work_seconds
+          FROM attendance.payroll_attendance_snapshots
+          WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+            AND employee_user_id = $4 AND work_date = $5::date) AS snapshot_work_seconds,
+         (SELECT regularization_status
+          FROM attendance.daily_records
+          WHERE company_id = $1 AND employee_user_id = $4 AND work_date = $5::date) AS live_regularization_status,
+         (SELECT work_seconds
+          FROM attendance.daily_records
+          WHERE company_id = $1 AND employee_user_id = $4 AND work_date = $5::date) AS live_work_seconds,
+         (SELECT min(corrected_values::text)::jsonb
+          FROM attendance.payroll_attendance_adjustments
+          WHERE company_id = $1 AND payroll_period_id = $2
+            AND regularization_request_id = $6) AS adjustment_corrected_values,
+         (SELECT count(*)::int
+          FROM attendance.payroll_attendance_adjustments
+          WHERE company_id = $1 AND payroll_period_id = $2
+            AND regularization_request_id = $6) AS adjustment_count`,
+      [
+        companyId,
+        lockFirstPeriod.json().id,
+        lockFirstLock.json().version,
+        employee.user.id,
+        lockFirstDate,
+        lockFirstRequest.json().id,
+      ],
+    )).rows[0];
+    expect(lockFirstState).toMatchObject({
+      snapshot_status: "absent",
+      snapshot_work_seconds: 0,
+      live_regularization_status: "approved",
+      adjustment_count: 1,
+    });
+    expect(lockFirstState?.adjustment_corrected_values).toMatchObject({
+      regularization_status: "approved",
+      work_seconds: lockFirstState?.live_work_seconds,
+    });
+  });
+
+  it("creates one payroll attendance adjustment for approved regularization in a locked period", async () => {
+    const employee = await loginAs(app, "E1");
+    const manager = await loginAs(app, "D1");
+    const admin = await loginAs(app, "ADM");
+    const companyId = companyIdFor(employee.user.id);
+    const workDate = "2026-05-16";
+    const pool = app.store.pgPool!;
+    await insertAbsentDailyRecord({ companyId, employeeUserId: employee.user.id, workDate });
+    const period = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: workDate, period_end: workDate },
+    });
+    expect(period.statusCode, period.body).toBe(200);
+    const locked = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${period.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Lock before late correction" },
+    });
+    expect(locked.statusCode, locked.body).toBe(200);
+
+    const request = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: workDate,
+        reason: "Forgot to punch in",
+        items: [{
+          operation: "add",
+          event_type: "check_in",
+          occurred_at: "2026-05-16T03:30:00.000Z",
+        }],
+      },
+    });
+    expect(request.statusCode, request.body).toBe(200);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+
+    const snapshot = (await pool.query(
+      `SELECT status, work_seconds
+       FROM attendance.payroll_attendance_snapshots
+       WHERE company_id = $1 AND payroll_period_id = $2 AND employee_user_id = $3 AND work_date = $4::date`,
+      [companyId, period.json().id, employee.user.id, workDate],
+    )).rows[0];
+    expect(snapshot).toMatchObject({ status: "absent", work_seconds: 0 });
+    const live = (await pool.query(
+      `SELECT status, work_seconds, regularization_status
+       FROM attendance.daily_records
+       WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date`,
+      [companyId, employee.user.id, workDate],
+    )).rows[0];
+    expect(live.regularization_status).toBe("approved");
+    const adjustments = await pool.query<{
+      count: number;
+      finalized_values: Record<string, unknown>;
+      corrected_values: Record<string, unknown>;
+    }>(
+      `SELECT count(*)::int AS count,
+              min(finalized_values::text)::jsonb AS finalized_values,
+              min(corrected_values::text)::jsonb AS corrected_values
+       FROM attendance.payroll_attendance_adjustments
+      WHERE company_id = $1 AND payroll_period_id = $2 AND regularization_request_id = $3`,
+      [companyId, period.json().id, request.json().id],
+    );
+    const adjustment = adjustments.rows[0];
+    expect(adjustment).toBeDefined();
+    expect(adjustment!.count).toBe(1);
+    expect(adjustment!.finalized_values.status).toBe("absent");
+    expect(adjustment!.corrected_values.regularization_status).toBe("approved");
+
+    const item = (await pool.query<{ id: string }>(
+      `SELECT id
+       FROM attendance.regularization_request_items
+       WHERE company_id = $1 AND regularization_request_id = $2
+       ORDER BY ordinal, id
+       LIMIT 1`,
+      [companyId, request.json().id],
+    )).rows[0];
+    expect(item).toBeDefined();
+    const correctedDay = (await pool.query<Record<string, unknown>>(
+      `SELECT *
+       FROM attendance.daily_records
+       WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date`,
+      [companyId, employee.user.id, workDate],
+    )).rows[0];
+    expect(correctedDay).toBeDefined();
+    await recordApprovedRegularizationPayrollAdjustments(pool, {
+      companyId,
+      employeeUserId: employee.user.id,
+      workDate,
+      regularizationRequestId: request.json().id,
+      regularizationRequestItemIds: [item!.id],
+      correctedDay: correctedDay!,
+    });
+    await recordApprovedRegularizationPayrollAdjustments(pool, {
+      companyId,
+      employeeUserId: employee.user.id,
+      workDate,
+      regularizationRequestId: request.json().id,
+      regularizationRequestItemIds: [item!.id],
+      correctedDay: correctedDay!,
+    });
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM attendance.payroll_attendance_adjustments
+       WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+         AND source_type = 'attendance_regularization_item' AND source_id = $4`,
+      [companyId, period.json().id, locked.json().version, item!.id],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+
+    const repeatedApproval = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(repeatedApproval.statusCode).toBe(409);
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM attendance.payroll_attendance_adjustments
+       WHERE company_id = $1 AND payroll_period_id = $2 AND regularization_request_id = $3`,
+      [companyId, period.json().id, request.json().id],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("records a post-lock payroll adjustment when the finalized snapshot has no employee day row", async () => {
+    const employee = await loginAs(app, "E1");
+    const manager = await loginAs(app, "D1");
+    const admin = await loginAs(app, "ADM");
+    const companyId = companyIdFor(employee.user.id);
+    const workDate = "2026-05-21";
+    const pool = app.store.pgPool!;
+
+    const period = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/payroll-periods",
+      headers: authHeader(admin.token),
+      payload: { period_start: workDate, period_end: workDate },
+    });
+    expect(period.statusCode, period.body).toBe(200);
+    const locked = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/payroll-periods/${period.json().id}/lock`,
+      headers: authHeader(admin.token),
+      payload: { reason: "Lock empty employee day" },
+    });
+    expect(locked.statusCode, locked.body).toBe(200);
+    expect(locked.json().snapshot_rows).toBe(0);
+
+    const beforeSummary = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/payroll-periods/${period.json().id}/summary`,
+      headers: authHeader(admin.token),
+    });
+    expect(beforeSummary.statusCode, beforeSummary.body).toBe(200);
+    expect(beforeSummary.json()).toMatchObject({
+      finalized: true,
+      base: { records: 0, total_work_seconds: 0 },
+      adjustment_summary: { count: 0 },
+    });
+
+    const request = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularizations",
+      headers: authHeader(employee.token),
+      payload: {
+        work_date: workDate,
+        reason: "Forgot to punch on empty locked day",
+        items: [{
+          operation: "add",
+          event_type: "check_in",
+          occurred_at: "2026-05-21T03:30:00.000Z",
+        }],
+      },
+    });
+    expect(request.statusCode, request.body).toBe(200);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/v1/attendance/regularizations/${request.json().id}/decision`,
+      headers: authHeader(manager.token),
+      payload: { decision: "approve", expected_version: 1 },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+
+    const live = (await pool.query<{
+      work_seconds: number;
+      regularization_status: string | null;
+    }>(
+      `SELECT work_seconds, regularization_status
+       FROM attendance.daily_records
+       WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3::date`,
+      [companyId, employee.user.id, workDate],
+    )).rows[0];
+    expect(live?.regularization_status).toBe("approved");
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM attendance.payroll_attendance_snapshots
+       WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+         AND employee_user_id = $4 AND work_date = $5::date`,
+      [companyId, period.json().id, locked.json().version, employee.user.id, workDate],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const adjustment = (await pool.query<{
+      count: number;
+      finalized_snapshot_id: string | null;
+      finalized_values: Record<string, unknown>;
+      corrected_values: Record<string, unknown>;
+      delta_values: Record<string, unknown>;
+    }>(
+      `SELECT count(*)::int AS count,
+              min(finalized_snapshot_id::text) AS finalized_snapshot_id,
+              min(finalized_values::text)::jsonb AS finalized_values,
+              min(corrected_values::text)::jsonb AS corrected_values,
+              min(delta_values::text)::jsonb AS delta_values
+       FROM attendance.payroll_attendance_adjustments
+       WHERE company_id = $1 AND payroll_period_id = $2 AND period_version = $3
+         AND regularization_request_id = $4`,
+      [companyId, period.json().id, locked.json().version, request.json().id],
+    )).rows[0];
+    expect(adjustment).toBeDefined();
+    expect(adjustment!.count).toBe(1);
+    expect(adjustment!.finalized_snapshot_id).toBeNull();
+    expect(adjustment!.finalized_values).toEqual({});
+    expect(adjustment!.corrected_values.regularization_status).toBe("approved");
+    expect(adjustment!.corrected_values.work_seconds).toBe(live?.work_seconds);
+    expect(adjustment!.delta_values).toMatchObject({
+      regularization_status: { from: null, to: "approved" },
+    });
+
+    const afterSummary = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/payroll-periods/${period.json().id}/summary`,
+      headers: authHeader(admin.token),
+    });
+    expect(afterSummary.statusCode, afterSummary.body).toBe(200);
+    expect(afterSummary.json()).toMatchObject({
+      finalized: true,
+      base: { records: 0, total_work_seconds: 0 },
+      adjustment_summary: { count: 1, pending: 1 },
+    });
+    expect(afterSummary.json().rows).toHaveLength(0);
+    expect(afterSummary.json().adjustments).toHaveLength(1);
   });
 
   it("rejects non-approver and self regularization decisions without side effects", async () => {

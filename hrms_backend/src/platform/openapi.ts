@@ -5109,6 +5109,70 @@ const attendanceExportResponseSchema = {
   additionalProperties: true,
 };
 
+const attendancePayrollPeriodBody = {
+  type: "object",
+  required: ["period_start", "period_end"],
+  properties: {
+    company_id: uuid("Company UUID"),
+    period_start: date("Payroll attendance period start"),
+    period_end: date("Payroll attendance period end"),
+  },
+  additionalProperties: false,
+};
+const attendancePayrollPeriodActionBody = {
+  type: "object",
+  properties: {
+    company_id: uuid("Company UUID"),
+    reason: { type: "string", minLength: 1, maxLength: 1000 },
+  },
+  additionalProperties: false,
+};
+const attendancePayrollPeriodUnlockBody = {
+  type: "object",
+  required: ["reason"],
+  properties: {
+    company_id: uuid("Company UUID"),
+    reason: { type: "string", minLength: 1, maxLength: 1000 },
+  },
+  additionalProperties: false,
+};
+const attendancePayrollPeriodSchema = {
+  type: "object",
+  required: ["id", "company_id", "period_start", "period_end", "state", "version"],
+  properties: {
+    id: uuid("Attendance payroll period UUID"),
+    company_id: uuid("Company UUID"),
+    period_start: date("Period start"),
+    period_end: date("Period end"),
+    state: { type: "string", enum: ["open", "locked"], example: "locked" },
+    locked_at: { ...dateTime("Lock timestamp"), nullable: true },
+    locked_by_user_id: { ...uuid("Locking actor UUID"), nullable: true },
+    version: { type: "integer", minimum: 1, example: 2 },
+    snapshot_rows: { type: "integer", minimum: 0, example: 25 },
+  },
+  additionalProperties: true,
+};
+const attendancePayrollPeriodSummarySchema = {
+  type: "object",
+  required: ["generated_at", "period", "finalized", "base_source", "base", "rows", "adjustments"],
+  properties: {
+    generated_at: dateTime("Summary generation timestamp"),
+    period: attendancePayrollPeriodSchema,
+    finalized: { type: "boolean", example: true },
+    base_source: {
+      type: "string",
+      enum: ["live_daily_records", "finalized_snapshot"],
+      example: "finalized_snapshot",
+    },
+    base: { type: "object", additionalProperties: true },
+    rows: { type: "array", items: { type: "object", additionalProperties: true } },
+    adjustments: { type: "array", items: { type: "object", additionalProperties: true } },
+    adjustment_summary: { type: "object", additionalProperties: true },
+    actions: { type: "array", items: { type: "object", additionalProperties: true } },
+  },
+  additionalProperties: true,
+};
+
 const leaveWfhQuerySchema = {
   ...paginationQuerySchema,
   properties: {
@@ -9089,6 +9153,41 @@ const routeDocs: Record<string, RouteSchema> = {
       params: idParamSchema,
       body: attendanceRegularizationDecisionBody,
       response200: { type: "object", additionalProperties: true },
+    },
+  ),
+  "POST /api/v1/attendance/payroll-periods": operation(
+    "Attendance",
+    "Create attendance payroll period",
+    "Creates an open company-scoped attendance payroll period. Period ranges cannot overlap, and the period is not finalized until explicitly locked.",
+    { body: attendancePayrollPeriodBody, response200: attendancePayrollPeriodSchema },
+  ),
+  "POST /api/v1/attendance/payroll-periods/{id}/lock": operation(
+    "Attendance",
+    "Lock attendance payroll period",
+    "Atomically materializes finalized attendance snapshots from live daily records and locks the payroll period. Re-locking an already locked period returns a deterministic conflict instead of regenerating the snapshot.",
+    {
+      params: idParamSchema,
+      body: attendancePayrollPeriodActionBody,
+      response200: attendancePayrollPeriodSchema,
+    },
+  ),
+  "POST /api/v1/attendance/payroll-periods/{id}/unlock": operation(
+    "Attendance",
+    "Unlock attendance payroll period",
+    "Unlocks a locked attendance payroll period with a mandatory reason while retaining prior snapshot and action history.",
+    {
+      params: idParamSchema,
+      body: attendancePayrollPeriodUnlockBody,
+      response200: attendancePayrollPeriodSchema,
+    },
+  ),
+  "GET /api/v1/attendance/payroll-periods/{id}/summary": operation(
+    "Attendance",
+    "Payroll-safe attendance period summary",
+    "Returns live non-finalized attendance summary for open periods and stable finalized snapshot totals plus separate post-lock adjustments for locked periods.",
+    {
+      params: idParamSchema,
+      response200: attendancePayrollPeriodSummarySchema,
     },
   ),
   "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish":

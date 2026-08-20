@@ -1326,6 +1326,125 @@ export const attendanceProjectionRebuildRuns = attendance.table(
   ]
 );
 
+export const attendancePayrollPeriods = attendance.table(
+  "payroll_periods",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    state: text("state").notNull().default("open"),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    lockedByUserId: uuid("locked_by_user_id"),
+    version,
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_payroll_periods_company_range_uq").on(table.companyId, table.periodStart, table.periodEnd),
+    index("attendance_payroll_periods_company_state_idx").on(table.companyId, table.state, table.periodStart, table.periodEnd),
+    check("attendance_payroll_periods_range_check", sql`${table.periodStart} <= ${table.periodEnd}`),
+    check("attendance_payroll_periods_state_check", sql`${table.state} IN ('open', 'locked')`),
+    check("attendance_payroll_periods_lock_shape_check", sql`(${table.state} = 'open' AND ${table.lockedAt} IS NULL AND ${table.lockedByUserId} IS NULL) OR (${table.state} = 'locked' AND ${table.lockedAt} IS NOT NULL AND ${table.lockedByUserId} IS NOT NULL)`)
+  ]
+);
+
+export const attendancePayrollPeriodActions = attendance.table(
+  "payroll_period_actions",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    payrollPeriodId: uuid("payroll_period_id").notNull(),
+    action: text("action").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    reason: text("reason"),
+    resultingVersion: integer("resulting_version").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("attendance_payroll_period_actions_period_idx").on(table.companyId, table.payrollPeriodId, table.occurredAt, table.id),
+    check("attendance_payroll_period_actions_action_check", sql`${table.action} IN ('created', 'locked', 'unlocked')`),
+    check("attendance_payroll_period_actions_unlock_reason_check", sql`${table.action} <> 'unlocked' OR btrim(COALESCE(${table.reason}, '')) <> ''`),
+    check("attendance_payroll_period_actions_version_check", sql`${table.resultingVersion} > 0`)
+  ]
+);
+
+export const attendancePayrollAttendanceSnapshots = attendance.table(
+  "payroll_attendance_snapshots",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    payrollPeriodId: uuid("payroll_period_id").notNull(),
+    periodVersion: integer("period_version").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    status: text("status").notNull(),
+    dayClassification: text("day_classification").notNull(),
+    presenceState: text("presence_state").notNull(),
+    punctualityState: text("punctuality_state").notNull(),
+    evidenceState: text("evidence_state").notNull(),
+    approvalKind: text("approval_kind").notNull(),
+    approvalState: text("approval_state").notNull(),
+    payrollState: text("payroll_state").notNull(),
+    firstCheckIn: timestamp("first_check_in", { withTimezone: true }),
+    lastCheckOut: timestamp("last_check_out", { withTimezone: true }),
+    workMinutes: integer("work_minutes").notNull(),
+    breakMinutes: integer("break_minutes").notNull(),
+    lateMinutes: integer("late_minutes").notNull(),
+    earlyOutMinutes: integer("early_out_minutes").notNull(),
+    workSeconds: integer("work_seconds").notNull(),
+    breakSeconds: integer("break_seconds").notNull(),
+    scheduledSeconds: integer("scheduled_seconds").notNull(),
+    lateSeconds: integer("late_seconds").notNull(),
+    earlyDepartureSeconds: integer("early_departure_seconds").notNull(),
+    workMode: text("work_mode"),
+    exceptionType: text("exception_type"),
+    regularizationStatus: text("regularization_status"),
+    sourceDailyRecordId: uuid("source_daily_record_id").notNull(),
+    sourceDailyRecordVersion: integer("source_daily_record_version").notNull(),
+    finalizedAt: timestamp("finalized_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex("attendance_payroll_snapshots_period_day_uq").on(table.companyId, table.payrollPeriodId, table.periodVersion, table.employeeUserId, table.workDate),
+    index("attendance_payroll_snapshots_employee_date_idx").on(table.companyId, table.employeeUserId, table.workDate, table.payrollPeriodId, table.periodVersion),
+    check("attendance_payroll_snapshots_version_check", sql`${table.periodVersion} > 0`),
+    check("attendance_payroll_snapshots_seconds_check", sql`${table.workSeconds} >= 0 AND ${table.breakSeconds} >= 0 AND ${table.scheduledSeconds} >= 0 AND ${table.lateSeconds} >= 0 AND ${table.earlyDepartureSeconds} >= 0`),
+    check("attendance_payroll_snapshots_minutes_check", sql`${table.workMinutes} >= 0 AND ${table.breakMinutes} >= 0 AND ${table.lateMinutes} >= 0 AND ${table.earlyOutMinutes} >= 0`),
+    check("attendance_payroll_snapshots_source_version_check", sql`${table.sourceDailyRecordVersion} > 0`)
+  ]
+);
+
+export const attendancePayrollAttendanceAdjustments = attendance.table(
+  "payroll_attendance_adjustments",
+  {
+    id: uuidPk.defaultRandom(),
+    companyId: uuid("company_id").notNull(),
+    payrollPeriodId: uuid("payroll_period_id").notNull(),
+    periodVersion: integer("period_version").notNull(),
+    employeeUserId: uuid("employee_user_id").notNull(),
+    workDate: date("work_date").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    regularizationRequestId: uuid("regularization_request_id"),
+    finalizedSnapshotId: uuid("finalized_snapshot_id"),
+    finalizedValues: jsonb("finalized_values").notNull().default({}),
+    correctedValues: jsonb("corrected_values").notNull().default({}),
+    deltaValues: jsonb("delta_values").notNull().default({}),
+    status: text("status").notNull().default("pending"),
+    createdAt,
+    updatedAt
+  },
+  (table) => [
+    uniqueIndex("attendance_payroll_adjustments_source_uq").on(table.companyId, table.payrollPeriodId, table.periodVersion, table.sourceType, table.sourceId),
+    index("attendance_payroll_adjustments_period_date_idx").on(table.companyId, table.payrollPeriodId, table.periodVersion, table.workDate, table.employeeUserId),
+    check("attendance_payroll_adjustments_period_version_check", sql`${table.periodVersion} > 0`),
+    check("attendance_payroll_adjustments_source_type_check", sql`${table.sourceType} IN ('attendance_regularization_item')`),
+    check("attendance_payroll_adjustments_status_check", sql`${table.status} IN ('pending', 'applied', 'void')`),
+    check("attendance_payroll_adjustments_json_shape_check", sql`jsonb_typeof(${table.finalizedValues}) = 'object' AND jsonb_typeof(${table.correctedValues}) = 'object' AND jsonb_typeof(${table.deltaValues}) = 'object'`)
+  ]
+);
+
 export const attendancePolicies = attendance.table(
   "policies",
   {
@@ -2647,6 +2766,10 @@ export const schema = {
   attendanceRegularizationActions,
   attendanceRegularizationCorrectionApplications,
   attendanceProjectionRebuildRuns,
+  attendancePayrollPeriods,
+  attendancePayrollPeriodActions,
+  attendancePayrollAttendanceSnapshots,
+  attendancePayrollAttendanceAdjustments,
   attendancePolicies,
   attendancePolicyVersions,
   attendancePolicyAssignments,
