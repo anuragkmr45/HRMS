@@ -43,6 +43,7 @@
     "worker:outbox": "tsx scripts/run-with-env.ts .env.local -- tsx src/workers/run-outbox-worker.ts",
     "worker:start": "NODE_OPTIONS=--conditions=production node dist/src/workers/run-outbox-worker.js",
     "attendance:projection-rebuild": "tsx scripts/attendance-projection-rebuild.ts",
+    "attendance:migration-dry-run": "tsx scripts/attendance-migration-dry-run.ts",
     "lint": "tsx scripts/lint.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:unit && pnpm test:contracts && pnpm test:integration && pnpm test:e2e",

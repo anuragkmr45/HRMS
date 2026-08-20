@@ -80,19 +80,37 @@ export interface AttendanceProjectionRebuildResult {
   sanitized_failure_details: string | null;
 }
 
-interface SafeProjectionDiff {
+export interface AttendanceProjectionComputeInput {
+  companyId: UUID;
+  employeeUserId: UUID;
+  dateFrom: string;
+  dateTo: string;
+  mode?: ProjectionRebuildMode;
+}
+
+export interface AttendanceProjectionCandidateResult {
+  sourceRecordCount: number;
+  sourceFingerprint: string;
+  versions: VersionSummary;
+  existingCounts: ProjectionCounts;
+  expectedCounts: ProjectionCounts;
+  differences: ProjectionRebuildDifferences;
+  safeToRebuild: boolean;
+}
+
+export interface SafeProjectionDiff {
   key: string;
   existing?: Record<string, unknown> | null;
   expected?: Record<string, unknown> | null;
 }
 
-interface SafeProjectionBlock {
+export interface SafeProjectionBlock {
   code: string;
   scope: string;
   detail: string;
 }
 
-interface ProjectionCounts {
+export interface ProjectionCounts {
   sessions: number;
   break_segments: number;
   daily_records: number;
@@ -106,12 +124,20 @@ interface ProjectionRowsWritten {
   daily_records_upserted: number;
 }
 
-interface VersionSummary {
+export interface VersionSummary {
   evaluator_versions: string[];
   policy_versions: string[];
   policy_version_ids: string[];
   shift_instance_ids: string[];
   shift_template_version_ids: string[];
+}
+
+interface ProjectionComputationInput {
+  companyId: UUID;
+  employeeUserId: UUID;
+  dateFrom: string;
+  dateTo: string;
+  mode: ProjectionRebuildMode;
 }
 
 interface UserContext {
@@ -262,7 +288,7 @@ export class AttendanceProjectionRebuildService {
       await this.validateTenantAndAuthorization(client, input);
       await this.lockExistingEmployeeCommandState(client, input.companyId, input.employeeUserId);
       await this.acquireEmployeeAdvisoryLock(client, input.companyId, input.employeeUserId);
-      const computed = await this.compute(client, input, false);
+      const computed = await computeProjection(client, input, false);
       const rowsWritten = emptyRowsWritten();
       await this.completeRun(client, runId, "succeeded", computed, rowsWritten);
       return resultFromComputed(runId, input, "succeeded", computed, rowsWritten, null, null);
@@ -277,7 +303,7 @@ export class AttendanceProjectionRebuildService {
       await this.validateTenantAndAuthorization(client, input);
       await this.lockExistingEmployeeCommandState(client, input.companyId, input.employeeUserId);
       await this.acquireEmployeeAdvisoryLock(client, input.companyId, input.employeeUserId);
-      const computed = await this.compute(client, input, true);
+      const computed = await computeProjection(client, input, true);
       if (!computed.safeToRebuild) {
         throw new AttendanceProjectionReplayError("range_not_safe_to_rebuild", "Projection rebuild range is blocked.");
       }
@@ -285,103 +311,6 @@ export class AttendanceProjectionRebuildService {
       await this.completeRun(client, runId, "succeeded", computed, rowsWritten);
       return resultFromComputed(runId, input, "succeeded", computed, rowsWritten, null, null);
     });
-  }
-
-  private async compute(
-    client: PoolClient,
-    input: Required<AttendanceProjectionRebuildInput>,
-    failOnBlocked: boolean,
-  ) {
-    const context = await loadCompanyEmployeeContext(client, input.companyId, input.employeeUserId);
-    const shifts = await loadShiftInstances(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
-    const blocks: SafeProjectionBlock[] = [];
-    blocks.push(...shiftAmbiguityBlocks(shifts.rows));
-    const requestedDates = datesBetween(input.dateFrom, input.dateTo);
-    for (const date of requestedDates) {
-      if (!shifts.byDate.has(date)) {
-        blocks.push(block("missing_shift_instance", `daily_records:${date}`, "Historical shift instance is required for projection replay."));
-      }
-    }
-    if (input.mode === "rebuild") {
-      const currentLocalDate = dateInTimeZone(new Date().toISOString(), context.employeeTimeZone);
-      if (input.dateFrom <= currentLocalDate && currentLocalDate <= input.dateTo) {
-        blocks.push(block("current_local_date_in_range", "range", "Historical rebuild cannot include the employee current local attendance date."));
-      }
-    }
-
-    const boundary = shiftBoundary(shifts.rows);
-    const rawFacts = boundary
-      ? await loadEffectivePunchFacts(client, input.companyId, input.employeeUserId, boundary.from, boundary.to)
-      : [];
-    const validation = validatePunchFacts(rawFacts);
-    blocks.push(...validation.blocks);
-
-    const replay = replayPunchFacts(rawFacts, shifts.rows, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
-    blocks.push(...replay.blocks);
-    const openBlocks = await loadMutableBoundaryBlocks(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
-    blocks.push(...openBlocks);
-
-    const dailyBlocks: SafeProjectionBlock[] = [];
-    const expected = await buildExpectedDaily(
-      client,
-      input,
-      context,
-      shifts,
-      replay.projection,
-      blockedWorkDates(blocks, rawFacts, context.employeeTimeZone),
-      dailyBlocks,
-    );
-    blocks.push(...dailyBlocks);
-    const existing = await loadExistingProjection(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
-    const differences = diffProjection(existing, expected, blocks);
-    const versions = summarizeVersions(rawFacts, shifts.rows, validation.evaluatorVersions);
-    const fingerprint = canonicalJsonHash({
-      facts: rawFacts.map((fact) => ({
-        id: fact.id,
-        session_id: fact.session_id,
-        event_type: fact.event_type,
-        occurred_at: fact.occurred_at.toISOString(),
-        work_mode: fact.work_mode,
-        source: fact.source,
-        origin: fact.origin,
-        command_execution_id: fact.command_execution_id,
-        command_origin: fact.command_origin,
-        command_type: fact.command_type,
-        command_decision_id: fact.command_decision_id,
-        command_outcome: fact.command_outcome,
-        previous_state: fact.previous_state,
-        next_state: fact.next_state,
-        audit_decision_id: fact.audit_decision_id,
-        audit_outcome: fact.audit_outcome,
-        audit_policy_version: fact.audit_policy_version,
-        evaluator_version: evaluatorVersionFor(fact),
-        policy_snapshot_hash: canonicalJsonHash(fact.policy_snapshot ?? {}),
-        evaluation_context_hash: canonicalJsonHash(safeEvaluationContext(fact.evaluation_context)),
-      })),
-      shifts: shifts.rows.map((shift) => ({
-        id: shift.id,
-        work_date: shift.work_date,
-        template_version_id: shift.template_version_id,
-        resolved_timezone: shift.resolved_timezone,
-        scheduled_start_at: shift.scheduled_start_at.toISOString(),
-        scheduled_end_at: shift.scheduled_end_at.toISOString(),
-        eligibility_start_at: shift.eligibility_start_at.toISOString(),
-        eligibility_end_at: shift.eligibility_end_at.toISOString(),
-      })),
-    });
-    if (failOnBlocked && blocks.length > 0) {
-      throw new AttendanceProjectionReplayError(blocks[0]!.code, blocks[0]!.detail);
-    }
-    return {
-      sourceRecordCount: rawFacts.length,
-      sourceFingerprint: fingerprint,
-      versions,
-      existingCounts: existing.counts,
-      expectedCounts: countsForExpected(expected),
-      differences,
-      safeToRebuild: blocks.length === 0,
-      expected,
-    };
   }
 
   private async replaceProjections(
@@ -681,12 +610,152 @@ export class AttendanceProjectionRebuildService {
   }
 }
 
+export async function computeAttendanceProjectionCandidate(
+  client: PoolClient,
+  input: AttendanceProjectionComputeInput,
+): Promise<AttendanceProjectionCandidateResult> {
+  const normalized = normalizeProjectionComputationInput(input);
+  const computed = await computeProjection(client, normalized, false);
+  return {
+    sourceRecordCount: computed.sourceRecordCount,
+    sourceFingerprint: computed.sourceFingerprint,
+    versions: computed.versions,
+    existingCounts: computed.existingCounts,
+    expectedCounts: computed.expectedCounts,
+    differences: computed.differences,
+    safeToRebuild: computed.safeToRebuild,
+  };
+}
+
+async function computeProjection(
+  client: PoolClient,
+  input: ProjectionComputationInput,
+  failOnBlocked: boolean,
+): Promise<ComputedProjectionResult> {
+  const context = await loadCompanyEmployeeContext(client, input.companyId, input.employeeUserId);
+  const shifts = await loadShiftInstances(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
+  const blocks: SafeProjectionBlock[] = [];
+  blocks.push(...shiftAmbiguityBlocks(shifts.rows));
+  const requestedDates = datesBetween(input.dateFrom, input.dateTo);
+  for (const date of requestedDates) {
+    if (!shifts.byDate.has(date)) {
+      blocks.push(block("missing_shift_instance", `daily_records:${date}`, "Historical shift instance is required for projection replay."));
+    }
+  }
+  if (input.mode === "rebuild") {
+    const currentLocalDate = dateInTimeZone(new Date().toISOString(), context.employeeTimeZone);
+    if (input.dateFrom <= currentLocalDate && currentLocalDate <= input.dateTo) {
+      blocks.push(block("current_local_date_in_range", "range", "Historical rebuild cannot include the employee current local attendance date."));
+    }
+  }
+
+  const boundary = shiftBoundary(shifts.rows);
+  const rawFacts = boundary
+    ? await loadEffectivePunchFacts(client, input.companyId, input.employeeUserId, boundary.from, boundary.to)
+    : [];
+  const validation = validatePunchFacts(rawFacts);
+  blocks.push(...validation.blocks);
+
+  const replay = replayPunchFacts(rawFacts, shifts.rows, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
+  blocks.push(...replay.blocks);
+  const openBlocks = await loadMutableBoundaryBlocks(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
+  blocks.push(...openBlocks);
+
+  const dailyBlocks: SafeProjectionBlock[] = [];
+  const expected = await buildExpectedDaily(
+    client,
+    input,
+    context,
+    shifts,
+    replay.projection,
+    blockedWorkDates(blocks, rawFacts, context.employeeTimeZone),
+    dailyBlocks,
+  );
+  blocks.push(...dailyBlocks);
+  const existing = await loadExistingProjection(client, input.companyId, input.employeeUserId, input.dateFrom, input.dateTo);
+  const differences = diffProjection(existing, expected, blocks);
+  const versions = summarizeVersions(rawFacts, shifts.rows, validation.evaluatorVersions);
+  const fingerprint = canonicalJsonHash({
+    facts: rawFacts.map((fact) => ({
+      id: fact.id,
+      session_id: fact.session_id,
+      event_type: fact.event_type,
+      occurred_at: fact.occurred_at.toISOString(),
+      work_mode: fact.work_mode,
+      source: fact.source,
+      origin: fact.origin,
+      command_execution_id: fact.command_execution_id,
+      command_origin: fact.command_origin,
+      command_type: fact.command_type,
+      command_decision_id: fact.command_decision_id,
+      command_outcome: fact.command_outcome,
+      previous_state: fact.previous_state,
+      next_state: fact.next_state,
+      audit_decision_id: fact.audit_decision_id,
+      audit_outcome: fact.audit_outcome,
+      audit_policy_version: fact.audit_policy_version,
+      evaluator_version: evaluatorVersionFor(fact),
+      policy_snapshot_hash: canonicalJsonHash(fact.policy_snapshot ?? {}),
+      evaluation_context_hash: canonicalJsonHash(safeEvaluationContext(fact.evaluation_context)),
+    })),
+    shifts: shifts.rows.map((shift) => ({
+      id: shift.id,
+      work_date: shift.work_date,
+      template_version_id: shift.template_version_id,
+      resolved_timezone: shift.resolved_timezone,
+      scheduled_start_at: shift.scheduled_start_at.toISOString(),
+      scheduled_end_at: shift.scheduled_end_at.toISOString(),
+      eligibility_start_at: shift.eligibility_start_at.toISOString(),
+      eligibility_end_at: shift.eligibility_end_at.toISOString(),
+    })),
+  });
+  if (failOnBlocked && blocks.length > 0) {
+    throw new AttendanceProjectionReplayError(blocks[0]!.code, blocks[0]!.detail);
+  }
+  return {
+    sourceRecordCount: rawFacts.length,
+    sourceFingerprint: fingerprint,
+    versions,
+    existingCounts: existing.counts,
+    expectedCounts: countsForExpected(expected),
+    differences,
+    safeToRebuild: blocks.length === 0,
+    expected,
+  };
+}
+
 function normalizeInput(input: AttendanceProjectionRebuildInput): Required<AttendanceProjectionRebuildInput> {
   const mode = input.mode ?? "reconcile";
   const checks: Array<[string, string]> = [
     ["company_id", input.companyId],
     ["employee_user_id", input.employeeUserId],
     ["requested_by_user_id", input.requestedByUserId],
+  ];
+  for (const [field, value] of checks) {
+    if (!uuidPattern.test(value)) {
+      throw new AttendanceProjectionReplayError("invalid_uuid", `${field} must be a UUID.`);
+    }
+  }
+  if (mode !== "reconcile" && mode !== "rebuild") {
+    throw new AttendanceProjectionReplayError("invalid_mode", "Mode must be reconcile or rebuild.");
+  }
+  if (!isStrictIsoDate(input.dateFrom) || !isStrictIsoDate(input.dateTo)) {
+    throw new AttendanceProjectionReplayError("invalid_date", "date_from and date_to must use YYYY-MM-DD.");
+  }
+  if (input.dateFrom > input.dateTo) {
+    throw new AttendanceProjectionReplayError("invalid_date_range", "date_from must be on or before date_to.");
+  }
+  if (datesBetween(input.dateFrom, input.dateTo).length > PROJECTION_REBUILD_MAX_RANGE_DAYS) {
+    throw new AttendanceProjectionReplayError("date_range_too_large", `Projection rebuild range cannot exceed ${PROJECTION_REBUILD_MAX_RANGE_DAYS} days.`);
+  }
+  return { ...input, mode };
+}
+
+function normalizeProjectionComputationInput(input: AttendanceProjectionComputeInput): ProjectionComputationInput {
+  const mode = input.mode ?? "reconcile";
+  const checks: Array<[string, string]> = [
+    ["company_id", input.companyId],
+    ["employee_user_id", input.employeeUserId],
   ];
   for (const [field, value] of checks) {
     if (!uuidPattern.test(value)) {
@@ -977,7 +1046,7 @@ function replayPunchFacts(
 
 async function buildExpectedDaily(
   client: PoolClient,
-  input: Required<AttendanceProjectionRebuildInput>,
+  input: ProjectionComputationInput,
   context: { company: CompanyContext; employeeTimeZone: string },
   shifts: { byDate: Map<string, ShiftInstanceRow> },
   projection: ExpectedProjection,
