@@ -122,6 +122,16 @@ describe("attendance policy", () => {
         ),
       ).toBe(false);
     });
+
+    it("rejects admin even when employee role is also present", () => {
+      expect(
+        canUseSelfAttendance(
+          makeAuthUser({
+            roles: [Roles.Admin, Roles.Employee],
+          }),
+        ),
+      ).toBe(false);
+    });
   });
 
   describe("assertCanUseSelfAttendance", () => {
@@ -134,6 +144,16 @@ describe("attendance policy", () => {
         assertCanUseSelfAttendance(
           makeAuthUser({
             roles: [Roles.Admin],
+          }),
+        ),
+      ).toThrow();
+    });
+
+    it("throws for admin even when employee role is also present", () => {
+      expect(() =>
+        assertCanUseSelfAttendance(
+          makeAuthUser({
+            roles: [Roles.Admin, Roles.Employee],
           }),
         ),
       ).toThrow();
@@ -296,7 +316,7 @@ describe("attendance policy", () => {
       ).not.toThrow();
     });
 
-    it("allows auditor", () => {
+    it("rejects auditor", () => {
       const auditor = makeAuthUser({
         roles: [Roles.Auditor],
       });
@@ -306,7 +326,7 @@ describe("attendance policy", () => {
           employee_user_id: randomUUID(),
           current_approver_user_id: null,
         }),
-      ).not.toThrow();
+      ).toThrow();
     });
 
     it("rejects unrelated employee", () => {

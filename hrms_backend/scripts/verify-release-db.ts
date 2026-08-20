@@ -9,7 +9,7 @@ loadRuntimeEnv();
 const releaseDir = process.env.HRMS_REPORT_DIR ?? "docs/qa/runs/release-acceptance";
 mkdirSync(releaseDir, { recursive: true });
 
-const requiredExtensions = ["ltree", "pgcrypto"];
+const requiredExtensions = ["ltree", "pgcrypto", "postgis", "btree_gist"];
 const requiredSchemas = ["core", "expenses", "documents", "assets", "timesheets", "platform"];
 const requiredTables = [
   "core.departments",
@@ -75,12 +75,42 @@ const notes: string[] = [];
 
 try {
   const extensions = new Set(
-    (await client.query<{ extname: string }>("SELECT extname FROM pg_extension")).rows.map((row) => row.extname)
-  );
-  for (const extension of requiredExtensions) {
-    if (!extensions.has(extension)) failures.push(`missing extension ${extension}`);
-  }
+  (
+    await client.query<{ extname: string }>(
+      "SELECT extname FROM pg_extension"
+    )
+  ).rows.map((row) => row.extname)
+);
 
+for (const extension of requiredExtensions) {
+  if (!extensions.has(extension)) {
+    failures.push(`missing extension ${extension}`);
+  }
+}
+
+if (extensions.has("postgis")) {
+  try {
+    const postgisVersionResult = await client.query<{
+      postgis_version: string;
+    }>("SELECT PostGIS_Version() AS postgis_version");
+
+    const postgisVersion =
+      postgisVersionResult.rows[0]?.postgis_version;
+
+    if (!postgisVersion) {
+      failures.push("PostGIS functional probe returned no version");
+    } else {
+      notes.push(
+        `verified PostGIS functional execution (${postgisVersion})`
+      );
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+
+    failures.push(`PostGIS functional probe failed: ${message}`);
+  }
+}
   const schemas = new Set(
     (await client.query<{ schema_name: string }>("SELECT schema_name FROM information_schema.schemata")).rows.map(
       (row) => row.schema_name

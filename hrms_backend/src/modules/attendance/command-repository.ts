@@ -1,0 +1,1896 @@
+import type { Pool, PoolClient } from "pg";
+import type {
+  AttendanceLocationEvidenceInput,
+  AttendanceAdditionalCommandReasonCode,
+  AttendanceEvidenceSourceChannel,
+  AttendanceOfflineSyncReasonCode,
+  AttendanceOfflineSyncStatus,
+  AttendanceOfflineVerificationStatus,
+  AttendancePunchEventType,
+  AttendancePunchSourceChannel,
+  UUID,
+} from "#shared";
+import type { AttendanceOutboxEventContract } from "./events.js";
+import type {
+  AttendanceCommandState,
+  AttendanceDecisionReasonCode,
+} from "./session-transition.js";
+import { conflict } from "../../platform/errors.js";
+import type {
+  AttendanceGeoDecisionReasonCode,
+  AttendanceGeoFenceReference,
+  AttendanceGeoNoEffectiveEvaluation,
+  AttendanceGeoSafeEvaluation,
+  AttendanceGeoSpatialCategory,
+} from "./geo-policy.js";
+import { setTenantDbContext } from "../../platform/tenant-db-context.js";
+
+export const ATTENDANCE_GEO_EVALUATOR_VERSION = "attendance-geo-v2";
+
+export type AttendanceCommandDecisionReasonCode =
+  | AttendanceDecisionReasonCode
+  | AttendanceGeoDecisionReasonCode
+  | AttendanceAdditionalCommandReasonCode;
+
+export interface AttendanceEmployeeCommandStateRecord {
+  company_id: UUID;
+  employee_user_id: UUID;
+  state: AttendanceCommandState;
+  current_session_id: UUID | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AttendanceCommandExecutionStatus =
+  | "received"
+  | "allowed"
+  | "denied"
+  | "completed";
+
+export interface AttendanceCommandExecutionRecord {
+  id: UUID;
+  company_id: UUID;
+  actor_user_id: UUID;
+  employee_user_id: UUID;
+  platform_idempotency_key_id: UUID | null;
+  idempotency_key: string;
+  client_event_id: UUID | null;
+  request_hash: string;
+  command_type: AttendancePunchEventType;
+  command_origin: string;
+  occurred_at: string;
+  status: AttendanceCommandExecutionStatus;
+  session_id: UUID | null;
+  punch_event_id: UUID | null;
+  request_snapshot: Record<string, unknown>;
+  response_snapshot: Record<string, unknown> | null;
+  response_hash: string | null;
+  response_status: number | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export type PlatformIdempotencyStatus = "processing" | "completed";
+
+export interface PlatformIdempotencyKeyRecord {
+  id: UUID;
+  scope: string;
+  idempotency_key: string;
+  actor_user_id: UUID;
+  request_hash: string;
+  response_hash: string | null;
+  status: PlatformIdempotencyStatus;
+  resource_type: string | null;
+  resource_id: UUID | null;
+  response_status: number | null;
+  created_at: Date;
+  expires_at: Date;
+  completed_at: Date | null;
+  is_expired: boolean;
+}
+
+export interface AttendanceRegisteredDeviceRecord {
+  id: UUID;
+  company_id: UUID;
+  user_id: UUID;
+  status: "registered" | "suspended" | "revoked";
+  offline_sequence_cursor: string;
+}
+
+export interface AttendanceOfflineInboxRecord {
+  id: UUID;
+  company_id: UUID;
+  actor_user_id: UUID;
+  employee_user_id: UUID;
+  batch_id: UUID;
+  registered_device_id: UUID;
+  device_snapshot: Record<string, unknown>;
+  client_event_id: UUID;
+  sequence: string;
+  event_hash: string;
+  event_payload: Record<string, unknown>;
+  attendance_event_id: UUID | null;
+  sync_status: AttendanceOfflineSyncStatus;
+  verification_status: AttendanceOfflineVerificationStatus;
+  reason_code: AttendanceOfflineSyncReasonCode | null;
+  server_received_at: Date;
+  processed_at: Date | null;
+  response_snapshot: Record<string, unknown>;
+  payroll_eligible: false;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export type OfflineSyncSecuritySignalType =
+  | "changed_body_conflict"
+  | "duplicate_sequence"
+  | "sequence_gap"
+  | "sequence_out_of_order";
+
+export interface CreateOfflineSyncSecurityAuditInput {
+  companyId: UUID;
+  actorUserId: UUID;
+  registeredDeviceId: UUID;
+  clientEventId: UUID;
+  observedSequence: number;
+  expectedSequence: number | null;
+  signalType: OfflineSyncSecuritySignalType;
+  conflictingClientEventId?: UUID | null;
+  observedEventHash?: string | null;
+  existingEventHash?: string | null;
+}
+
+export interface CreateAttendanceOfflineInboxInput {
+  companyId: UUID;
+  actorUserId: UUID;
+  employeeUserId: UUID;
+  batchId: UUID;
+  registeredDeviceId: UUID;
+  deviceSnapshot: Record<string, unknown>;
+  clientEventId: UUID;
+  sequence: number;
+  eventHash: string;
+  eventPayload: Record<string, unknown>;
+  syncStatus: AttendanceOfflineSyncStatus;
+  verificationStatus: AttendanceOfflineVerificationStatus;
+  reasonCode: AttendanceOfflineSyncReasonCode | null;
+  serverReceivedAt: string;
+  processedAt: string | null;
+  responseSnapshot: Record<string, unknown>;
+}
+
+export interface ClaimPlatformIdempotencyKeyInput {
+  scope: string;
+  idempotencyKey: string;
+  actorUserId: UUID;
+  requestHash: string;
+  expiresIn: string;
+}
+
+export interface AttendanceCommandDecisionRecord {
+  id: UUID;
+  command_execution_id: UUID;
+  company_id: UUID;
+  employee_user_id: UUID;
+  outcome: "allowed" | "denied";
+  reason_code: AttendanceCommandDecisionReasonCode | null;
+  reason_detail: string | null;
+  previous_state: AttendanceCommandState;
+  next_state: AttendanceCommandState;
+  policy_snapshot: Record<string, unknown>;
+  evidence_snapshot: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AttendanceEvidenceEventRecord {
+  id: UUID;
+}
+
+export interface AttendanceAuditDecisionRecord {
+  id: UUID;
+}
+
+export interface AttendanceLocationEvidenceRecord {
+  id: UUID;
+}
+
+interface EffectiveGeofenceEvaluationRow {
+  candidate_ordinal: number;
+  geofence_id: UUID;
+  geofence_version_id: UUID;
+  work_site_id: UUID;
+  version_number: number;
+  shape_type: "circle" | "polygon";
+  effective_from: Date;
+  effective_until: Date | null;
+  canonical_hash: string;
+  covered: boolean | null;
+  distance_meters: number | string | null;
+  boundary_distance_meters: number | string | null;
+  radius_meters: number | string | null;
+  grace_meters: number | string;
+  effective_radius_meters: number | string | null;
+  signed_margin_meters: number | string;
+  reported_accuracy_meters: number | string;
+}
+
+export type EffectiveGeofenceEvaluationResult =
+  | {
+      configured: false;
+      evaluation: AttendanceGeoNoEffectiveEvaluation;
+    }
+  | {
+      configured: true;
+      category: AttendanceGeoSpatialCategory;
+      reference: AttendanceGeoFenceReference;
+      evaluation: AttendanceGeoSafeEvaluation;
+    };
+
+function finiteNumber(value: number | string | null, field: string): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed)) {
+    throw conflict("PostGIS geofence evaluation produced a non-finite metric.", {
+      code: "geofence_evaluation_non_finite_metric",
+      field,
+    });
+  }
+  return parsed;
+}
+
+export function classifyAttendanceGeoSpatialCategory(
+  signedMarginMeters: number,
+  reportedAccuracyMeters: number,
+): AttendanceGeoSpatialCategory {
+  if (signedMarginMeters >= reportedAccuracyMeters) return "inside_confident";
+  if (signedMarginMeters < -reportedAccuracyMeters) return "outside_confident";
+  return "boundary_uncertain";
+}
+
+function categoryPriority(category: AttendanceGeoSpatialCategory): number {
+  switch (category) {
+    case "inside_confident":
+      return 1;
+    case "boundary_uncertain":
+      return 2;
+    case "outside_confident":
+      return 3;
+  }
+}
+
+function selectionReason(category: AttendanceGeoSpatialCategory): string {
+  switch (category) {
+    case "inside_confident":
+      return "inside_confident_strongest_margin";
+    case "boundary_uncertain":
+      return "boundary_uncertain_strongest_margin";
+    case "outside_confident":
+      return "outside_confident_nearest";
+  }
+}
+
+export interface CreateAttendanceCommandInput {
+  companyId: UUID;
+  actorUserId: UUID;
+  employeeUserId: UUID;
+  platformIdempotencyKeyId: UUID;
+  idempotencyKey: string;
+  clientEventId?: UUID | null;
+  requestHash: string;
+  commandType: AttendancePunchEventType;
+  commandOrigin: string;
+  occurredAt: string;
+  requestSnapshot: Record<string, unknown>;
+}
+
+export interface CreateAttendanceDecisionInput {
+  commandExecutionId: UUID;
+  companyId: UUID;
+  employeeUserId: UUID;
+  outcome: "allowed" | "denied";
+  reasonCode: AttendanceCommandDecisionReasonCode | null;
+  reasonDetail: string | null;
+  previousState: AttendanceCommandState;
+  nextState: AttendanceCommandState;
+  policySnapshot: Record<string, unknown>;
+  evidenceSnapshot: Record<string, unknown>;
+}
+
+export interface CreateAttendanceLocationEvidenceInput {
+  attendanceEventId: UUID;
+  companyId: UUID;
+  employeeUserId: UUID;
+  capturedAt: string;
+  receivedAt: string;
+  location: AttendanceLocationEvidenceInput;
+  ageMs: number;
+  rawPayload: Record<string, unknown>;
+  coordinatesExpireAt?: string | null;
+  coordinateRetentionClass?: string | null;
+  coordinateRetentionSeconds?: number | null;
+  retentionPolicyVersionId?: UUID | null;
+}
+
+export interface CompleteAttendanceCommandInput {
+  commandExecutionId: UUID;
+  companyId: UUID;
+  status: "denied" | "completed";
+  sessionId?: UUID | null;
+  punchEventId?: UUID | null;
+  responseSnapshot: Record<string, unknown>;
+  responseHash: string;
+  responseStatus: number;
+}
+
+export type AttendanceSessionStatus = "working" | "on_break" | "closed";
+
+export interface AttendanceSessionRecord {
+  id: UUID;
+  company_id: UUID;
+  employee_user_id: UUID;
+  work_date: string;
+  status: AttendanceSessionStatus;
+  checked_in_at: string;
+  closed_at: string | null;
+  /** Compatibility projection only; break_segments is authoritative. */
+  active_break_started_at: string | null;
+  last_transition_at: string;
+  work_mode: "office" | "remote" | "wfh" | "field";
+  source: AttendancePunchSourceChannel;
+  metadata: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface AttendanceBreakSegmentRecord {
+  id: UUID;
+  company_id: UUID;
+  session_id: UUID;
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAttendanceSessionInput {
+  companyId: UUID;
+  employeeUserId: UUID;
+  workDate: string;
+  checkedInAt: string;
+  workMode: AttendanceSessionRecord["work_mode"];
+  source: AttendanceSessionRecord["source"];
+  metadata: Record<string, unknown>;
+}
+
+export interface UpdateAttendanceEmployeeStateInput {
+  companyId: UUID;
+  employeeUserId: UUID;
+  state: AttendanceCommandState;
+  currentSessionId: UUID | null;
+}
+
+export class AttendanceCommandIdempotencyConflict extends Error {}
+
+export class PostgresAttendanceCommandRepository {
+  constructor(private readonly pool: Pool) {}
+
+  async transaction<T>(
+    operation: (
+      repository: AttendanceCommandTransactionRepository,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const repository = new AttendanceCommandTransactionRepository(client);
+
+      const result = await operation(repository);
+
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export class AttendanceCommandTransactionRepository {
+  constructor(private readonly client: PoolClient) {}
+
+  /** Escape hatch for the small projection/outbox statements owned by this
+   * aggregate. It intentionally exposes only the transaction-scoped client. */
+  query<T extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ) {
+    return this.client.query<T>(text, values);
+  }
+
+  async getTransactionTimestamp(): Promise<string> {
+    const result = await this.client.query<{ occurred_at: Date }>(
+      "SELECT transaction_timestamp() AS occurred_at",
+    );
+    const timestamp = result.rows[0]?.occurred_at;
+    if (!timestamp) {
+      throw new Error("PostgreSQL transaction timestamp is unavailable.");
+    }
+    return timestamp.toISOString();
+  }
+
+  async findPlatformIdempotencyKeyForUpdate(input: {
+    scope: string;
+    actorUserId: UUID;
+    idempotencyKey: string;
+  }): Promise<PlatformIdempotencyKeyRecord | null> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `SELECT id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, expires_at <= now() AS is_expired
+        FROM platform.idempotency_keys
+        WHERE scope = $1 AND actor_user_id = $2 AND idempotency_key = $3
+        FOR UPDATE`,
+      [input.scope, input.actorUserId, input.idempotencyKey],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findRegisteredDeviceForMobileEvidenceShare(input: {
+    companyId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    await setTenantDbContext(this.client, input.companyId);
+    const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
+      `SELECT id, company_id, user_id, status,
+          offline_sequence_cursor::text AS offline_sequence_cursor
+       FROM platform.registered_devices
+       WHERE company_id = $1
+         AND id = $2
+       FOR SHARE`,
+      [input.companyId, input.registeredDeviceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async lockRegisteredDeviceForOfflineSync(input: {
+    companyId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<AttendanceRegisteredDeviceRecord | null> {
+    await setTenantDbContext(this.client, input.companyId);
+    const result = await this.client.query<AttendanceRegisteredDeviceRecord>(
+      `SELECT id, company_id, user_id, status,
+          offline_sequence_cursor::text AS offline_sequence_cursor
+       FROM platform.registered_devices
+       WHERE company_id = $1
+         AND id = $2
+       FOR UPDATE`,
+      [input.companyId, input.registeredDeviceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async lockOfflineClientEventIds(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventIds: readonly UUID[];
+  }): Promise<void> {
+    const uniqueClientEventIds = [...new Set(input.clientEventIds)].sort();
+    for (const clientEventId of uniqueClientEventIds) {
+      await this.client.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtext('attendance.offline_event'),
+           hashtext($1)
+         )`,
+        [`${input.companyId}:${input.actorUserId}:${clientEventId}`],
+      );
+    }
+  }
+
+  async findOfflineDeviceSequencesAfter(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequence: number;
+  }): Promise<number[]> {
+    const result = await this.client.query<{ sequence: string }>(
+      `SELECT sequence::text AS sequence
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3
+         AND sequence > $4
+       ORDER BY sequence ASC`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequence,
+      ],
+    );
+    return result.rows.map((row) => Number(row.sequence));
+  }
+
+  async updateOfflineSequenceCursor(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequenceCursor: number;
+  }): Promise<void> {
+    await setTenantDbContext(this.client, input.companyId);
+    const result = await this.client.query(
+      `UPDATE platform.registered_devices
+       SET offline_sequence_cursor = $4,
+           updated_at = now()
+       WHERE company_id = $1
+         AND user_id = $2
+         AND id = $3
+         AND offline_sequence_cursor < $4`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequenceCursor,
+      ],
+    );
+    if ((result.rowCount ?? 0) > 1) {
+      throw new Error("Offline sequence cursor update matched multiple devices.");
+    }
+  }
+
+  async createOfflineSyncSecurityAudit(
+    input: CreateOfflineSyncSecurityAuditInput,
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO attendance.offline_sync_security_audit_logs (
+          company_id, actor_user_id, registered_device_id, client_event_id,
+          observed_sequence, expected_sequence, signal_type,
+          conflicting_client_event_id, observed_event_hash, existing_event_hash
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.clientEventId,
+        input.observedSequence,
+        input.expectedSequence,
+        input.signalType,
+        input.conflictingClientEventId ?? null,
+        input.observedEventHash ?? null,
+        input.existingEventHash ?? null,
+      ],
+    );
+  }
+
+  async findOfflineInboxByClientEventId(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventId: UUID;
+  }): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `SELECT
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND client_event_id = $3
+       FOR UPDATE`,
+      [input.companyId, input.actorUserId, input.clientEventId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findOfflineInboxByDeviceSequence(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+    sequence: number;
+  }): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `SELECT
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3
+         AND sequence = $4`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.registeredDeviceId,
+        input.sequence,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findMaxOfflineDeviceSequence(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    registeredDeviceId: UUID;
+  }): Promise<number | null> {
+    const result = await this.client.query<{ max_sequence: string | null }>(
+      `SELECT max(sequence)::text AS max_sequence
+       FROM attendance.offline_event_inbox
+       WHERE company_id = $1
+         AND actor_user_id = $2
+         AND registered_device_id = $3`,
+      [input.companyId, input.actorUserId, input.registeredDeviceId],
+    );
+    const value = result.rows[0]?.max_sequence;
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  async createOfflineInboxEvent(
+    input: CreateAttendanceOfflineInboxInput,
+  ): Promise<AttendanceOfflineInboxRecord | null> {
+    const result = await this.client.query<AttendanceOfflineInboxRecord>(
+      `INSERT INTO attendance.offline_event_inbox (
+          company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id, sequence,
+          event_hash, event_payload, attendance_event_id, sync_status,
+          verification_status, reason_code, server_received_at, processed_at,
+          response_snapshot
+        )
+        VALUES (
+          $1, $2, $3, $4,
+          $5, $6::jsonb, $7, $8,
+          $9, $10::jsonb, NULL, $11,
+          $12, $13, $14, $15,
+          $16::jsonb
+        )
+        ON CONFLICT (company_id, actor_user_id, client_event_id) DO NOTHING
+        RETURNING
+          id, company_id, actor_user_id, employee_user_id, batch_id,
+          registered_device_id, device_snapshot, client_event_id,
+          sequence::text AS sequence, event_hash, event_payload,
+          attendance_event_id, sync_status, verification_status, reason_code,
+          server_received_at, processed_at, response_snapshot,
+          payroll_eligible, created_at, updated_at`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.employeeUserId,
+        input.batchId,
+        input.registeredDeviceId,
+        JSON.stringify(input.deviceSnapshot),
+        input.clientEventId,
+        input.sequence,
+        input.eventHash,
+        JSON.stringify(input.eventPayload),
+        input.syncStatus,
+        input.verificationStatus,
+        input.reasonCode,
+        input.serverReceivedAt,
+        input.processedAt,
+        JSON.stringify(input.responseSnapshot),
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async attachAttendanceEventToOfflineInbox(input: {
+    offlineInboxId: UUID;
+    companyId: UUID;
+    attendanceEventId: UUID;
+  }): Promise<void> {
+    const result = await this.client.query(
+      `UPDATE attendance.offline_event_inbox
+       SET attendance_event_id = $3,
+           updated_at = now()
+       WHERE id = $1
+         AND company_id = $2
+         AND attendance_event_id IS NULL`,
+      [input.offlineInboxId, input.companyId, input.attendanceEventId],
+    );
+    if (result.rowCount !== 1) {
+      throw new Error("Offline inbox attendance event link could not be persisted.");
+    }
+  }
+
+  async claimPlatformIdempotencyKey(
+    input: ClaimPlatformIdempotencyKeyInput,
+  ): Promise<PlatformIdempotencyKeyRecord | null> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `INSERT INTO platform.idempotency_keys (
+          scope, idempotency_key, actor_user_id, request_hash, response_hash,
+          status, resource_type, resource_id, response_status, created_at,
+          expires_at, completed_at
+        )
+        VALUES ($1, $2, $3, $4, NULL, 'processing', NULL, NULL, NULL, now(), now() + $5::interval, NULL)
+        ON CONFLICT (scope, idempotency_key, actor_user_id) DO NOTHING
+        RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, false AS is_expired`,
+      [
+        input.scope,
+        input.idempotencyKey,
+        input.actorUserId,
+        input.requestHash,
+        input.expiresIn,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async deleteExpiredPlatformIdempotencyKey(id: UUID): Promise<boolean> {
+    const result = await this.client.query<{ id: UUID }>(
+      `DELETE FROM platform.idempotency_keys
+        WHERE id = $1 AND expires_at <= now()`,
+      [id],
+    );
+    return result.rowCount === 1;
+  }
+
+  async completePlatformIdempotencyKey(input: {
+    id: UUID;
+    resourceType: string;
+    resourceId: UUID;
+    responseHash: string;
+    responseStatus: number;
+  }): Promise<PlatformIdempotencyKeyRecord> {
+    const result = await this.client.query<PlatformIdempotencyKeyRecord>(
+      `UPDATE platform.idempotency_keys
+        SET status = 'completed', resource_type = $2, resource_id = $3,
+            response_hash = $4, response_status = $5, completed_at = now()
+        WHERE id = $1 AND status = 'processing'
+        RETURNING id, scope, idempotency_key, actor_user_id, request_hash,
+          response_hash, status, resource_type, resource_id, response_status,
+          created_at, expires_at, completed_at, false AS is_expired`,
+      [
+        input.id,
+        input.resourceType,
+        input.resourceId,
+        input.responseHash,
+        input.responseStatus,
+      ],
+    );
+    const key = result.rows[0];
+    if (!key)
+      throw new Error("Platform idempotency key could not be completed.");
+    return key;
+  }
+
+  async findCommandExecutionById(
+    commandExecutionId: UUID,
+    companyId: UUID,
+  ): Promise<AttendanceCommandExecutionRecord | null> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `SELECT id, company_id, actor_user_id, employee_user_id, platform_idempotency_key_id, idempotency_key,
+          client_event_id, request_hash, command_type, command_origin, occurred_at, status, session_id,
+          punch_event_id, request_snapshot, response_snapshot, response_hash,
+          response_status, completed_at, created_at
+        FROM attendance.command_executions
+        WHERE id = $1
+          AND company_id = $2`,
+      [commandExecutionId, companyId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async ensureAndLockEmployeeState(
+    companyId: UUID,
+    employeeUserId: UUID,
+  ): Promise<AttendanceEmployeeCommandStateRecord> {
+    await this.client.query(
+      `INSERT INTO attendance.employee_command_states (
+        company_id,
+        employee_user_id,
+        state,
+        current_session_id,
+        version,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, 'not_checked_in', NULL, 1, now(), now())
+      ON CONFLICT (company_id, employee_user_id)
+      DO NOTHING`,
+      [companyId, employeeUserId],
+    );
+
+    const result =
+      await this.client.query<AttendanceEmployeeCommandStateRecord>(
+        `SELECT
+          company_id,
+          employee_user_id,
+          state,
+          current_session_id,
+          version,
+          created_at,
+          updated_at
+        FROM attendance.employee_command_states
+        WHERE company_id = $1
+          AND employee_user_id = $2
+        FOR UPDATE`,
+        [companyId, employeeUserId],
+      );
+
+    const state = result.rows[0];
+
+    if (!state) {
+      throw new Error(
+        "Unable to acquire employee attendance command state lock.",
+      );
+    }
+
+    return state;
+  }
+
+  async findCommandByClientEventIdForUpdate(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    clientEventId: UUID;
+  }): Promise<AttendanceCommandExecutionRecord | null> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `SELECT
+          id,
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          response_hash,
+          response_status,
+          completed_at,
+          created_at
+        FROM attendance.command_executions
+        WHERE company_id = $1
+          AND actor_user_id = $2
+          AND client_event_id = $3
+        FOR UPDATE`,
+      [input.companyId, input.actorUserId, input.clientEventId],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async findCommandByIdempotencyKey(input: {
+    companyId: UUID;
+    actorUserId: UUID;
+    idempotencyKey: string;
+  }): Promise<AttendanceCommandExecutionRecord | null> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `SELECT
+          id,
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          response_hash,
+          response_status,
+          completed_at,
+          created_at
+        FROM attendance.command_executions
+        WHERE company_id = $1
+          AND actor_user_id = $2
+          AND idempotency_key = $3`,
+      [input.companyId, input.actorUserId, input.idempotencyKey],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async createCommandExecution(
+    input: CreateAttendanceCommandInput,
+  ): Promise<AttendanceCommandExecutionRecord> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `INSERT INTO attendance.command_executions (
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          completed_at,
+          created_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          'received',
+          NULL,
+          NULL,
+          $11::jsonb,
+          NULL,
+          NULL,
+          now()
+        )
+        ON CONFLICT (platform_idempotency_key_id)
+          WHERE platform_idempotency_key_id IS NOT NULL
+          DO NOTHING
+        RETURNING
+          id,
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          response_hash,
+          response_status,
+          completed_at,
+          created_at`,
+      [
+        input.companyId,
+        input.actorUserId,
+        input.employeeUserId,
+        input.platformIdempotencyKeyId,
+        input.idempotencyKey,
+        input.clientEventId ?? null,
+        input.requestHash,
+        input.commandType,
+        input.commandOrigin,
+        input.occurredAt,
+        JSON.stringify(input.requestSnapshot),
+      ],
+    );
+
+    const command = result.rows[0];
+
+    if (!command) {
+      throw new AttendanceCommandIdempotencyConflict();
+    }
+
+    return command;
+  }
+
+  async createDecision(
+    input: CreateAttendanceDecisionInput,
+  ): Promise<AttendanceCommandDecisionRecord> {
+    const result = await this.client.query<AttendanceCommandDecisionRecord>(
+      `INSERT INTO attendance.command_decisions (
+          command_execution_id,
+          company_id,
+          employee_user_id,
+          outcome,
+          reason_code,
+          reason_detail,
+          previous_state,
+          next_state,
+          policy_snapshot,
+          evidence_snapshot,
+          created_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9::jsonb,
+          $10::jsonb,
+          now()
+        )
+        RETURNING
+          id,
+          command_execution_id,
+          company_id,
+          employee_user_id,
+          outcome,
+          reason_code,
+          reason_detail,
+          previous_state,
+          next_state,
+          policy_snapshot,
+          evidence_snapshot,
+          created_at`,
+      [
+        input.commandExecutionId,
+        input.companyId,
+        input.employeeUserId,
+        input.outcome,
+        input.reasonCode,
+        input.reasonDetail,
+        input.previousState,
+        input.nextState,
+        JSON.stringify(input.policySnapshot),
+        JSON.stringify(input.evidenceSnapshot),
+      ],
+    );
+
+    const decision = result.rows[0];
+
+    if (!decision) {
+      throw new Error("Attendance command decision was not created.");
+    }
+
+    return decision;
+  }
+
+  async createAttendanceEvidenceEvent(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    actorUserId: UUID;
+    commandExecutionId: UUID | null;
+    eventType: AttendancePunchEventType;
+    source: AttendanceEvidenceSourceChannel;
+    occurredAt: string;
+    receivedAt: string;
+    payload: Record<string, unknown>;
+    payloadHash: string;
+  }): Promise<AttendanceEvidenceEventRecord> {
+    const result = await this.client.query<AttendanceEvidenceEventRecord>(
+      `INSERT INTO attendance.attendance_events (
+          company_id, employee_user_id, actor_user_id, command_execution_id,
+          event_type, source, occurred_at, received_at, schema_version, payload,
+          payload_hash
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10)
+        RETURNING id`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.actorUserId,
+        input.commandExecutionId,
+        input.eventType,
+        input.source,
+        input.occurredAt,
+        input.receivedAt,
+        JSON.stringify(input.payload),
+        input.payloadHash,
+      ],
+    );
+    const event = result.rows[0];
+    if (!event) throw new Error("Attendance evidence event was not created.");
+    return event;
+  }
+
+  async createAttendanceAuditDecision(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    attendanceEventId: UUID;
+    commandExecutionId: UUID;
+    decisionType: string;
+    outcome: "passed" | "failed" | "not_applicable" | "indeterminate";
+    policyKey: string;
+    policyVersion: string;
+    evaluatorVersion?: string | null;
+    evaluatedAt: string;
+    evidenceDigest: string;
+    policySnapshot: Record<string, unknown>;
+    evaluationContext: Record<string, unknown>;
+  }): Promise<AttendanceAuditDecisionRecord> {
+    const result = await this.client.query<AttendanceAuditDecisionRecord>(
+      `INSERT INTO attendance.attendance_decisions (
+          company_id, employee_user_id, attendance_event_id, command_execution_id,
+          decision_type, outcome, policy_key, policy_version, evaluator_version,
+          evaluated_at, evidence_digest, policy_snapshot, evaluation_context
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)
+        RETURNING id`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.attendanceEventId,
+        input.commandExecutionId,
+        input.decisionType,
+        input.outcome,
+        input.policyKey,
+        input.policyVersion,
+        input.evaluatorVersion ?? null,
+        input.evaluatedAt,
+        input.evidenceDigest,
+        JSON.stringify(input.policySnapshot),
+        JSON.stringify(input.evaluationContext),
+      ],
+    );
+    const decision = result.rows[0];
+    if (!decision) throw new Error("Attendance audit decision was not created.");
+    return decision;
+  }
+
+  async createAttendanceLocationEvidence(
+    input: CreateAttendanceLocationEvidenceInput,
+  ): Promise<AttendanceLocationEvidenceRecord> {
+    const result = await this.client.query<AttendanceLocationEvidenceRecord>(
+      `INSERT INTO attendance.location_evidence (
+          attendance_event_id, company_id, employee_user_id, captured_at,
+          received_at, latitude, longitude, accuracy_meters, altitude_meters,
+          provider, is_mocked, integrity_status, raw_payload, age_ms,
+          permission_state, coordinates_expire_at, coordinate_retention_class,
+          coordinate_retention_seconds, retention_policy_version_id
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19
+        )
+        RETURNING id`,
+      [
+        input.attendanceEventId,
+        input.companyId,
+        input.employeeUserId,
+        input.capturedAt,
+        input.receivedAt,
+        "latitude" in input.location ? input.location.latitude : null,
+        "longitude" in input.location ? input.location.longitude : null,
+        "accuracy_meters" in input.location ? input.location.accuracy_meters : null,
+        "altitude_meters" in input.location ? input.location.altitude_meters ?? null : null,
+        input.location.provider ?? null,
+        "is_mocked" in input.location ? input.location.is_mocked ?? null : null,
+        input.location.integrity_status ?? null,
+        JSON.stringify(input.rawPayload),
+        input.ageMs,
+        input.location.permission_state,
+        input.coordinatesExpireAt ?? null,
+        input.coordinateRetentionClass ?? null,
+        input.coordinateRetentionSeconds ?? null,
+        input.retentionPolicyVersionId ?? null,
+      ],
+    );
+    const evidence = result.rows[0];
+    if (!evidence) throw new Error("Attendance location evidence was not created.");
+    return evidence;
+  }
+
+  async evaluateEffectiveGeofence(input: {
+    companyId: UUID;
+    geofenceIds: UUID[];
+    asOf: string;
+    latitude: number;
+    longitude: number;
+    reportedAccuracyMeters: number;
+    graceMeters: number;
+  }): Promise<EffectiveGeofenceEvaluationResult> {
+    const candidateCount = input.geofenceIds.length;
+    if (candidateCount === 0) {
+      return {
+        configured: false,
+        evaluation: {
+          category: "no_effective_geofence",
+          evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+          candidate_count: candidateCount,
+          valid_candidate_count: 0,
+        },
+      };
+    }
+    const result = await this.client.query<EffectiveGeofenceEvaluationRow>(
+      `WITH candidates AS (
+          SELECT candidate.geofence_id, candidate.ordinal::integer AS candidate_ordinal
+          FROM unnest($2::uuid[]) WITH ORDINALITY AS candidate(geofence_id, ordinal)
+        ),
+        point AS (
+          SELECT ST_SetSRID(ST_MakePoint($4, $5), 4326) AS geom
+        ),
+        effective AS (
+          SELECT
+            candidates.candidate_ordinal,
+            geofence.id AS geofence_id,
+            version.id AS geofence_version_id,
+            geofence.work_site_id,
+            version.version_number,
+            version.shape_type,
+            version.effective_from,
+            version.effective_until,
+            version.canonical_hash,
+            CASE
+              WHEN version.shape_type = 'polygon'
+                THEN ST_Covers(version.shape, point.geom)
+              ELSE NULL
+            END AS covered,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN ST_Distance(point.geom::geography, version.shape::geography)
+              ELSE NULL
+            END AS distance_meters,
+            CASE
+              WHEN version.shape_type = 'polygon'
+                THEN ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography)
+              ELSE NULL
+            END AS boundary_distance_meters,
+            version.circle_radius_meters::double precision AS radius_meters,
+            $7::double precision AS grace_meters,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN version.circle_radius_meters::double precision + $7::double precision
+              ELSE NULL
+            END AS effective_radius_meters,
+            CASE
+              WHEN version.shape_type = 'circle'
+                THEN version.circle_radius_meters::double precision + $7::double precision -
+                  ST_Distance(point.geom::geography, version.shape::geography)
+              WHEN ST_Covers(version.shape, point.geom)
+                THEN ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography) + $7::double precision
+              ELSE $7::double precision -
+                ST_Distance(point.geom::geography, ST_Boundary(version.shape)::geography)
+            END AS signed_margin_meters,
+            $6::double precision AS reported_accuracy_meters
+          FROM candidates
+          JOIN attendance.geofences geofence
+            ON geofence.company_id = $1
+           AND geofence.id = candidates.geofence_id
+           AND geofence.is_active = true
+           AND geofence.deleted_at IS NULL
+          JOIN attendance.geofence_versions version
+            ON version.geofence_id = geofence.id
+           AND version.company_id = geofence.company_id
+          CROSS JOIN point
+          WHERE version.version_status = 'published'
+            AND version.effective_from <= $3::timestamptz
+            AND (version.effective_until IS NULL OR $3::timestamptz < version.effective_until)
+        )
+        SELECT
+          candidate_ordinal,
+          geofence_id,
+          geofence_version_id,
+          work_site_id,
+          version_number,
+          shape_type,
+          effective_from,
+          effective_until,
+          canonical_hash,
+          covered,
+          distance_meters,
+          boundary_distance_meters,
+          radius_meters,
+          grace_meters,
+          effective_radius_meters,
+          signed_margin_meters,
+          reported_accuracy_meters
+        FROM effective
+        ORDER BY candidate_ordinal ASC, effective_from DESC, version_number DESC`,
+      [
+        input.companyId,
+        input.geofenceIds,
+        input.asOf,
+        input.longitude,
+        input.latitude,
+        input.reportedAccuracyMeters,
+        input.graceMeters,
+      ],
+    );
+    if (result.rows.length === 0) {
+      return {
+        configured: false,
+        evaluation: {
+          category: "no_effective_geofence",
+          evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+          candidate_count: candidateCount,
+          valid_candidate_count: 0,
+        },
+      };
+    }
+    const versionsByGeofence = new Map<UUID, EffectiveGeofenceEvaluationRow[]>();
+    for (const row of result.rows) {
+      versionsByGeofence.set(row.geofence_id, [
+        ...(versionsByGeofence.get(row.geofence_id) ?? []),
+        row,
+      ]);
+    }
+    const ambiguous = [...versionsByGeofence.values()].find((rows) => rows.length > 1);
+    if (ambiguous) {
+      throw conflict("Geofence has multiple effective published versions.", {
+        code: "geofence_ambiguous_active_versions",
+        geofence_id: ambiguous[0]!.geofence_id,
+        geofence_version_ids: ambiguous.map((row) => row.geofence_version_id),
+      });
+    }
+    const evaluated = result.rows.map((row) => {
+      const signedMarginMeters = finiteNumber(row.signed_margin_meters, "signed_margin_meters");
+      const reportedAccuracyMeters = finiteNumber(row.reported_accuracy_meters, "reported_accuracy_meters");
+      const category = classifyAttendanceGeoSpatialCategory(signedMarginMeters, reportedAccuracyMeters);
+      const evaluation: AttendanceGeoSafeEvaluation = {
+        category,
+        evaluator_version: ATTENDANCE_GEO_EVALUATOR_VERSION,
+        candidate_count: candidateCount,
+        valid_candidate_count: result.rows.length,
+        inside_match_count: 0,
+        multiple_inside_matches: false,
+        selected_candidate_ordinal: row.candidate_ordinal,
+        selected_work_site_id: row.work_site_id,
+        selected_geofence_id: row.geofence_id,
+        selected_geofence_version_id: row.geofence_version_id,
+        selected_shape_type: row.shape_type,
+        selection_reason: "",
+        grace_meters: finiteNumber(row.grace_meters, "grace_meters"),
+        signed_margin_meters: signedMarginMeters,
+        reported_accuracy_meters: reportedAccuracyMeters,
+      };
+      if (row.shape_type === "circle") {
+        evaluation.distance_meters = finiteNumber(row.distance_meters, "distance_meters");
+        evaluation.radius_meters = finiteNumber(row.radius_meters, "radius_meters");
+        evaluation.effective_radius_meters = finiteNumber(row.effective_radius_meters, "effective_radius_meters");
+      } else {
+        evaluation.boundary_distance_meters = finiteNumber(row.boundary_distance_meters, "boundary_distance_meters");
+      }
+      return { row, category, evaluation };
+    });
+    const insideMatchCount = evaluated.filter((candidate) => candidate.category === "inside_confident").length;
+    const selected = evaluated.sort((left, right) => {
+      const priority = categoryPriority(left.category) - categoryPriority(right.category);
+      if (priority !== 0) return priority;
+      const margin = right.evaluation.signed_margin_meters - left.evaluation.signed_margin_meters;
+      if (margin !== 0) return margin;
+      const ordinal = left.row.candidate_ordinal - right.row.candidate_ordinal;
+      if (ordinal !== 0) return ordinal;
+      const geofence = left.row.geofence_id.localeCompare(right.row.geofence_id);
+      if (geofence !== 0) return geofence;
+      return left.row.geofence_version_id.localeCompare(right.row.geofence_version_id);
+    })[0]!;
+    selected.evaluation.inside_match_count = insideMatchCount;
+    selected.evaluation.multiple_inside_matches = insideMatchCount > 1;
+    selected.evaluation.selection_reason = selectionReason(selected.category);
+    const row = selected.row;
+    return {
+      configured: true,
+      category: selected.category,
+      reference: {
+        geofenceId: row.geofence_id,
+        geofenceVersionId: row.geofence_version_id,
+        workSiteId: row.work_site_id,
+        versionNumber: row.version_number,
+        shapeType: row.shape_type,
+        effectiveFrom: row.effective_from.toISOString(),
+        effectiveUntil: row.effective_until?.toISOString() ?? null,
+        canonicalHash: row.canonical_hash,
+      },
+      evaluation: selected.evaluation,
+    };
+  }
+
+  async createAttendanceDecisionReason(input: {
+    attendanceDecisionId: UUID;
+    companyId: UUID;
+    reasonCode: AttendanceCommandDecisionReasonCode;
+    category: string;
+    severity: string;
+    ordinal: number;
+    details: Record<string, unknown>;
+  }): Promise<void> {
+    await this.client.query(
+      `INSERT INTO attendance.decision_reasons (
+          attendance_decision_id, company_id, reason_code, category, severity,
+          ordinal, details
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [
+        input.attendanceDecisionId,
+        input.companyId,
+        input.reasonCode,
+        input.category,
+        input.severity,
+        input.ordinal,
+        JSON.stringify(input.details),
+      ],
+    );
+  }
+
+  async completeCommand(
+    input: CompleteAttendanceCommandInput,
+  ): Promise<AttendanceCommandExecutionRecord> {
+    const result = await this.client.query<AttendanceCommandExecutionRecord>(
+      `UPDATE attendance.command_executions
+        SET status = $2,
+            session_id = $3,
+            punch_event_id = $4,
+            response_snapshot = $5::jsonb,
+            response_hash = $6,
+            response_status = $7,
+            completed_at = now()
+        WHERE id = $1
+          AND company_id = $8
+        RETURNING
+          id,
+          company_id,
+          actor_user_id,
+          employee_user_id,
+          platform_idempotency_key_id,
+          idempotency_key,
+          client_event_id,
+          request_hash,
+          command_type,
+          command_origin,
+          occurred_at,
+          status,
+          session_id,
+          punch_event_id,
+          request_snapshot,
+          response_snapshot,
+          response_hash,
+          response_status,
+          completed_at,
+          created_at`,
+      [
+        input.commandExecutionId,
+        input.status,
+        input.sessionId ?? null,
+        input.punchEventId ?? null,
+        JSON.stringify(input.responseSnapshot),
+        input.responseHash,
+        input.responseStatus,
+        input.companyId,
+      ],
+    );
+
+    const command = result.rows[0];
+
+    if (!command) {
+      throw new Error("Attendance command execution was not completed.");
+    }
+
+    return command;
+  }
+
+  async findOpenSessionForUpdate(
+    companyId: UUID,
+    employeeUserId: UUID,
+  ): Promise<AttendanceSessionRecord | null> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `SELECT
+      id,
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at
+    FROM attendance.sessions
+    WHERE company_id = $1
+      AND employee_user_id = $2
+      AND closed_at IS NULL
+      AND deleted_at IS NULL
+    ORDER BY checked_in_at DESC
+    LIMIT 1
+    FOR UPDATE`,
+      [companyId, employeeUserId],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async findActiveBreakForUpdate(
+    companyId: UUID,
+    sessionId: UUID,
+  ): Promise<AttendanceBreakSegmentRecord | null> {
+    const result = await this.client.query<AttendanceBreakSegmentRecord>(
+      `SELECT id, company_id, session_id, started_at, ended_at, created_at, updated_at
+        FROM attendance.break_segments
+        WHERE company_id = $1 AND session_id = $2 AND ended_at IS NULL
+        FOR UPDATE`,
+      [companyId, sessionId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findCompletedSessionForWorkDateForUpdate(
+    companyId: UUID,
+    employeeUserId: UUID,
+    workDate: string,
+  ): Promise<AttendanceSessionRecord | null> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `SELECT id, company_id, employee_user_id, work_date, status, checked_in_at,
+          closed_at, active_break_started_at, last_transition_at, work_mode,
+          source, metadata, version, created_at, updated_at, deleted_at
+        FROM attendance.sessions
+        WHERE company_id = $1 AND employee_user_id = $2 AND work_date = $3
+          AND closed_at IS NOT NULL AND deleted_at IS NULL
+        ORDER BY closed_at DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [companyId, employeeUserId, workDate],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findSessionForUpdate(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    sessionId: UUID;
+  }): Promise<AttendanceSessionRecord | null> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `SELECT id, company_id, employee_user_id, work_date::text AS work_date, status, checked_in_at,
+    closed_at, active_break_started_at, last_transition_at, work_mode,
+    source, metadata, version, created_at, updated_at, deleted_at
+        FROM attendance.sessions
+        WHERE id = $1 AND company_id = $2 AND employee_user_id = $3
+          AND deleted_at IS NULL
+        FOR UPDATE`,
+      [input.sessionId, input.companyId, input.employeeUserId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async createSession(
+    input: CreateAttendanceSessionInput,
+  ): Promise<AttendanceSessionRecord> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `INSERT INTO attendance.sessions (
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at
+    )
+    VALUES (
+      $1,
+      $2,
+      $3,
+      'working',
+      $4,
+      NULL,
+      $4,
+      $5,
+      $6,
+      $7::jsonb,
+      1,
+      now(),
+      now(),
+      NULL
+    )
+    RETURNING
+      id,
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.workDate,
+        input.checkedInAt,
+        input.workMode,
+        input.source,
+        JSON.stringify(input.metadata),
+      ],
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      throw new Error("Attendance session was not created.");
+    }
+
+    return session;
+  }
+
+  async startBreak(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
+    await this.client.query(
+      `INSERT INTO attendance.break_segments (
+        company_id, session_id, started_at, ended_at, created_at, updated_at
+      ) VALUES ($1, $2, $3, NULL, now(), now())`,
+      [input.companyId, input.sessionId, input.occurredAt],
+    );
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `UPDATE attendance.sessions
+    SET status = 'on_break',
+        last_transition_at = $5,
+        version = version + 1,
+        updated_at = now()
+    WHERE id = $1 AND company_id = $2 AND employee_user_id = $3 AND version = $4
+      AND status = 'working'
+      AND closed_at IS NULL
+      AND deleted_at IS NULL
+      AND $5::timestamptz >= last_transition_at
+    RETURNING
+      id,
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at`,
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      throw new Error("Attendance session could not transition to on-break.");
+    }
+
+    return session;
+  }
+
+  async endBreak(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
+    const breakResult = await this.client.query<AttendanceBreakSegmentRecord>(
+      `UPDATE attendance.break_segments
+        SET ended_at = $3, updated_at = now()
+        WHERE company_id = $1 AND session_id = $2 AND ended_at IS NULL
+          AND started_at <= $3::timestamptz
+        RETURNING id, company_id, session_id, started_at, ended_at, created_at, updated_at`,
+      [input.companyId, input.sessionId, input.occurredAt],
+    );
+    if (!breakResult.rows[0]) {
+      throw new Error("Attendance break segment could not be closed.");
+    }
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `UPDATE attendance.sessions
+    SET status = 'working',
+        last_transition_at = $5,
+        version = version + 1,
+        updated_at = now()
+    WHERE id = $1 AND company_id = $2 AND employee_user_id = $3 AND version = $4
+      AND status = 'on_break'
+      AND closed_at IS NULL
+      AND deleted_at IS NULL
+      AND $5::timestamptz >= last_transition_at
+    RETURNING
+      id,
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at`,
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      throw new Error(
+        "Attendance session could not transition from on-break to working.",
+      );
+    }
+
+    return session;
+  }
+
+  async closeSession(input: {
+    sessionId: UUID;
+    companyId: UUID;
+    employeeUserId: UUID;
+    expectedVersion: number;
+    occurredAt: string;
+  }): Promise<AttendanceSessionRecord> {
+    const result = await this.client.query<AttendanceSessionRecord>(
+      `UPDATE attendance.sessions
+    SET status = 'closed',
+        closed_at = $5,
+        last_transition_at = $5,
+        version = version + 1,
+        updated_at = now()
+    WHERE id = $1 AND company_id = $2 AND employee_user_id = $3 AND version = $4
+      AND status = 'working'
+      AND closed_at IS NULL
+      AND deleted_at IS NULL
+      AND $5::timestamptz >= last_transition_at
+    RETURNING
+      id,
+      company_id,
+      employee_user_id,
+      work_date,
+      status,
+      checked_in_at,
+      closed_at,
+      last_transition_at,
+      work_mode,
+      source,
+      metadata,
+      version,
+      created_at,
+      updated_at,
+      deleted_at`,
+      [
+        input.sessionId,
+        input.companyId,
+        input.employeeUserId,
+        input.expectedVersion,
+        input.occurredAt,
+      ],
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      throw new Error("Attendance session could not be closed.");
+    }
+
+    return session;
+  }
+
+  async updateEmployeeState(
+    input: UpdateAttendanceEmployeeStateInput,
+  ): Promise<AttendanceEmployeeCommandStateRecord> {
+    const result =
+      await this.client.query<AttendanceEmployeeCommandStateRecord>(
+        `UPDATE attendance.employee_command_states
+      SET state = $3,
+          current_session_id = $4,
+          version = version + 1,
+          updated_at = now()
+      WHERE company_id = $1
+        AND employee_user_id = $2
+      RETURNING
+        company_id,
+        employee_user_id,
+        state,
+        current_session_id,
+        version,
+        created_at,
+        updated_at`,
+        [
+          input.companyId,
+          input.employeeUserId,
+          input.state,
+          input.currentSessionId,
+        ],
+      );
+
+    const state = result.rows[0];
+
+    if (!state) {
+      throw new Error("Employee attendance command state was not updated.");
+    }
+
+    return state;
+  }
+
+  async insertPunchEvent(input: {
+    companyId: UUID;
+    employeeUserId: UUID;
+    actorUserId: UUID;
+    eventType: AttendancePunchEventType;
+    occurredAt: string;
+    workMode: string;
+    source: AttendancePunchSourceChannel;
+    origin: string;
+    regularizationRequestId?: UUID | null;
+    metadata: Record<string, unknown>;
+    commandExecutionId: UUID | null;
+    sessionId?: UUID | null;
+    decisionId: UUID | null;
+  }) {
+    return this.query<
+      { id: UUID; created_at: string } & Record<string, unknown>
+    >(
+       `INSERT INTO attendance.punch_events (company_id, employee_user_id, actor_user_id, event_type, occurred_at, work_mode, source, origin, regularization_request_id, metadata, command_execution_id, session_id, decision_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13) RETURNING id, created_at`,
+      [
+        input.companyId,
+        input.employeeUserId,
+        input.actorUserId,
+        input.eventType,
+        input.occurredAt,
+        input.workMode,
+        input.source,
+        input.origin,
+        input.regularizationRequestId ?? null,
+        JSON.stringify(input.metadata),
+        input.commandExecutionId ?? null,
+        input.sessionId ?? null,
+        input.decisionId ?? null,
+      ],
+    );
+  }
+
+  async insertOutboxEvent(event: AttendanceOutboxEventContract) {
+    return this.query(
+      `INSERT INTO platform.outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+       VALUES ('attendance',$1,$2,$3::jsonb,$4)`,
+      [
+        event.aggregateId,
+        event.eventType,
+        JSON.stringify(event.payload),
+        event.idempotencyKey,
+      ],
+    );
+  }
+}
