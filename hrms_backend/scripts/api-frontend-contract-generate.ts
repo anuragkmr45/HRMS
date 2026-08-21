@@ -196,6 +196,7 @@ function authText(operation: Operation): string {
 function roleText(tag: string, path: string): string {
   const roleByTag: Record<string, string> = {
     "Platform / Health": "Public health/OpenAPI surface only; no sensitive config values.",
+    "Platform / Devices": "Authenticated current user's active-company mobile devices only; company and owner are derived server-side.",
     "Core / Employees & Hierarchy": "Admin/HR/Auditor broad read; other users scoped to self or own hierarchy.",
     "Expenses / Requester": "Requester-owned records plus backend-approved manager/finance/admin/auditor read scope.",
     "Expenses / Manager": "Assigned direct manager or valid manager backup; requester self-verification is blocked.",
@@ -218,6 +219,7 @@ function frontendUse(row: OperationRow): string {
   if (path.includes("/auth/login")) return "Login form.";
   if (path.includes("/auth/logout")) return "Logout action.";
   if (path.includes("/auth/me")) return "Session bootstrap, route guards, topbar user menu, and role-aware navigation.";
+  if (tag === "Platform / Devices") return "Mobile app device registration, retry handling, and owner-scoped device management views.";
   if (path.includes("finance-governance") || path.includes("manager-backups")) return "Admin configuration for finance governance and backup routing.";
   if (path.includes("/queue/manager") || path.includes("/manager/verify")) return `${code("/finance/manager")} verification workspace.`;
   if (tag === "Finance Management") return "Finance dashboard, queue, ticket detail, payments, bills, settlement, audit, and reports.";
@@ -262,6 +264,7 @@ function schemaHasProperty(body: Record<string, any> | undefined, propertyName: 
 function moduleIntro(tag: string): string {
   const notes: Record<string, string> = {
     "Platform / Health": "Health and OpenAPI routes support runtime readiness checks and API tooling.",
+    "Platform / Devices": "Device APIs register and list the authenticated user's mobile app installations in the active company.",
     "Auth & Sessions": "Authentication uses one platform session. Browser clients may rely on the HttpOnly cookie; API clients should use bearer tokens.",
     "Core / Employees & Hierarchy": "Core APIs expose active employee identity and hierarchy context for role-aware frontend screens.",
     "Expenses / Requester": "Requester APIs power employee expense self-service.",

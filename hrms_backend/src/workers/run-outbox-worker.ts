@@ -2,7 +2,13 @@ import { loadEnvFile } from "../../scripts/env.js";
 import { runtimeDefaults } from "../config/runtime-defaults.js";
 import { createPostgresDataStore } from "../platform/postgres-data-store.js";
 import { AttendanceAutoPunchoutWorker } from "./attendance-auto-punchout-worker.js";
+import {
+  AttendanceCoordinatePurgeWorker,
+  DEFAULT_COORDINATE_PURGE_BATCH_SIZE,
+  DEFAULT_COORDINATE_PURGE_INTERVAL_MS,
+} from "./attendance-coordinate-purge-worker.js";
 import { OutboxWorker, ValkeyStreamPublisher } from "./outbox-worker.js";
+import { logWorkerError } from "./safe-error.js";
 
 loadEnvFile(process.env.HRMS_ENV_FILE ?? ".env.local", { required: !process.env.DATABASE_URL });
 
@@ -77,6 +83,13 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function listFromEnv(name: string, fallback: string): string[] {
   return (process.env[name] ?? fallback)
     .split(",")
@@ -87,9 +100,19 @@ function listFromEnv(name: string, fallback: string): string[] {
 const publisher = new ValkeyStreamPublisher(valkeyUrl);
 const worker = new OutboxWorker(store, publisher);
 const attendanceAutoPunchoutWorker = new AttendanceAutoPunchoutWorker(store);
+const attendanceCoordinatePurgeWorker = new AttendanceCoordinatePurgeWorker(store);
 const intervalMs = numberFromEnv("OUTBOX_WORKER_INTERVAL_MS", 2000);
 const attendanceAutoPunchoutScheduleCheckMs = 5 * 60_000;
+const attendanceCoordinatePurgeIntervalMs = positiveIntegerFromEnv(
+  "ATTENDANCE_COORDINATE_PURGE_INTERVAL_MS",
+  DEFAULT_COORDINATE_PURGE_INTERVAL_MS,
+);
+const attendanceCoordinatePurgeBatchSize = positiveIntegerFromEnv(
+  "ATTENDANCE_COORDINATE_PURGE_BATCH_SIZE",
+  DEFAULT_COORDINATE_PURGE_BATCH_SIZE,
+);
 let nextAttendanceAutoPunchoutCheckAt = 0;
+let nextAttendanceCoordinatePurgeCheckAt = 0;
 let attendanceAutoPunchoutCatchUpPending = true;
 let stopping = false;
 
@@ -100,7 +123,29 @@ async function tick(): Promise<void> {
       console.log(JSON.stringify({ worker: "outbox", ...result }));
     }
   } catch (error) {
-    console.error("Outbox worker publish cycle failed", error);
+    logWorkerError("outbox", "publish-cycle", error);
+  }
+
+  if (Date.now() >= nextAttendanceCoordinatePurgeCheckAt) {
+    nextAttendanceCoordinatePurgeCheckAt = Date.now() + attendanceCoordinatePurgeIntervalMs;
+    try {
+      const result = await attendanceCoordinatePurgeWorker.purgeExpired({
+        batchSize: attendanceCoordinatePurgeBatchSize,
+      });
+      if (result.skipped || result.purged > 0) {
+        console.log(JSON.stringify({
+          worker: "attendance-coordinate-purge",
+          skipped: result.skipped,
+          skip_reason: result.skip_reason,
+          purged: result.purged,
+          batch_size: result.batch_size,
+          company_count: result.company_ids.length,
+          company_ids: result.company_ids.slice(0, 20),
+        }));
+      }
+    } catch (error) {
+      logWorkerError("attendance-coordinate-purge", "purge-cycle", error);
+    }
   }
 
   if (Date.now() < nextAttendanceAutoPunchoutCheckAt) {
@@ -125,7 +170,7 @@ async function tick(): Promise<void> {
       }));
     }
   } catch (error) {
-    console.error("Attendance auto punch-out worker cycle failed", error);
+    logWorkerError("attendance-auto-punchout", "scheduled-cycle", error);
   }
 }
 
@@ -149,7 +194,9 @@ process.on("SIGTERM", () => {
 console.log(JSON.stringify({
   worker: "outbox",
   message: "Outbox worker started with Valkey Streams publisher.",
-  attendance_auto_punchout_schedule_check_ms: attendanceAutoPunchoutScheduleCheckMs
+  attendance_auto_punchout_schedule_check_ms: attendanceAutoPunchoutScheduleCheckMs,
+  attendance_coordinate_purge_interval_ms: attendanceCoordinatePurgeIntervalMs,
+  attendance_coordinate_purge_batch_size: attendanceCoordinatePurgeBatchSize
 }));
 while (!stopping) {
   await tick();
