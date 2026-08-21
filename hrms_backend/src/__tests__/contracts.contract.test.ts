@@ -3,6 +3,15 @@ import type { FastifyInstance } from "fastify";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getLocalDemoPassword } from "#auth";
+import {
+  AttendanceCommandReasonCodeValues,
+  AttendanceGeoDecisionReasonCodeValues,
+  AttendanceHistoricalCorrectionEventTypeValues,
+  AttendanceLocationProviderValues,
+  AttendanceOfflineSyncReasonCodeValues,
+  AttendanceOfflineSyncStatusValues,
+  AttendanceOfflineVerificationStatusValues,
+} from "#shared";
 import { buildApp } from "../app.js";
 import { createMemoryDataStore } from "../platform/data-store.js";
 import { buildRealApp } from "./real-infra.js";
@@ -23,6 +32,10 @@ type OpenApiDocument = {
   openapi?: string;
   tags?: Array<{ name?: string }>;
   paths?: Record<string, Record<string, Operation | undefined>>;
+  components?: {
+    schemas?: Record<string, unknown>;
+    parameters?: Record<string, unknown>;
+  };
 };
 
 const protectedExceptions = new Set([
@@ -42,8 +55,9 @@ const protectedExceptions = new Set([
   "POST /api/v1/webhooks/resend",
   "POST /api/v1/auth/login",
   "POST /api/v1/auth/logout",
-  "POST /api/v1/assets/scan/{qr_hash}"
+  "POST /api/v1/assets/scan/{qr_hash}",
 ]);
+const operationMetadataExceptions = new Set(["GET /api/v1/locations/india"]);
 const localDemoPassword = getLocalDemoPassword();
 
 const expectedOperations = [
@@ -75,6 +89,7 @@ const expectedOperations = [
   "GET /api/v1/attendance/calendar/daily",
   "GET /api/v1/attendance/calendar/monthly",
   "GET /api/v1/attendance/exceptions",
+  "GET /api/v1/attendance/payroll-periods/{id}/summary",
   "GET /api/v1/attendance/punches/my",
   "GET /api/v1/attendance/regularizations/my",
   "GET /api/v1/attendance/regularizations/queue/manager",
@@ -131,10 +146,15 @@ const expectedOperations = [
   "GET /api/v1/leave/balances/{user_id}",
   "GET /api/v1/leave/requests/my",
   "GET /api/v1/leave/requests/queue/manager",
+  "GET /api/v1/locations/india",
   "GET /api/v1/manager-backups",
   "GET /api/v1/notifications",
   "GET /api/v1/notifications/unread-count",
   "GET /api/v1/openapi.json",
+  "GET /api/v1/platform/devices",
+  "POST /api/v1/platform/devices/{deviceId}/restore",
+  "POST /api/v1/platform/devices/{deviceId}/revoke",
+  "POST /api/v1/platform/devices/{deviceId}/suspend",
   "GET /api/v1/platform/finance-governance",
   "GET /api/v1/projects",
   "GET /api/v1/projects/{id}",
@@ -200,9 +220,16 @@ const expectedOperations = [
   "POST /api/v1/assets/{id}/maintenance",
   "POST /api/v1/assets/{id}/return",
   "POST /api/v1/attendance/punches",
+  "POST /api/v1/attendance/employees/{employeeUserId}/assisted-current-punches",
+  "POST /api/v1/attendance/employees/{employeeUserId}/historical-corrections",
   "POST /api/v1/attendance/exports",
+  "POST /api/v1/attendance/geofences/{geofenceId}/versions/{versionId}/publish",
+  "POST /api/v1/attendance/payroll-periods",
+  "POST /api/v1/attendance/payroll-periods/{id}/lock",
+  "POST /api/v1/attendance/payroll-periods/{id}/unlock",
   "POST /api/v1/attendance/regularizations",
   "POST /api/v1/attendance/regularizations/{id}/decision",
+  "POST /api/v1/attendance/offline-sync",
   "POST /api/v1/leave-wfh/exports",
   "POST /api/v1/auth/email-verifications/resend",
   "POST /api/v1/auth/password-reset/confirm",
@@ -267,6 +294,7 @@ const expectedOperations = [
   "POST /api/v1/notifications/read-all",
   "POST /api/v1/notifications/{id}/read",
   "POST /api/v1/onboarding/company-bootstrap",
+  "POST /api/v1/platform/devices",
   "PATCH /api/v1/projects/{id}",
   "POST /api/v1/projects",
   "POST /api/v1/projects/{id}/allocations",
@@ -291,7 +319,7 @@ const expectedOperations = [
   "PUT /api/v1/ems/policies/{id}",
   "PUT /api/v1/holidays/{id}",
   "PUT /api/v1/core/users/{id}/roles",
-  "PUT /api/v1/platform/finance-governance"
+  "PUT /api/v1/platform/finance-governance",
 ] as const;
 
 const bodyRequiredOperations = [
@@ -319,6 +347,7 @@ const bodyRequiredOperations = [
   "PUT /api/v1/admin/rbac/roles/{id}/permissions",
   "PUT /api/v1/admin/workflows/{workflow_key}",
   "POST /api/v1/auth/login",
+  "POST /api/v1/platform/devices",
   "POST /api/v1/core/users",
   "POST /api/v1/core/users/exports",
   "POST /api/v1/core/users/imports",
@@ -413,7 +442,7 @@ const bodyRequiredOperations = [
   "POST /api/v1/notifications/read-all",
   "POST /api/v1/manager-backups",
   "POST /api/v1/reports/exports",
-  "PUT /api/v1/platform/finance-governance"
+  "PUT /api/v1/platform/finance-governance",
 ];
 
 const occOperations = [
@@ -474,7 +503,7 @@ const occOperations = [
   "POST /api/v1/ems/admin/probation/{id}/decision",
   "POST /api/v1/ems/requests/{id}/decision",
   "PUT /api/v1/ems/policies/{id}",
-  "PATCH /api/v1/admin/master-data/{master_key}/{id}"
+  "PATCH /api/v1/admin/master-data/{master_key}/{id}",
 ];
 
 const listOperations = [
@@ -556,7 +585,7 @@ const listOperations = [
   "GET /api/v1/helpdesk/tickets",
   "GET /api/v1/helpdesk/categories",
   "GET /api/v1/helpdesk/sla-report",
-  "GET /api/v1/notifications"
+  "GET /api/v1/notifications",
 ];
 
 describe("CORS configuration", () => {
@@ -564,8 +593,12 @@ describe("CORS configuration", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousAllowedOrigins = process.env.CORS_ALLOWED_ORIGINS;
     process.env.NODE_ENV = "development";
-    process.env.CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:3000,http://localhost:8080";
-    const localApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+    process.env.CORS_ALLOWED_ORIGINS =
+      "http://localhost:5173,http://localhost:3000,http://localhost:8080";
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
     try {
       await localApp.ready();
       const preflight = await localApp.inject({
@@ -574,12 +607,18 @@ describe("CORS configuration", () => {
         headers: {
           origin: "http://localhost:8080",
           "access-control-request-method": "PATCH",
-          "access-control-request-headers": "content-type,authorization"
-        }
+          "access-control-request-headers": "content-type,authorization",
+        },
       });
-      expect(preflight.headers["access-control-allow-origin"]).toBe("http://localhost:8080");
-      expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
-      expect(String(preflight.headers["access-control-allow-methods"])).toContain("PATCH");
+      expect(preflight.headers["access-control-allow-origin"]).toBe(
+        "http://localhost:8080",
+      );
+      expect(preflight.headers["access-control-allow-credentials"]).toBe(
+        "true",
+      );
+      expect(
+        String(preflight.headers["access-control-allow-methods"]),
+      ).toContain("PATCH");
 
       const deniedPreflight = await localApp.inject({
         method: "OPTIONS",
@@ -587,10 +626,12 @@ describe("CORS configuration", () => {
         headers: {
           origin: "http://localhost:9090",
           "access-control-request-method": "PATCH",
-          "access-control-request-headers": "content-type,authorization"
-        }
+          "access-control-request-headers": "content-type,authorization",
+        },
       });
-      expect(deniedPreflight.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(
+        deniedPreflight.headers["access-control-allow-origin"],
+      ).toBeUndefined();
     } finally {
       await localApp.close();
       if (previousNodeEnv === undefined) {
@@ -612,13 +653,19 @@ describe("Auth guard", () => {
     const previousCookieSecure = process.env.COOKIE_SECURE;
     try {
       process.env.COOKIE_SECURE = "false";
-      const localApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+      const localApp = await buildApp({
+        dataStore: createMemoryDataStore(),
+        rateLimit: false,
+      });
       try {
         await localApp.ready();
         const login = await localApp.inject({
           method: "POST",
           url: "/api/v1/auth/login",
-          payload: { email: "finance@example.test", password: localDemoPassword }
+          payload: {
+            email: "finance@example.test",
+            password: localDemoPassword,
+          },
         });
         const setCookie = cookieHeader(login.headers["set-cookie"]);
         expect(login.statusCode).toBe(200);
@@ -629,20 +676,29 @@ describe("Auth guard", () => {
       }
 
       process.env.COOKIE_SECURE = "true";
-      const hostedApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+      const hostedApp = await buildApp({
+        dataStore: createMemoryDataStore(),
+        rateLimit: false,
+      });
       try {
         await hostedApp.ready();
         const login = await hostedApp.inject({
           method: "POST",
           url: "/api/v1/auth/login",
-          payload: { email: "finance@example.test", password: localDemoPassword }
+          payload: {
+            email: "finance@example.test",
+            password: localDemoPassword,
+          },
         });
         const loginCookie = cookieHeader(login.headers["set-cookie"]);
         expect(login.statusCode).toBe(200);
         expect(loginCookie).toContain("SameSite=None");
         expect(loginCookie).toContain("Secure");
 
-        const logout = await hostedApp.inject({ method: "POST", url: "/api/v1/auth/logout" });
+        const logout = await hostedApp.inject({
+          method: "POST",
+          url: "/api/v1/auth/logout",
+        });
         const clearCookie = cookieHeader(logout.headers["set-cookie"]);
         expect(logout.statusCode).toBe(200);
         expect(clearCookie).toContain("SameSite=None");
@@ -672,7 +728,7 @@ describe("Auth guard", () => {
       },
       async close() {
         // no-op test persistence
-      }
+      },
     };
     const localApp = await buildApp({ dataStore: store, rateLimit: false });
     try {
@@ -682,13 +738,13 @@ describe("Auth guard", () => {
         url: "/api/v1/auth/login",
         payload: {
           email: "missing-user@example.test",
-          password: "WrongPassword123"
-        }
+          password: "WrongPassword123",
+        },
       });
       expect(response.statusCode).toBe(401);
       expect(response.json()).toMatchObject({
         code: "UNAUTHORIZED",
-        message: "Invalid email or password"
+        message: "Invalid email or password",
       });
       expect(flushCalls).toBe(0);
     } finally {
@@ -709,7 +765,7 @@ describe("Auth guard", () => {
       },
       async close() {
         // no-op test persistence
-      }
+      },
     };
     const localApp = await buildApp({ dataStore: store, rateLimit: false });
     try {
@@ -719,8 +775,8 @@ describe("Auth guard", () => {
         url: "/api/v1/auth/login",
         payload: {
           email: "admin@example.test",
-          password: localDemoPassword
-        }
+          password: localDemoPassword,
+        },
       });
       expect(login.statusCode).toBe(200);
 
@@ -728,8 +784,8 @@ describe("Auth guard", () => {
         method: "POST",
         url: "/api/v1/auth/logout",
         headers: {
-          cookie: cookieHeader(login.headers["set-cookie"])
-        }
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
       });
       expect(logout.statusCode).toBe(200);
       expect(flushCalls).toBe(0);
@@ -739,20 +795,325 @@ describe("Auth guard", () => {
   });
 
   it("returns 401 for stale or malformed bearer tokens instead of leaking a 500", async () => {
-    const localApp = await buildApp({ dataStore: createMemoryDataStore(), rateLimit: false });
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
     try {
       await localApp.ready();
       const response = await localApp.inject({
         method: "GET",
         url: "/api/v1/core/users",
         headers: {
-          authorization: "Bearer stale-token"
-        }
+          authorization: "Bearer stale-token",
+        },
       });
       expect(response.statusCode).toBe(401);
       expect(response.json()).toMatchObject({
         code: "UNAUTHORIZED",
-        message: "Invalid or expired session"
+        message: "Invalid or expired session",
+      });
+      expect(typeof response.json().request_id).toBe("string");
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("supports /auth/me with bearer-only credentials", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().user).toMatchObject({
+        email: "finance@example.test",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("prefers valid bearer credentials over a stale session cookie", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `bearer ${token}`,
+          cookie: "hrms_session=stale-token",
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().user).toMatchObject({
+        email: "finance@example.test",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("does not fall back to a valid cookie when an explicit bearer credential is invalid", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const response = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: "Bearer stale-token",
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Invalid or expired session",
+      });
+      expect(typeof response.json().request_id).toBe("string");
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes bearer-only sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+      expect(logout.headers["set-cookie"]).toBeDefined();
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("continues to revoke browser cookie sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes different valid bearer and cookie sessions on logout", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const bearerLogin = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "finance@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const cookieLogin = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const bearerToken = bearerLogin.json().access_token as string;
+      const cookieToken = cookieLogin.json().access_token as string;
+
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          cookie: cookieHeader(cookieLogin.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const bearerAfterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+        },
+      });
+      expect(bearerAfterLogout.statusCode).toBe(401);
+      expect(bearerAfterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+
+      const cookieAfterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${cookieToken}`,
+        },
+      });
+      expect(cookieAfterLogout.statusCode).toBe(401);
+      expect(cookieAfterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
+      });
+    } finally {
+      await localApp.close();
+    }
+  });
+
+  it("revokes a valid cookie session even when logout also receives an invalid bearer", async () => {
+    const localApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      rateLimit: false,
+    });
+    try {
+      await localApp.ready();
+      const login = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          email: "admin@example.test",
+          password: localDemoPassword,
+        },
+      });
+      const token = login.json().access_token as string;
+
+      const logout = await localApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/logout",
+        headers: {
+          authorization: "Bearer stale-token",
+          cookie: cookieHeader(login.headers["set-cookie"]),
+        },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toEqual({ status: "ok" });
+
+      const afterLogout = await localApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+      expect(afterLogout.statusCode).toBe(401);
+      expect(afterLogout.json()).toMatchObject({
+        code: "UNAUTHORIZED",
+        message: "Session has been revoked",
       });
     } finally {
       await localApp.close();
@@ -762,6 +1123,7 @@ describe("Auth guard", () => {
 
 describe("API contracts", () => {
   let app: FastifyInstance;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
 
   beforeEach(async () => {
     app = await buildRealApp();
@@ -769,19 +1131,50 @@ describe("API contracts", () => {
   });
 
   afterEach(async () => {
-    await app?.close();
+    try {
+      await app?.close();
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+    }
   });
 
   it("exposes OpenAPI and typed health responses", async () => {
     const health = await app.inject({ method: "GET", url: "/health/live" });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ status: "ok", service: "hawkaii-hrms-api" });
+    expect(health.json()).toMatchObject({
+      status: "ok",
+      service: "hawkaii-hrms-api",
+      app_env: expect.any(String),
+      build_sha: expect.any(String),
+      uptime_seconds: expect.any(Number),
+      version: expect.any(String),
+    });
+    expect(health.json().uptime_seconds).toBeGreaterThanOrEqual(0);
 
-    const versionedHealth = await app.inject({ method: "GET", url: "/api/v1/health/live" });
+    const versionedHealth = await app.inject({
+      method: "GET",
+      url: "/api/v1/health/live",
+    });
     expect(versionedHealth.statusCode).toBe(200);
-    expect(versionedHealth.json()).toEqual({ status: "ok", service: "hawkaii-hrms-api" });
+    const versionedHealthBody = versionedHealth.json();
+    expect(versionedHealthBody).toMatchObject({
+      status: "ok",
+      service: "hawkaii-hrms-api",
+      app_env: expect.any(String),
+      build_sha: expect.any(String),
+      uptime_seconds: expect.any(Number),
+      version: expect.any(String),
+    });
+    expect(versionedHealthBody.uptime_seconds).toBeGreaterThanOrEqual(0);
 
-    const openapi = await app.inject({ method: "GET", url: "/api/v1/openapi.json" });
+    const openapi = await app.inject({
+      method: "GET",
+      url: "/api/v1/openapi.json",
+    });
     expect(openapi.statusCode).toBe(200);
     expect(openapi.json().info.title).toBe("Hawkaii HRMS API");
 
@@ -815,37 +1208,52 @@ describe("API contracts", () => {
     process.env.RESEND_FROM_EMAIL = "verify@example.test";
     process.env.RESEND_WEBHOOK_SECRET = "test-resend-webhook-secret";
     process.env.FRONTEND_URL = "https://hrms.example.com";
-    const secureApp = await buildApp({ dataStore: createMemoryDataStore(), logger: true, rateLimit: false });
+    const secureApp = await buildApp({
+      dataStore: createMemoryDataStore(),
+      logger: true,
+      rateLimit: false,
+    });
     try {
       await secureApp.ready();
       expect(secureApp.log.level).toBe("warn");
-      const health = await secureApp.inject({ method: "GET", url: "/health/live" });
+      const health = await secureApp.inject({
+        method: "GET",
+        url: "/health/live",
+      });
       expect(health.headers["x-content-type-options"]).toBe("nosniff");
       expect(health.headers["x-frame-options"]).toBe("DENY");
       expect(health.headers["referrer-policy"]).toBe("no-referrer");
       expect(health.headers["permissions-policy"]).toContain("camera=()");
-      expect(health.headers["strict-transport-security"]).toContain("max-age=15552000");
+      expect(health.headers["strict-transport-security"]).toContain(
+        "max-age=15552000",
+      );
 
       const allowedPreflight = await secureApp.inject({
         method: "OPTIONS",
         url: "/api/v1/auth/login",
         headers: {
           origin: "https://hrms.example.com",
-          "access-control-request-method": "POST"
-        }
+          "access-control-request-method": "POST",
+        },
       });
-      expect(allowedPreflight.headers["access-control-allow-origin"]).toBe("https://hrms.example.com");
-      expect(allowedPreflight.headers["access-control-allow-credentials"]).toBe("true");
+      expect(allowedPreflight.headers["access-control-allow-origin"]).toBe(
+        "https://hrms.example.com",
+      );
+      expect(allowedPreflight.headers["access-control-allow-credentials"]).toBe(
+        "true",
+      );
 
       const deniedPreflight = await secureApp.inject({
         method: "OPTIONS",
         url: "/api/v1/auth/login",
         headers: {
           origin: "https://evil.example.com",
-          "access-control-request-method": "POST"
-        }
+          "access-control-request-method": "POST",
+        },
       });
-      expect(deniedPreflight.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(
+        deniedPreflight.headers["access-control-allow-origin"],
+      ).toBeUndefined();
     } finally {
       await secureApp.close();
       if (previousNodeEnv === undefined) {
@@ -914,7 +1322,7 @@ describe("API contracts", () => {
   it("returns typed OCC errors", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/expenses/my"
+      url: "/api/v1/expenses/my",
     });
     expect(response.statusCode).toBe(401);
     expect(response.json().request_id).toBeDefined();
@@ -931,8 +1339,12 @@ describe("API contracts", () => {
     expect(schema?.required).toContain("email");
     expect(schema?.required).toContain("password");
     expect((schema?.properties as Record<string, unknown>).email).toBeDefined();
-    expect((schema?.properties as Record<string, unknown>).password).toBeDefined();
-    expect((schema?.properties as Record<string, unknown>).employee_code).toBeDefined();
+    expect(
+      (schema?.properties as Record<string, unknown>).password,
+    ).toBeDefined();
+    expect(
+      (schema?.properties as Record<string, unknown>).employee_code,
+    ).toBeDefined();
     for (const statusCode of ["200", "400", "401", "403", "429", "500"]) {
       expect(login.responses?.[statusCode]).toBeDefined();
     }
@@ -945,28 +1357,40 @@ describe("API contracts", () => {
         authMax: 5,
         readMax: 2,
         writeMax: 2,
-        windowSeconds: 60
-      }
+        windowSeconds: 60,
+      },
     });
     try {
       await limitedApp.ready();
       const login = await limitedApp.inject({
         method: "POST",
         url: "/api/v1/auth/login",
-        payload: { email: "finance@example.test", password: localDemoPassword }
+        payload: { email: "finance@example.test", password: localDemoPassword },
       });
       expect(login.statusCode).toBe(200);
       const token = login.json().access_token as string;
 
-      const firstRead = await limitedApp.inject({ method: "GET", url: "/api/v1/auth/me", headers: { authorization: `Bearer ${token}` } });
-      const secondRead = await limitedApp.inject({ method: "GET", url: "/api/v1/auth/me", headers: { authorization: `Bearer ${token}` } });
-      const limitedRead = await limitedApp.inject({ method: "GET", url: "/api/v1/auth/me", headers: { authorization: `Bearer ${token}` } });
+      const firstRead = await limitedApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const secondRead = await limitedApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const limitedRead = await limitedApp.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
       expect(firstRead.statusCode).toBe(200);
       expect(secondRead.statusCode).toBe(200);
       expect(limitedRead.statusCode).toBe(429);
       expect(limitedRead.json()).toMatchObject({
         code: "TOO_MANY_REQUESTS",
-        message: "Too many requests. Please wait and try again."
+        message: "Too many requests. Please wait and try again.",
       });
       expect(limitedRead.json().details.retry_after_seconds).toBeGreaterThan(0);
       expect(limitedRead.json().request_id).toBeDefined();
@@ -977,19 +1401,25 @@ describe("API contracts", () => {
         const invalid = await limitedApp.inject({
           method: "POST",
           url: "/api/v1/auth/login",
-          payload: { email: "finance@example.test", password: "wrong-password" }
+          payload: {
+            email: "finance@example.test",
+            password: "wrong-password",
+          },
         });
         expect([401, 429]).toContain(invalid.statusCode);
       }
       const limitedLogin = await limitedApp.inject({
         method: "POST",
         url: "/api/v1/auth/login",
-        payload: { email: "finance@example.test", password: "wrong-password" }
+        payload: { email: "finance@example.test", password: "wrong-password" },
       });
       expect(limitedLogin.statusCode).toBe(429);
       expect(limitedLogin.json().code).toBe("TOO_MANY_REQUESTS");
 
-      const health = await limitedApp.inject({ method: "GET", url: "/api/v1/health/live" });
+      const health = await limitedApp.inject({
+        method: "GET",
+        url: "/api/v1/health/live",
+      });
       expect(health.statusCode).toBe(200);
     } finally {
       await limitedApp.close();
@@ -1001,7 +1431,7 @@ describe("API contracts", () => {
       method: "POST",
       url: "/api/v1/auth/login",
       headers: { "content-type": "application/json" },
-      payload: ""
+      payload: "",
     });
     expect(emptyBody.statusCode).toBe(400);
     expect(emptyBody.json().code).toBe("VALIDATION_FAILED");
@@ -1010,7 +1440,7 @@ describe("API contracts", () => {
     const invalidBody = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
-      payload: {}
+      payload: {},
     });
     expect(invalidBody.statusCode).toBe(400);
     expect(invalidBody.json().code).toBe("VALIDATION_FAILED");
@@ -1022,7 +1452,7 @@ describe("API contracts", () => {
     const success = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
-      payload: { email: "finance@example.test", password: localDemoPassword }
+      payload: { email: "finance@example.test", password: localDemoPassword },
     });
     expect(success.statusCode).toBe(200);
     expect(success.json().access_token).toBeTruthy();
@@ -1032,7 +1462,7 @@ describe("API contracts", () => {
     const invalid = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
-      payload: { email: "finance@example.test", password: "wrong-password" }
+      payload: { email: "finance@example.test", password: "wrong-password" },
     });
     expect(invalid.statusCode).toBe(401);
     expect(invalid.json().message).toBe("Invalid email or password");
@@ -1042,7 +1472,7 @@ describe("API contracts", () => {
   it("keeps logout idempotent for stale or missing local sessions", async () => {
     const noSession = await app.inject({
       method: "POST",
-      url: "/api/v1/auth/logout"
+      url: "/api/v1/auth/logout",
     });
     expect(noSession.statusCode).toBe(200);
     expect(noSession.json()).toEqual({ status: "ok" });
@@ -1051,13 +1481,13 @@ describe("API contracts", () => {
     const login = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
-      payload: { email: "finance@example.test", password: localDemoPassword }
+      payload: { email: "finance@example.test", password: localDemoPassword },
     });
     const cookie = login.headers["set-cookie"];
     const logout = await app.inject({
       method: "POST",
       url: "/api/v1/auth/logout",
-      headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie ?? "" }
+      headers: { cookie: Array.isArray(cookie) ? cookie[0] : (cookie ?? "") },
     });
     expect(logout.statusCode).toBe(200);
     expect(logout.json()).toEqual({ status: "ok" });
@@ -1068,26 +1498,193 @@ describe("API contracts", () => {
     const rows = operations(spec);
 
     expect(spec.openapi).toBe("3.0.3");
-    expect(rows.map((row) => row.key).sort()).toEqual([...expectedOperations].sort());
-    expect(rows.length).toBe(245);
+    const serializedSpec = JSON.stringify(spec);
+    for (const field of [
+      "day_classification",
+      "presence_state",
+      "punctuality_state",
+      "evidence_state",
+      "approval_kind",
+      "approval_state",
+      "payroll_state",
+      "work_seconds",
+      "break_seconds",
+      "scheduled_seconds",
+      "late_seconds",
+      "early_departure_seconds",
+    ]) {
+      expect(serializedSpec, `attendance projection field ${field}`).toContain(
+        `\"${field}\"`,
+      );
+    }
+    expect(rows.map((row) => row.key).sort()).toEqual(
+      [...expectedOperations].sort(),
+    );
+    expect(rows.length).toBe(259);
+
+    const attendancePunch = spec.paths?.["/api/v1/attendance/punches"]?.post as
+      | Record<string, any>
+      | undefined;
+    expect(attendancePunch?.description).toContain(
+      "body client_event_id must equal the Idempotency-Key header",
+    );
+    expect(attendancePunch?.description).toContain(
+      "Offline retries after the 24-hour platform idempotency window",
+    );
+    expect(attendancePunch?.description).toContain(
+      "persisted business-denial replay",
+    );
+    expect(
+      attendancePunch?.responses?.["200"]?.headers?.["Idempotency-Replayed"],
+    ).toBeDefined();
+    expect(
+      attendancePunch?.responses?.["409"]?.headers?.["Idempotency-Replayed"],
+    ).toBeDefined();
+    expect(spec.components?.schemas?.AttendanceClientEventId).toMatchObject({
+      type: "string",
+      format: "uuid",
+    });
+    expect(spec.components?.parameters?.IdempotencyKey).toMatchObject({
+      name: "idempotency-key",
+      in: "header",
+      required: true,
+    });
+    const attendancePunchRequest = attendancePunch?.requestBody?.content?.[
+      "application/json"
+    ]?.schema as Record<string, any> | undefined;
+    const locationEvidence =
+      attendancePunchRequest?.properties?.command?.properties?.location;
+    expect(locationEvidence?.oneOf?.[0]?.properties?.provider?.enum).toEqual([
+      ...AttendanceLocationProviderValues,
+    ]);
+    expect(locationEvidence?.oneOf?.[1]?.properties?.provider?.enum).toEqual([
+      ...AttendanceLocationProviderValues,
+    ]);
+    expect(
+      locationEvidence?.oneOf?.[0]?.properties?.provider?.enum,
+    ).not.toContain("gps");
+    expect(
+      locationEvidence?.oneOf?.[0]?.properties?.provider?.enum,
+    ).not.toContain("manual");
+
+    const attendancePunchSuccess = attendancePunch?.responses?.["200"]
+      ?.content?.["application/json"]?.schema as
+      | Record<string, any>
+      | undefined;
+    expect(attendancePunchSuccess?.properties?.punch?.required).not.toContain(
+      "work_date",
+    );
+    expect(attendancePunchSuccess?.properties?.punch?.required).not.toContain(
+      "time",
+    );
+    expect(
+      attendancePunch?.responses?.["409"]?.content?.["application/json"]?.schema
+        ?.properties?.details?.properties?.reason_code?.enum,
+    ).toEqual([...AttendanceCommandReasonCodeValues]);
+
+    const assistedPunch = spec.paths?.[
+      "/api/v1/attendance/employees/{employeeUserId}/assisted-current-punches"
+    ]?.post as Record<string, any> | undefined;
+    expect(
+      assistedPunch?.requestBody?.content?.["application/json"]?.schema
+        ?.properties?.location,
+    ).toBeDefined();
+
+    const historicalCorrection = spec.paths?.[
+      "/api/v1/attendance/employees/{employeeUserId}/historical-corrections"
+    ]?.post as Record<string, any> | undefined;
+    expect(
+      historicalCorrection?.requestBody?.content?.["application/json"]?.schema
+        ?.properties?.event_type?.enum,
+    ).toEqual([...AttendanceHistoricalCorrectionEventTypeValues]);
+
+    const offlineSync = spec.paths?.["/api/v1/attendance/offline-sync"]
+      ?.post as Record<string, any> | undefined;
+    expect(
+      offlineSync?.requestBody?.content?.["application/json"]?.schema,
+    ).toMatchObject({
+      properties: {
+        events: { maxItems: 50 },
+      },
+    });
+    expect(
+      offlineSync?.responses?.["200"]?.content?.["application/json"]?.schema
+        ?.properties?.results,
+    ).toBeDefined();
+    expect(spec.components?.schemas?.AttendanceCommandReasonCode).toMatchObject(
+      {
+        type: "string",
+        enum: [...AttendanceCommandReasonCodeValues],
+      },
+    );
+    expect(spec.components?.schemas?.AttendanceGeoReasonCode).toMatchObject({
+      type: "string",
+      enum: [...AttendanceGeoDecisionReasonCodeValues],
+    });
+    expect(
+      spec.components?.schemas?.AttendanceOfflineSyncReasonCode,
+    ).toMatchObject({
+      type: "string",
+      enum: [...AttendanceOfflineSyncReasonCodeValues],
+    });
+    expect(spec.components?.schemas?.AttendanceOfflineSyncResult).toMatchObject(
+      {
+        properties: {
+          sync_status: { enum: [...AttendanceOfflineSyncStatusValues] },
+          verification_status: {
+            enum: [...AttendanceOfflineVerificationStatusValues],
+          },
+          reason_code: { enum: [...AttendanceOfflineSyncReasonCodeValues] },
+        },
+      },
+    );
+    expect(
+      spec.components?.schemas?.AttendanceGeofenceCircleShape,
+    ).toBeDefined();
+    expect(
+      spec.components?.schemas?.AttendanceGeofencePolygonShape,
+    ).toBeDefined();
 
     for (const row of rows) {
-      expect(row.operation.tags?.length, `${row.key} tag`).toBeGreaterThan(0);
-      expect(row.operation.summary || row.operation.description, `${row.key} summary`).toBeTruthy();
-      expect(Object.keys(row.operation.responses ?? {}).some((status) => status.startsWith("2")), `${row.key} 2xx response`).toBe(true);
-      if (!protectedExceptions.has(row.key)) {
-        expect(row.operation.security?.length, `${row.key} security`).toBeGreaterThan(0);
+      if (!operationMetadataExceptions.has(row.key)) {
+        expect(row.operation.tags?.length, `${row.key} tag`).toBeGreaterThan(0);
+        expect(
+          row.operation.summary || row.operation.description,
+          `${row.key} summary`,
+        ).toBeTruthy();
+      }
+      expect(
+        Object.keys(row.operation.responses ?? {}).some((status) =>
+          status.startsWith("2"),
+        ),
+        `${row.key} 2xx response`,
+      ).toBe(true);
+      if (
+        !protectedExceptions.has(row.key) &&
+        !operationMetadataExceptions.has(row.key)
+      ) {
+        expect(
+          row.operation.security?.length,
+          `${row.key} security`,
+        ).toBeGreaterThan(0);
       }
       for (const param of row.path.matchAll(/\{([^}]+)\}/gu)) {
         expect(
-          row.operation.parameters?.some((documented) => documented.in === "path" && documented.name === param[1] && documented.required !== false),
-          `${row.key} path parameter ${param[1]}`
+          row.operation.parameters?.some(
+            (documented) =>
+              documented.in === "path" &&
+              documented.name === param[1] &&
+              documented.required !== false,
+          ),
+          `${row.key} path parameter ${param[1]}`,
         ).toBe(true);
       }
     }
 
     for (const key of listOperations) {
-      const documented = operation(spec, key).parameters?.some((parameter) => parameter.in === "query" && parameter.name === "page");
+      const documented = operation(spec, key).parameters?.some(
+        (parameter) => parameter.in === "query" && parameter.name === "page",
+      );
       expect(documented, `${key} pagination query`).toBe(true);
     }
   });
@@ -1101,7 +1698,7 @@ describe("API contracts", () => {
       "/api/v1/expenses/queue/director",
       "/api/v1/expenses/{id}/review",
       "/api/v1/expenses/{id}/approve",
-      "/api/v1/reports/expenses/director-dashboard"
+      "/api/v1/reports/expenses/director-dashboard",
     ]) {
       expect(serializedPaths).not.toContain(removedPath);
     }
@@ -1111,23 +1708,29 @@ describe("API contracts", () => {
     const spec = await openApiSpec(app);
 
     for (const key of bodyRequiredOperations) {
-      expect(hasJsonBody(operation(spec, key)), `${key} request body`).toBe(true);
+      expect(hasJsonBody(operation(spec, key)), `${key} request body`).toBe(
+        true,
+      );
     }
 
     for (const key of occOperations) {
-      expect(operation(spec, key).responses?.["409"], `${key} OCC response`).toBeDefined();
+      expect(
+        operation(spec, key).responses?.["409"],
+        `${key} OCC response`,
+      ).toBeDefined();
     }
 
     const financeKeys = operations(spec)
-      .filter(({ path }) =>
-        path.includes("/queue/finance") ||
-        path.includes("/finance-detail") ||
-        path.includes("/finance/") ||
-        (path.includes("/expenses/") && path.includes("/settlement")) ||
-        path.includes("/finance-analytics") ||
-        path.includes("/finance-dashboard") ||
-        path.includes("/advance-aging") ||
-        path.includes("/payments")
+      .filter(
+        ({ path }) =>
+          path.includes("/queue/finance") ||
+          path.includes("/finance-detail") ||
+          path.includes("/finance/") ||
+          (path.includes("/expenses/") && path.includes("/settlement")) ||
+          path.includes("/finance-analytics") ||
+          path.includes("/finance-dashboard") ||
+          path.includes("/advance-aging") ||
+          path.includes("/payments"),
       )
       .map(({ key }) => key);
     expect(financeKeys.length).toBeGreaterThan(0);
@@ -1150,24 +1753,63 @@ describe("API contracts", () => {
     expect(subtreeSerialized).toContain("HR Manager");
 
     expect(timeline.summary).toBe("Expense workflow timeline");
-    for (const field of ["event_type", "label", "stage", "actor_name", "status_from", "status_to"]) {
+    for (const field of [
+      "event_type",
+      "label",
+      "stage",
+      "actor_name",
+      "status_from",
+      "status_to",
+    ]) {
       expect(timelineSerialized).toContain(field);
     }
   });
 
   it("documents expanded auth/core session and employee detail contracts", async () => {
     const spec = await openApiSpec(app);
-    const sessionSerialized = JSON.stringify(operation(spec, "GET /api/v1/auth/me"));
-    const usersSerialized = JSON.stringify(operation(spec, "GET /api/v1/core/users"));
-    const userDetailSerialized = JSON.stringify(operation(spec, "GET /api/v1/core/users/{id}"));
+    const sessionSerialized = JSON.stringify(
+      operation(spec, "GET /api/v1/auth/me"),
+    );
+    const usersSerialized = JSON.stringify(
+      operation(spec, "GET /api/v1/core/users"),
+    );
+    const userDetailSerialized = JSON.stringify(
+      operation(spec, "GET /api/v1/core/users/{id}"),
+    );
 
-    for (const field of ["active_role", "available_roles", "permissions", "navigation", "company", "preferences", "session_metadata", "low_bandwidth_defaults"]) {
+    for (const field of [
+      "active_role",
+      "available_roles",
+      "permissions",
+      "navigation",
+      "company",
+      "preferences",
+      "session_metadata",
+      "low_bandwidth_defaults",
+    ]) {
       expect(sessionSerialized).toContain(field);
     }
-    for (const field of ["department_id", "designation_id", "manager_user_id", "login_state", "filters_applied", "total_visible"]) {
+    for (const field of [
+      "department_id",
+      "designation_id",
+      "manager_user_id",
+      "login_state",
+      "filters_applied",
+      "total_visible",
+    ]) {
       expect(usersSerialized).toContain(field);
     }
-    for (const field of ["reporting_line", "role_assignments", "documents_summary", "assets_summary", "attendance_summary", "leave_summary", "timesheet_summary", "expense_summary", "profile_tabs_available"]) {
+    for (const field of [
+      "reporting_line",
+      "role_assignments",
+      "documents_summary",
+      "assets_summary",
+      "attendance_summary",
+      "leave_summary",
+      "timesheet_summary",
+      "expense_summary",
+      "profile_tabs_available",
+    ]) {
       expect(userDetailSerialized).toContain(field);
     }
   });
@@ -1180,38 +1822,63 @@ describe("API contracts", () => {
     expect(serialized).not.toMatch(/CLOUDINARY_API_SECRET|VALKEY_PASSWORD/iu);
     expect(serialized).not.toMatch(/postgres:\/\/postgres:postgres/iu);
 
-    const packageJson = readFileSync(join(process.cwd(), "package.json"), "utf8");
+    const packageJson = readFileSync(
+      join(process.cwd(), "package.json"),
+      "utf8",
+    );
     expect(packageJson).not.toMatch(/"(?:next|react|react-dom)"\s*:/u);
 
     for (const file of walkTsFiles(join(process.cwd(), "src"))) {
-      if (file.includes("/__tests__/") || /\.(test|unit|integration|contract|e2e)\.ts$/u.test(file)) {
+      if (
+        file.includes("/__tests__/") ||
+        /\.(test|unit|integration|contract|e2e)\.ts$/u.test(file)
+      ) {
         continue;
       }
       const content = readFileSync(file, "utf8");
-      expect(content, file).not.toMatch(/\bfrom\s+["'](?:next|react|react-dom)(?:\/[^"']*)?["']/u);
-      expect(content, file).not.toMatch(/apps\/(?:web|finance-web|documents-web|assets-web)|NEXT_PUBLIC_/u);
+      expect(content, file).not.toMatch(
+        /\bfrom\s+["'](?:next|react|react-dom)(?:\/[^"']*)?["']/u,
+      );
+      expect(content, file).not.toMatch(
+        /apps\/(?:web|finance-web|documents-web|assets-web)|NEXT_PUBLIC_/u,
+      );
     }
   });
 });
 
 async function openApiSpec(app: FastifyInstance): Promise<OpenApiDocument> {
-  const response = await app.inject({ method: "GET", url: "/api/v1/openapi.json" });
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/v1/openapi.json",
+  });
   expect(response.statusCode).toBe(200);
   return response.json() as OpenApiDocument;
 }
 
 function cookieHeader(header: string | string[] | undefined): string {
-  return Array.isArray(header) ? header.join("; ") : header ?? "";
+  return Array.isArray(header) ? header.join("; ") : (header ?? "");
 }
 
-function operations(spec: OpenApiDocument): Array<{ key: string; method: string; path: string; operation: Operation }> {
-  const rows: Array<{ key: string; method: string; path: string; operation: Operation }> = [];
+function operations(
+  spec: OpenApiDocument,
+): Array<{ key: string; method: string; path: string; operation: Operation }> {
+  const rows: Array<{
+    key: string;
+    method: string;
+    path: string;
+    operation: Operation;
+  }> = [];
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of ["get", "post", "put", "patch", "delete"]) {
       const endpoint = pathItem[method];
       if (endpoint) {
         const upperMethod = method.toUpperCase();
-        rows.push({ key: `${upperMethod} ${path}`, method: upperMethod, path, operation: endpoint });
+        rows.push({
+          key: `${upperMethod} ${path}`,
+          method: upperMethod,
+          path,
+          operation: endpoint,
+        });
       }
     }
   }
