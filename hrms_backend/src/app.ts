@@ -16,6 +16,8 @@ import { createPostgresDataStore, type PostgresObjectStorageOptions } from "./pl
 import { createEmailDeliveryService } from "./platform/email/email-delivery-service.js";
 import type { EmailProvider } from "./platform/email/types.js";
 import { openApiComponents, openApiTags, swaggerTransform, swaggerTransformObject } from "./platform/openapi.js";
+import { loggerRedactionOptions } from "./platform/logger-redaction.js";
+import { setAttendanceObservabilityLogger } from "./modules/attendance/observability.js";
 import { configPlugin } from "./plugins/config.js";
 import { requestContextPlugin } from "./plugins/request-context.js";
 import { errorsPlugin } from "./plugins/errors.js";
@@ -64,6 +66,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     logger: loggerOptions(options.logger ?? false),
     genReqId: () => crypto.randomUUID(),
     trustProxy: booleanFromEnv(process.env.TRUST_PROXY, false)
+  });
+  setAttendanceObservabilityLogger((fields, message) => {
+    app.log.info(fields, message);
   });
 
   await app.register(configPlugin);
@@ -245,6 +250,22 @@ const domainMutationPrefixes: Array<{ prefix: string; domain: PersistenceDomain 
   { prefix: "/api/v1/webhooks", domain: "platform" }
 ];
 
+// This command owns its PostgreSQL transaction (including outbox).  Keeping
+// this list exact prevents accidentally bypassing persistence for unmigrated
+// attendance mutations such as regularization.
+const transactionOwnedMutationRoutes = new Set(["POST /api/v1/attendance/punches"]);
+
+function isTransactionOwnedMutationRoute(routeKey: string): boolean {
+  return (
+    transactionOwnedMutationRoutes.has(routeKey) ||
+    /^POST \/api\/v1\/attendance\/employees\/[^/]+\/(?:assisted-current-punches|historical-corrections)$/u.test(
+      routeKey,
+    ) ||
+    /^POST \/api\/v1\/attendance\/regularizations\/[^/]+\/decision$/u.test(routeKey) ||
+    /^POST \/api\/v1\/attendance\/geofences\/[^/]+\/versions\/[^/]+\/publish$/u.test(routeKey)
+  );
+}
+
 function persistenceFlushTarget(method: string, url: string, statusCode: number): PersistenceFlushTarget {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) {
     return { kind: "none" };
@@ -255,6 +276,9 @@ function persistenceFlushTarget(method: string, url: string, statusCode: number)
   const path = url.split("?")[0] ?? url;
   const routeKey = `${method.toUpperCase()} ${path}`;
   if (sessionOnlyMutationRoutes.has(routeKey)) {
+    return { kind: "none" };
+  }
+  if (isTransactionOwnedMutationRoute(routeKey)) {
     return { kind: "none" };
   }
   if (authOnlyMutationRoutes.has(routeKey)) {
@@ -606,22 +630,6 @@ function loggerOptions(enabled: boolean): false | {
 
   return {
     level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "info" : "debug"),
-    redact: {
-      censor: "[REDACTED]",
-      paths: [
-        "req.headers.authorization",
-        "req.headers.cookie",
-        "req.headers['x-api-key']",
-        "res.headers['set-cookie']",
-        "*.password",
-        "*.token",
-        "*.access_token",
-        "*.refresh_token",
-        "*.JWT_ACCESS_SECRET",
-        "*.JWT_REFRESH_SECRET",
-        "*.RESEND_API_KEY",
-        "*.RESEND_WEBHOOK_SECRET"
-      ]
-    }
+    redact: loggerRedactionOptions()
   };
 }
