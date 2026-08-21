@@ -8,6 +8,7 @@ import {
   DEFAULT_COORDINATE_PURGE_INTERVAL_MS,
 } from "./attendance-coordinate-purge-worker.js";
 import { OutboxWorker, ValkeyStreamPublisher } from "./outbox-worker.js";
+import { logWorkerError } from "./safe-error.js";
 
 loadEnvFile(process.env.HRMS_ENV_FILE ?? ".env.local", { required: !process.env.DATABASE_URL });
 
@@ -122,7 +123,7 @@ async function tick(): Promise<void> {
       console.log(JSON.stringify({ worker: "outbox", ...result }));
     }
   } catch (error) {
-    console.error("Outbox worker publish cycle failed", error);
+    logWorkerError("outbox", "publish-cycle", error);
   }
 
   if (Date.now() >= nextAttendanceCoordinatePurgeCheckAt) {
@@ -143,7 +144,7 @@ async function tick(): Promise<void> {
         }));
       }
     } catch (error) {
-      console.error("Attendance coordinate purge worker cycle failed", error);
+      logWorkerError("attendance-coordinate-purge", "purge-cycle", error);
     }
   }
 
@@ -169,7 +170,7 @@ async function tick(): Promise<void> {
       }));
     }
   } catch (error) {
-    console.error("Attendance auto punch-out worker cycle failed", error);
+    logWorkerError("attendance-auto-punchout", "scheduled-cycle", error);
   }
 }
 
