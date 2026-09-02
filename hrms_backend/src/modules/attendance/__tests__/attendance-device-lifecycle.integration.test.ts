@@ -8,6 +8,15 @@ type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
+async function allowCurrentPunchesOnAnyWeekday(app: TestApp): Promise<void> {
+  const company =
+    app.store.companyProfiles.find((candidate) => candidate.status === "active") ??
+    app.store.companyProfiles[0];
+  if (!company) throw new Error("Expected seeded active company.");
+  company.working_week = "Mon-Sun";
+  await app.store.persistence?.flushDomain?.("platform");
+}
+
 describe("attendance registered device lifecycle enforcement", () => {
   let app: TestApp;
 
@@ -25,6 +34,7 @@ describe("attendance registered device lifecycle enforcement", () => {
       fullDayPunchWindow: true,
       allowOffDayPunches: true,
     };
+    await allowCurrentPunchesOnAnyWeekday(app);
   }, 30_000);
 
   afterEach(async () => {

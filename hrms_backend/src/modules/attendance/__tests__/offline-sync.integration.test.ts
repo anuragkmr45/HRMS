@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { authHeader, loginAs } from "#testing";
 import { buildRealApp } from "../../../__tests__/real-infra.js";
 import { ATTENDANCE_OFFLINE_SYNC_CONTRACT_VERSION } from "../offline-sync-contract.js";
+import { OFFLINE_LOCATION_EVIDENCE_MAX_AGE_MS } from "../offline-sync-service.js";
 import { setAttendanceObservabilityTestSink } from "../observability.js";
 
 type TestApp = Awaited<ReturnType<typeof buildRealApp>>;
@@ -64,6 +65,55 @@ describe("attendance offline sync ingestion", () => {
       punches: "0",
       dailyRecords: "0",
       provisionalOutbox: "1",
+    });
+    await expectDeviceCursor(app, registeredDeviceId, "1");
+    await expectSecurityAuditSignals(app, []);
+  });
+
+  it("rejects coordinate evidence older than the persisted age range without leaking internals", async () => {
+    const employee = await loginAs(app, "E1");
+    const companyId = employeeCompanyId(app, employee.user.id);
+    const registeredDeviceId = await insertRegisteredDevice(app, {
+      companyId,
+      userId: employee.user.id,
+    });
+    const tooOldCapturedAt = new Date(
+      Date.now() - OFFLINE_LOCATION_EVIDENCE_MAX_AGE_MS - 60_000,
+    ).toISOString();
+    const oldEvent = event({
+      sequence: 1,
+      location: coordinateLocation(tooOldCapturedAt),
+    });
+
+    const response = await sync(app, employee.token, batch(registeredDeviceId, [
+      oldEvent,
+    ]));
+    const body = response.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.stringify(body)).not.toContain("out of range");
+    expect(JSON.stringify(body)).not.toContain("22003");
+    expect(body.results[0]).toMatchObject({
+      sequence: 1,
+      sync_status: "rejected",
+      verification_status: "rejected",
+      replayed: false,
+      reason_code: "offline_sync.validation_failed",
+      payroll_eligible: false,
+    });
+    await expectCounts(app, {
+      inbox: "1",
+      events: "0",
+      locationEvidence: "0",
+      sessions: "0",
+      punches: "0",
+      dailyRecords: "0",
+      provisionalOutbox: "0",
+    });
+    await expectStoredOfflineResult(app, oldEvent.client_event_id, {
+      sync_status: "rejected",
+      verification_status: "rejected",
+      reason_code: "offline_sync.validation_failed",
     });
     await expectDeviceCursor(app, registeredDeviceId, "1");
     await expectSecurityAuditSignals(app, []);
@@ -520,11 +570,12 @@ function batch(
 }
 
 function event(overrides: Record<string, unknown> = {}) {
+  const capturedAt = freshIsoTimestamp();
   return {
     client_event_id: randomUUID(),
     sequence: 1,
     command_kind: "employee_manual_now",
-    captured_at: "2026-08-03T09:00:00.000+05:30",
+    captured_at: capturedAt,
     source: "mobile_offline",
     event_type: "check_in",
     work_mode: "office",
@@ -533,16 +584,24 @@ function event(overrides: Record<string, unknown> = {}) {
       capture_method: "user_action",
       client_timezone: "Asia/Calcutta",
     },
-    location: {
-      latitude: 12.971599,
-      longitude: 77.594566,
-      accuracy_meters: 18,
-      captured_at: "2026-08-03T08:59:58.000Z",
-      provider: "device",
-      permission_state: "granted",
-    },
+    location: coordinateLocation(freshIsoTimestamp(2_000)),
     ...overrides,
   };
+}
+
+function coordinateLocation(capturedAt: string) {
+  return {
+    latitude: 12.971599,
+    longitude: 77.594566,
+    accuracy_meters: 18,
+    captured_at: capturedAt,
+    provider: "device",
+    permission_state: "granted",
+  };
+}
+
+function freshIsoTimestamp(ageMs = 0): string {
+  return new Date(Date.now() - ageMs).toISOString();
 }
 
 async function sync(

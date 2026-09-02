@@ -45,6 +45,8 @@ type IndexedOfflineEvent = {
   eventPayload: ReturnType<typeof canonicalOfflineAttendanceEventProjection>;
 };
 
+export const OFFLINE_LOCATION_EVIDENCE_MAX_AGE_MS = 2_147_483_647;
+
 export class AttendanceOfflineSyncService {
   constructor(private readonly store: MemoryDataStore) {}
 
@@ -276,20 +278,32 @@ export class AttendanceOfflineSyncService {
         observedEventHash: eventHash,
       });
     }
-    const evidenceReason = sequenceReason ?? evidenceReasonCode(event);
+    const unsupportedLocationAge = event.location
+      ? evaluatedLocationEvidenceAgeMs(event.location, input.serverReceivedAt) >
+        OFFLINE_LOCATION_EVIDENCE_MAX_AGE_MS
+      : false;
+    const evidenceReason = unsupportedLocationAge
+      ? "offline_sync.validation_failed"
+      : sequenceReason ?? evidenceReasonCode(event);
     const result = attendanceOfflineSyncResultSchema.parse({
       client_event_id: event.client_event_id,
       sequence: event.sequence,
-      sync_status: sequenceReason ? "deferred" : "accepted",
-      verification_status: sequenceReason
-        ? "review_required"
-        : evidenceReason === "offline_sync.review_required"
+      sync_status: unsupportedLocationAge
+        ? "rejected"
+        : sequenceReason
+          ? "deferred"
+          : "accepted",
+      verification_status: unsupportedLocationAge
+        ? "rejected"
+        : sequenceReason
           ? "review_required"
-          : "unverified",
+          : evidenceReason === "offline_sync.review_required"
+            ? "review_required"
+            : "unverified",
       replayed: false,
       reason_code: evidenceReason,
       server_received_at: input.serverReceivedAt,
-      processed_at: null,
+      processed_at: unsupportedLocationAge ? input.serverReceivedAt : null,
       payroll_eligible: false,
     });
 
@@ -341,6 +355,14 @@ export class AttendanceOfflineSyncService {
         result: stored ? conflictResult(event, input.serverReceivedAt) : duplicateSequenceResult(event, input.serverReceivedAt),
         sequenceStored: false,
         cursorAdvanceEligible: false,
+      };
+    }
+
+    if (result.sync_status === "rejected") {
+      return {
+        result,
+        sequenceStored: true,
+        cursorAdvanceEligible: sequenceReason === null,
       };
     }
 
@@ -587,10 +609,9 @@ async function persistOfflineLocationEvidence(
     policy: EffectiveAttendancePolicy;
   },
 ): Promise<void> {
-  const evaluatedAgeMs = Math.max(
-    0,
-    Date.parse(input.serverReceivedAt) -
-      Date.parse(input.location.captured_at ?? input.serverReceivedAt),
+  const evaluatedAgeMs = evaluatedLocationEvidenceAgeMs(
+    input.location,
+    input.serverReceivedAt,
   );
   const coordinateRetention = hasCoordinateEvidence(input.location)
     ? resolveCoordinateRetention(input.policy)
@@ -620,6 +641,17 @@ async function persistOfflineLocationEvidence(
       evaluated_age_ms: evaluatedAgeMs,
     },
   });
+}
+
+function evaluatedLocationEvidenceAgeMs(
+  location: AttendanceLocationEvidenceRequest,
+  serverReceivedAt: string,
+): number {
+  return Math.max(
+    0,
+    Date.parse(serverReceivedAt) -
+      Date.parse(location.captured_at ?? serverReceivedAt),
+  );
 }
 
 function hasCoordinateEvidence(

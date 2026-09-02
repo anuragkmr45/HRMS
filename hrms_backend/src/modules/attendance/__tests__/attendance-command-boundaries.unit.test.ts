@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authHeader, loginAs } from "#testing";
 import { buildApp } from "../../../app.js";
+import { createMemoryDataStore, type MemoryDataStore } from "../../../platform/data-store.js";
 
 type TestApp = Awaited<ReturnType<typeof buildApp>>;
 
@@ -29,11 +30,19 @@ function punchEnvelope(
   };
 }
 
+function allowCurrentPunchesOnAnyWeekday(store: MemoryDataStore) {
+  const company = store.companyProfiles.find((candidate) => candidate.status === "active");
+  if (!company) throw new Error("Expected seeded active company.");
+  company.working_week = "Mon-Sun";
+}
+
 describe("attendance command boundaries", () => {
   beforeEach(async () => {
     ordinal = 0;
     process.env.HRMS_ALLOW_MEMORY_STORE = "true";
-    app = await buildApp({ dataStoreMode: "memory", rateLimit: false });
+    const store = createMemoryDataStore();
+    allowCurrentPunchesOnAnyWeekday(store);
+    app = await buildApp({ dataStore: store, rateLimit: false });
     await app.ready();
   });
 

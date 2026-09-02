@@ -12,6 +12,15 @@ const punchPayload = {
   metadata: {},
 } as const;
 
+async function allowCurrentPunchesOnAnyWeekday(app: TestApp): Promise<void> {
+  const company =
+    app.store.companyProfiles.find((candidate) => candidate.status === "active") ??
+    app.store.companyProfiles[0];
+  if (!company) throw new Error("Expected seeded active company.");
+  company.working_week = "Mon-Sun";
+  await app.store.persistence?.flushDomain?.("platform");
+}
+
 function companyIdFor(app: TestApp, employeeUserId: string): string {
   const companyId = app.store.userSessionPreferences.find(
     (preference) => preference.user_id === employeeUserId,
@@ -81,6 +90,7 @@ describe("PostgreSQL attendance runtime lock", () => {
       fullDayPunchWindow: true,
       allowOffDayPunches: true,
     };
+    await allowCurrentPunchesOnAnyWeekday(app);
   });
 
   afterEach(async () => {

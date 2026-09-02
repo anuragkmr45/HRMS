@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
-import { createMemoryDataStore, type DataStorePersistence } from "./platform/data-store.js";
+import { createMemoryDataStore, type DataStorePersistence, type MemoryDataStore } from "./platform/data-store.js";
 import { authHeader, loginAs } from "#testing";
+
+function allowCurrentPunchesOnAnyWeekday(store: MemoryDataStore) {
+  const company = store.companyProfiles.find((candidate) => candidate.status === "active");
+  if (!company) throw new Error("Expected seeded active company.");
+  company.working_week = "Mon-Sun";
+}
 
 describe("app persistence flushing", () => {
   const originalAppEnv = process.env.APP_ENV;
@@ -241,6 +247,7 @@ describe("app persistence flushing", () => {
   it("skips legacy attendance flushing only for transaction-owned punch requests", async () => {
     process.env.APP_ENV = "local";
     const store = createMemoryDataStore();
+    allowCurrentPunchesOnAnyWeekday(store);
     const domains: string[] = [];
     store.persistence = {
       async flush() {},

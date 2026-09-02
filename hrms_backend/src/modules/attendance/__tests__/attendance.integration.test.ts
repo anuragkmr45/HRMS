@@ -133,6 +133,13 @@ function ensureActiveCompany(app: TestApp) {
   return company;
 }
 
+async function allowCurrentPunchesOnAnyWeekday(app: TestApp) {
+  const company = ensureActiveCompany(app);
+  company.working_week = "Mon-Sun";
+  await app.store.persistence?.flushDomain?.("platform");
+  return company;
+}
+
 function ensureCompanyContexts(app: TestApp, companyId: string) {
   const now = new Date().toISOString();
   for (const user of app.store.users) {
@@ -565,6 +572,7 @@ describe("attendance", () => {
   });
 
   it("records punch sequence, returns summaries, and blocks duplicate/out-of-order actions", async () => {
+    await allowCurrentPunchesOnAnyWeekday(app);
     const employee = await loginAs(app, "E1");
     const manager = await loginAs(app, "D1");
     const admin = await loginAs(app, "ADM");

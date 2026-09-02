@@ -77,6 +77,15 @@ function testClientEventId(ordinal: number): string {
   return `00000000-0000-4000-8000-${ordinal.toString().padStart(12, "0")}`;
 }
 
+async function allowCurrentPunchesOnAnyWeekday(app: TestApp): Promise<void> {
+  const company =
+    app.store.companyProfiles.find((candidate) => candidate.status === "active") ??
+    app.store.companyProfiles[0];
+  if (!company) throw new Error("Expected seeded active company.");
+  company.working_week = "Mon-Sun";
+  await app.store.persistence?.flushDomain?.("platform");
+}
+
 describe("PostgreSQL attendance command idempotency", () => {
   let app: TestApp;
 
@@ -99,6 +108,7 @@ describe("PostgreSQL attendance command idempotency", () => {
       fullDayPunchWindow: true,
       allowOffDayPunches: true,
     };
+    await allowCurrentPunchesOnAnyWeekday(app);
   }, 30_000);
 
   afterEach(async () => {
