@@ -1,19 +1,38 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
+  attendancePunchCommandEnvelopeSchema,
   attendancePunchSchema,
+  attendanceAssistedCurrentPunchSchema,
+  attendanceHistoricalCorrectionSchema,
   attendanceRegularizationCreateSchema,
   attendanceRegularizationDecisionSchema,
-  paginationQuerySchema
+  isoDateTimeSchema,
+  paginationQuerySchema,
 } from "#shared";
-import { unauthorized } from "../../platform/errors.js";
+import { badRequest, unauthorized } from "../../platform/errors.js";
 import { AttendanceService } from "./service.js";
+import { AttendancePayrollPeriodService } from "./payroll-period-service.js";
+import { AttendanceOfflineSyncService } from "./offline-sync-service.js";
+import {
+  ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER,
+  isAttendanceReplayResponse,
+} from "./command-service.js";
+import { attendanceOfflineBatchRequestSchema } from "./offline-sync-contract.js";
 
 const idParamSchema = z.object({ id: z.uuid() });
+const geofencePublishParamSchema = z.object({
+  geofenceId: z.uuid(),
+  versionId: z.uuid(),
+});
+const employeeParamSchema = z.object({ employeeUserId: z.uuid() });
 const isoDateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/u);
+const idempotencyKeySchema = z.string().trim().min(8).max(200);
+const clientEventIdHeaderSchema = z.uuid();
 
 const attendanceQuerySchema = paginationQuerySchema.extend({
+  company_id: z.uuid().optional(),
   date: isoDateQuerySchema.optional(),
   date_from: isoDateQuerySchema.optional(),
   date_to: isoDateQuerySchema.optional(),
@@ -21,24 +40,192 @@ const attendanceQuerySchema = paginationQuerySchema.extend({
   user_id: z.uuid().optional(),
   department_id: z.uuid().optional(),
   status: z.string().optional(),
-  exception_type: z.enum(["late", "missing_punch", "absent", "early_out", "correction"]).optional()
+  exception_type: z
+    .enum(["late", "missing_punch", "absent", "early_out", "correction"])
+    .optional(),
 });
-const attendanceExportSchema = z.object({
-  filters: z.record(z.string(), z.unknown()).optional(),
-  columns: z.array(z.string().min(1).max(80)).max(80).optional(),
-  format: z.enum(["csv", "xlsx", "json"]).optional()
+const attendanceExportFiltersSchema = z.object({
+  user_id: z.uuid().optional(),
+  employee_user_id: z.uuid().optional(),
+  department_id: z.uuid().optional(),
+  status: z.string().optional(),
+  date_from: isoDateQuerySchema.optional(),
+  date_to: isoDateQuerySchema.optional(),
 });
 
+const attendanceExportSchema = z.object({
+  company_id: z.uuid().optional(),
+  filters: attendanceExportFiltersSchema.optional(),
+  columns: z.array(z.string().min(1).max(80)).max(80).optional(),
+  format: z.enum(["csv", "xlsx", "json"]).optional(),
+});
+const attendancePayrollPeriodCreateSchema = z.object({
+  company_id: z.uuid().optional(),
+  period_start: isoDateQuerySchema,
+  period_end: isoDateQuerySchema,
+});
+const attendancePayrollPeriodActionSchema = z.object({
+  company_id: z.uuid().optional(),
+  reason: z.string().trim().max(1000).optional(),
+});
+const attendancePayrollPeriodUnlockSchema = z.object({
+  company_id: z.uuid().optional(),
+  reason: z.string().trim().min(1).max(1000),
+});
+const attendancePayrollPeriodSummaryQuerySchema = z.object({
+  company_id: z.uuid().optional(),
+});
+const geofenceVersionPublishSchema = z
+  .object({
+    effectiveFrom: isoDateTimeSchema,
+    effectiveUntil: isoDateTimeSchema.nullish(),
+  })
+  .strict();
+
 export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/punches", async (request) => {
+  const withReplayHeader = (
+    reply: { header: (name: string, value: string) => unknown },
+    response: Record<string, unknown>,
+  ) => {
+    if (isAttendanceReplayResponse(response)) {
+      reply.header(ATTENDANCE_IDEMPOTENCY_REPLAY_HEADER, "true");
+    }
+    return response;
+  };
+
+  fastify.post("/punches", async (request, reply) => {
     if (!request.actor) {
       throw unauthorized();
     }
-    return new AttendanceService(fastify.store).punch(
+
+    const rawIdempotencyKey = idempotencyKeySchema.parse(
+      request.headers["idempotency-key"],
+    );
+
+    const service = new AttendanceService(fastify.store);
+    const isEnvelopeRequest = isPunchCommandEnvelope(request.body);
+
+    if (!isEnvelopeRequest) {
+      const input = attendancePunchSchema.parse(request.body);
+
+      const response =
+        fastify.store.kind === "postgres"
+          ? await service.recordEmployeeManualNowPostgres(
+              request.actor,
+              input,
+              rawIdempotencyKey,
+            )
+          : service.recordEmployeeManualNow(request.actor, input);
+
+      return withReplayHeader(reply, response);
+    }
+
+    const clientEventId = clientEventIdHeaderSchema.parse(rawIdempotencyKey);
+    const input = attendancePunchCommandEnvelopeSchema.parse(request.body);
+
+    if (input.client_event_id !== clientEventId) {
+      throw badRequest(
+        "Idempotency-Key header must match body client_event_id.",
+        {
+          header: "Idempotency-Key",
+          field: "client_event_id",
+        },
+      );
+    }
+
+    const response =
+      fastify.store.kind === "postgres"
+        ? await service.recordEmployeeManualNowPostgres(
+            request.actor,
+            input.command,
+            clientEventId,
+            {
+              clientEventId: input.client_event_id,
+              capturedAt: input.captured_at,
+              device: input.device,
+            },
+          )
+        : service.recordEmployeeManualNow(request.actor, input.command);
+
+    return withReplayHeader(reply, response);
+  });
+
+  fastify.post("/offline-sync", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+
+    const input = attendanceOfflineBatchRequestSchema.parse(request.body);
+    return new AttendanceOfflineSyncService(fastify.store).syncBatch(
       request.actor,
-      attendancePunchSchema.parse(request.body)
+      input,
     );
   });
+
+  function isPunchCommandEnvelope(
+    value: unknown,
+  ): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+
+    const body = value as Record<string, unknown>;
+
+    return (
+      Object.hasOwn(body, "client_event_id") ||
+      Object.hasOwn(body, "command") ||
+      Object.hasOwn(body, "captured_at") ||
+      Object.hasOwn(body, "device")
+    );
+  }
+
+  fastify.post(
+    "/employees/:employeeUserId/assisted-current-punches",
+    async (request, reply) => {
+      if (!request.actor) throw unauthorized();
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const params = employeeParamSchema.parse(request.params);
+      const input = attendanceAssistedCurrentPunchSchema.parse(request.body);
+      const service = new AttendanceService(fastify.store);
+      const response =
+        fastify.store.kind === "postgres"
+          ? await service.recordManagerAssistedCurrentPunchPostgres(
+              request.actor,
+              params.employeeUserId,
+              input,
+              idempotencyKey,
+            )
+          : service.recordManagerAssistedCurrentPunch(
+              request.actor,
+              params.employeeUserId,
+              input,
+            );
+      return withReplayHeader(reply, response);
+    },
+  );
+
+  fastify.post(
+    "/employees/:employeeUserId/historical-corrections",
+    async (request, reply) => {
+      if (!request.actor) throw unauthorized();
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const params = employeeParamSchema.parse(request.params);
+      const input = attendanceHistoricalCorrectionSchema.parse(request.body);
+      const response = await new AttendanceService(
+        fastify.store,
+      ).recordHistoricalCorrection(
+        request.actor,
+        params.employeeUserId,
+        input,
+        idempotencyKey,
+      );
+      return withReplayHeader(reply, response);
+    },
+  );
 
   fastify.get("/punches/my", async (request) => {
     if (!request.actor) {
@@ -46,7 +233,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).listMyPunches(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -56,7 +243,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).mySummary(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -66,7 +253,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).teamSummary(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -76,7 +263,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).monthlyCalendar(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -86,7 +273,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).dailyCalendar(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -96,7 +283,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).createRegularization(
       request.actor,
-      attendanceRegularizationCreateSchema.parse(request.body)
+      attendanceRegularizationCreateSchema.parse(request.body),
     );
   });
 
@@ -106,7 +293,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).myRegularizations(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -116,7 +303,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).managerRegularizationQueue(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -125,12 +312,83 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
       throw unauthorized();
     }
     const params = idParamSchema.parse(request.params);
-    return new AttendanceService(fastify.store).decideRegularization(
+    const input = attendanceRegularizationDecisionSchema.parse(request.body);
+    const service = new AttendanceService(fastify.store);
+    if (fastify.store.kind === "postgres") {
+      return service.decideRegularizationPostgres(
+        request.actor,
+        params.id,
+        input,
+      );
+    }
+    return service.decideRegularization(request.actor, params.id, input);
+  });
+
+  fastify.post("/payroll-periods", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    return new AttendancePayrollPeriodService(fastify.store).createPeriod(
       request.actor,
-      params.id,
-      attendanceRegularizationDecisionSchema.parse(request.body)
+      attendancePayrollPeriodCreateSchema.parse(request.body),
     );
   });
+
+  fastify.post("/payroll-periods/:id/lock", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).lockPeriod(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodActionSchema.parse(request.body ?? {}),
+    );
+  });
+
+  fastify.post("/payroll-periods/:id/unlock", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).unlockPeriod(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodUnlockSchema.parse(request.body ?? {}),
+    );
+  });
+
+  fastify.get("/payroll-periods/:id/summary", async (request) => {
+    if (!request.actor) {
+      throw unauthorized();
+    }
+    const params = idParamSchema.parse(request.params);
+    return new AttendancePayrollPeriodService(fastify.store).summary(
+      request.actor,
+      params.id,
+      attendancePayrollPeriodSummaryQuerySchema.parse(request.query),
+    );
+  });
+
+  fastify.post(
+    "/geofences/:geofenceId/versions/:versionId/publish",
+    async (request) => {
+      if (!request.actor) {
+        throw unauthorized();
+      }
+      const params = geofencePublishParamSchema.parse(request.params);
+      const input = geofenceVersionPublishSchema.parse(request.body);
+      return new AttendanceService(fastify.store).publishGeofenceVersion(
+        request.actor,
+        params.geofenceId,
+        params.versionId,
+        {
+          effectiveFrom: input.effectiveFrom,
+          effectiveUntil: input.effectiveUntil ?? null,
+        },
+      );
+    },
+  );
 
   fastify.get("/exceptions", async (request) => {
     if (!request.actor) {
@@ -138,7 +396,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).exceptions(
       request.actor,
-      attendanceQuerySchema.parse(request.query)
+      attendanceQuerySchema.parse(request.query),
     );
   });
 
@@ -148,7 +406,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return new AttendanceService(fastify.store).createExportJob(
       request.actor,
-      attendanceExportSchema.parse(request.body ?? {})
+      attendanceExportSchema.parse(request.body ?? {}),
     );
   });
 };

@@ -2,6 +2,7 @@ import type { OutboxEvent } from "#shared";
 import { Redis as Valkey } from "iovalkey";
 import type { MemoryDataStore } from "../platform/data-store.js";
 import { nowIso } from "../platform/data-store.js";
+import { safeOutboxLastError } from "./safe-error.js";
 
 export interface StreamPublisher {
   publish(stream: string, event: OutboxEvent): Promise<void>;
@@ -91,7 +92,7 @@ export class OutboxWorker {
         published += 1;
       } catch (error) {
         event.retry_count += 1;
-        event.last_error = error instanceof Error ? error.message : "unknown";
+        event.last_error = safeOutboxLastError(error);
         event.failed_at = nowIso();
         if (event.retry_count >= 5) {
           event.status = "dead_letter";
@@ -145,7 +146,7 @@ export class OutboxWorker {
              SET status = $2, retry_count = $3, failed_at = now(), last_error = $4,
                  available_at = CASE WHEN $2 = 'retry' THEN now() + interval '15 seconds' ELSE available_at END
              WHERE id = $1`,
-            [event.id, deadLetter ? "dead_letter" : "retry", retryCount, error instanceof Error ? error.message : "unknown"]
+            [event.id, deadLetter ? "dead_letter" : "retry", retryCount, safeOutboxLastError(error)]
           );
           if (deadLetter) {
             deadLettered += 1;
